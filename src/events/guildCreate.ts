@@ -8,8 +8,7 @@ const webhook = process.env.JLWEBHOOK
 
 const event: Event = {
   name: Events.GuildCreate,
-  execute: async (client, interaction) => {
-    const guild = interaction.guild;
+  execute: async (client, guild) => {
     const totalGuilds = client.guilds.cache.size;
 
     if (webhook) {
