@@ -1,8 +1,21 @@
-import { Events, REST, Routes } from "discord.js";
+import { Events, REST, Routes, Client, ActivityType } from "discord.js";
 import { Event } from "../interfaces/Event";
 import { Logger } from "../utils/Logger";
 
 const logger = new Logger("Ready");
+
+async function updatePresence(client: Client) {
+  const totalGuilds = client.guilds.cache.size;
+  client.user?.setPresence({
+    activities: [
+      {
+        name: `${totalGuilds} 個伺服器`,
+        type: ActivityType.Watching,
+      },
+    ],
+    status: "online",
+  });
+}
 
 const event: Event = {
   name: Events.ClientReady,
@@ -28,6 +41,8 @@ const event: Event = {
     } catch (error: any) {
       logger.error(error.message || String(error));
     }
+
+    setInterval(() => updatePresence(client), 10000);
   },
 };
 
