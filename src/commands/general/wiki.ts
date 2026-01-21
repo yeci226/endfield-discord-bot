@@ -90,6 +90,7 @@ const command: Command = {
         );
 
         return interaction.editReply({
+          content: "",
           flags: MessageFlags.IsComponentsV2 as any,
           components: [container],
         });
@@ -140,6 +141,7 @@ const command: Command = {
         );
 
       const message = await interaction.editReply({
+        content: "",
         flags: MessageFlags.IsComponentsV2 as any,
         components: [container, ...generateMainMenu()],
       });
@@ -284,6 +286,7 @@ const command: Command = {
         }
 
         await i.update({
+          content: "",
           flags: MessageFlags.IsComponentsV2 as any,
           components: [newContainer, ...components],
         });
@@ -418,6 +421,7 @@ const command: Command = {
                 );
 
               await i.update({
+                content: "",
                 flags: MessageFlags.IsComponentsV2 as any,
                 components: [
                   detailContainer,

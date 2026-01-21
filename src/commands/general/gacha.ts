@@ -121,6 +121,7 @@ const command: Command = {
       }
 
       await interaction.editReply({
+        content: "",
         flags: MessageFlags.IsComponentsV2 as any,
         components: [container],
       });

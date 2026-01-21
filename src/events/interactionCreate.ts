@@ -211,6 +211,7 @@ const event: Event = {
         }
 
         await interaction.editReply({
+          content: "",
           flags: (1 << 15) | MessageFlags.Ephemeral,
           components: [container],
         });
@@ -239,6 +240,7 @@ const event: Event = {
             ),
           );
           await interaction.editReply({
+            content: "",
             components: [container],
             flags: (1 << 15) | MessageFlags.Ephemeral,
           }); // Note: flags are already set in deferReply? No, editReply reuses.
@@ -270,6 +272,7 @@ const event: Event = {
         );
 
         await interaction.editReply({
+          content: "",
           components: [container],
           flags: (1 << 15) | MessageFlags.Ephemeral,
         });

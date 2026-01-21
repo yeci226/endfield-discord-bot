@@ -145,6 +145,7 @@ const command: Command = {
           }
 
           await interaction.editReply({
+            content: "",
             flags: (1 << 15) | MessageFlags.Ephemeral,
             components: [container],
           });
@@ -158,6 +159,7 @@ const command: Command = {
           );
 
           await interaction.editReply({
+            content: "",
             flags: (1 << 15) | MessageFlags.Ephemeral,
             components: [container],
           });
@@ -178,6 +180,7 @@ const command: Command = {
             ),
           );
           await interaction.reply({
+            content: "",
             flags: (1 << 15) | MessageFlags.Ephemeral,
             components: [container],
           });
@@ -235,6 +238,7 @@ const command: Command = {
         }
 
         await interaction.reply({
+          content: "",
           flags: (1 << 15) | MessageFlags.Ephemeral,
           components: [container],
         });
@@ -255,6 +259,7 @@ const command: Command = {
         container.addMediaGalleryComponents(mediaGallery);
 
         await interaction.reply({
+          content: "",
           flags: (1 << 15) | MessageFlags.Ephemeral,
           components: [container],
           files: [{ attachment: imagePath, name: "image.png" }],

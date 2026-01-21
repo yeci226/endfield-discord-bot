@@ -6,7 +6,7 @@
   "scripts": {
     "start": "yarn build && node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "build": "tsc"
+    "build": "tsc && node scripts/copy-assets.js"
   },
   "keywords": [],
   "author": "",
