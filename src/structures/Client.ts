@@ -4,6 +4,7 @@ import { Command } from "../interfaces/Command";
 import path from "path";
 import dotenv from "dotenv";
 import { SkportNewsService } from "../services/SkportNewsService";
+import { AutoDailyService } from "../services/AutoDailyService";
 
 dotenv.config();
 
@@ -11,6 +12,7 @@ export class ExtendedClient extends Client {
   public commands: Collection<string, Command> = new Collection();
   public db: CustomDatabase;
   public newsService!: SkportNewsService;
+  public autoDailyService!: AutoDailyService;
 
   constructor() {
     super({
@@ -27,10 +29,19 @@ export class ExtendedClient extends Client {
   }
 
   public start() {
-    if (!process.env.DISCORD_TOKEN) {
-      console.error("❌ DISCORD_TOKEN is not set in .env");
+    const isDev = process.env.NODE_ENV === "development";
+    const token = isDev
+      ? process.env.TEST_DISCORD_TOKEN
+      : process.env.DISCORD_TOKEN;
+
+    if (!token) {
+      console.error(
+        `❌ ${
+          isDev ? "TEST_DISCORD_TOKEN" : "DISCORD_TOKEN"
+        } is not set in .env`,
+      );
       process.exit(1);
     }
-    this.login(process.env.DISCORD_TOKEN);
+    this.login(token);
   }
 }

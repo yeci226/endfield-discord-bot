@@ -174,6 +174,11 @@ const command: Command = {
         } else if (!currentSubId) {
           // Sub Menu
           const mainCat = mainCats.find((c: any) => c.id === currentMainId);
+          if (!mainCat) {
+            await i.reply({ content: "找不到主分類。", ephemeral: true });
+            return;
+          }
+
           newContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(`# ${mainCat.name}`),
           );
@@ -181,7 +186,8 @@ const command: Command = {
             new TextDisplayBuilder().setContent("請選擇一個子分類："),
           );
 
-          const options = mainCat.typeSub.map((c: any) => ({
+          const subs = mainCat.typeSub || [];
+          const options = subs.map((c: any) => ({
             label: c.name,
             value: c.id,
             description: `ID: ${c.id}`,
@@ -205,9 +211,19 @@ const command: Command = {
         } else {
           // Item Menu
           const mainCat = mainCats.find((c: any) => c.id === currentMainId);
-          const subCat = mainCat.typeSub.find(
+          if (!mainCat) {
+            await i.reply({ content: "找不到主分類。", ephemeral: true });
+            return;
+          }
+
+          const subCat = mainCat.typeSub?.find(
             (c: any) => c.id === currentSubId,
           );
+
+          if (!subCat) {
+            await i.reply({ content: "找不到子分類。", ephemeral: true });
+            return;
+          }
 
           newContainer.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(`# ${subCat.name}`),

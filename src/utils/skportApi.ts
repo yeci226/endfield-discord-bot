@@ -1,4 +1,49 @@
-import axios from "axios";
+import axios, { AxiosRequestConfig } from "axios";
+import { UserInfoResponse } from "./UserInfoInterfaces";
+
+export async function getCardDetail(
+  roleId: string,
+  serverId: string,
+  userId: string,
+  locale?: string,
+  cred?: string,
+): Promise<CardDetailResponse | null> {
+  const url = "https://zonai.skport.com/api/v1/game/endfield/card/detail";
+  // Fallback to the user's provided default if no specific cred is given
+  const finalCred = cred || "OtHFZudKb9Fb9c2iEw9tXgURL5EooP1x";
+
+  try {
+    const params = {
+      roleId,
+      serverId,
+      userId,
+    };
+    const headers = {
+      cred: finalCred,
+      "sk-language": formatSkLanguage(locale),
+    };
+
+    const response = await axios.get(url, {
+      params,
+      headers,
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`Error requesting ${url}:`, error.message);
+    if (error.response) {
+      console.error("Error Response Status:", error.response.status);
+      console.error(
+        "Error Response Data:",
+        JSON.stringify(error.response.data),
+      );
+      console.error(
+        "Error Response Headers:",
+        JSON.stringify(error.response.headers),
+      );
+    }
+    return null;
+  }
+}
 
 /**
  * Formats the Skport Language header based on Discord locale
@@ -25,167 +70,661 @@ export function formatAcceptLanguage(locale?: string): string {
   return `${base},en;q=0.9`;
 }
 
-export async function verifyCookie(cookie: string, locale?: string) {
+// Interfaces for API Responses
+export interface GameRole {
+  serverId: string;
+  roleId: string;
+  nickname: string;
+  level: number;
+  isDefault: boolean;
+  isBanned: boolean;
+  serverType: string;
+  serverName: string;
+}
+
+export interface GameBinding {
+  appCode: string;
+  appName: string;
+  bindingList: {
+    uid: string;
+    isOfficial: boolean;
+    isDefault: boolean;
+    channelMasterId: string;
+    channelName: string;
+    nickName: string;
+    isDelete: boolean;
+    gameName: string;
+    gameId: number;
+    roles: GameRole[];
+    defaultRole: GameRole;
+  }[];
+}
+
+export interface AttendanceReward {
+  awardId: string;
+  available: boolean;
+  done: boolean;
+}
+
+export interface ResourceInfo {
+  id: string;
+  count: number;
+  name: string;
+  icon: string;
+}
+
+export interface AttendanceResponse {
+  currentTs: string;
+  calendar: AttendanceReward[];
+  first: AttendanceReward[];
+  resourceInfoMap: Record<string, ResourceInfo>;
+  hasToday: boolean;
+}
+
+// Enums Interfaces
+export interface SkEnumItem {
+  key: string;
+  value: string;
+}
+
+export interface SkEnumsData {
+  rarities: SkEnumItem[];
+  professions: SkEnumItem[];
+  charProperties: SkEnumItem[];
+  weaponTypes: SkEnumItem[];
+  skillTypes: SkEnumItem[];
+  skillProperties: SkEnumItem[];
+  labelTypes: SkEnumItem[];
+  equipRarities: SkEnumItem[];
+  equipTypes: SkEnumItem[];
+  equipLevels: SkEnumItem[];
+  activeEffectTypes: SkEnumItem[];
+  passiveEffectTypes: SkEnumItem[];
+  equipProperties: SkEnumItem[];
+  equipAbilities: SkEnumItem[];
+  suitTypes: SkEnumItem[];
+}
+
+export interface SkEnumsResponse {
+  code: number;
+  message: string;
+  timestamp: string;
+  data: SkEnumsData;
+}
+
+// Card Detail Interfaces
+export interface CardUserInfo {
+  serverName: string;
+  roleId: string;
+  name: string;
+  createTime: string;
+  saveTime: string;
+  lastLoginTime: string;
+  exp: number;
+  level: number;
+  worldLevel: number;
+  gender: number;
+  avatarUrl: string;
+  mainMission: {
+    id: string;
+    description: string;
+  };
+  charNum: number;
+  weaponNum: number;
+  docNum: number;
+}
+
+export interface SkillDescParam {
+  level: string;
+  params: Record<string, string>;
+}
+
+export interface CardSkill {
+  id: string;
+  name: string;
+  type: SkEnumItem;
+  property: SkEnumItem;
+  iconUrl: string;
+  desc: string;
+  descParams: Record<string, string>;
+  descLevelParams: Record<string, SkillDescParam>;
+}
+
+export interface CardCharData {
+  id: string;
+  name: string;
+  avatarSqUrl: string;
+  avatarRtUrl: string;
+  rarity: SkEnumItem;
+  profession: SkEnumItem;
+  property: SkEnumItem;
+  weaponType: SkEnumItem;
+  skills: CardSkill[];
+  illustrationUrl: string;
+  tags: string[];
+}
+
+export interface UserSkillInfo {
+  skillId: string;
+  level: number;
+  maxLevel: number;
+}
+
+export interface EquipSuit {
+  id: string;
+  name: string;
+  skillId: string;
+  skillDesc: string;
+  skillDescParams: Record<string, string>;
+}
+
+export interface CardEquipData {
+  id: string;
+  name: string;
+  iconUrl: string;
+  rarity: SkEnumItem;
+  type: SkEnumItem;
+  level: SkEnumItem;
+  properties: string[];
+  isAccessory: boolean;
+  suit?: EquipSuit;
+  function?: string;
+  pkg?: string;
+}
+
+export interface CardEquip {
+  equipId: string;
+  equipData: CardEquipData;
+}
+
+export interface CardTacticalItemData {
+  id: string;
+  name: string;
+  iconUrl: string;
+  rarity: SkEnumItem;
+  activeEffectType: SkEnumItem;
+  activeEffect: string;
+  passiveEffect: string;
+  activeEffectParams: Record<string, string>;
+  passiveEffectParams: Record<string, string>;
+}
+
+export interface CardTacticalItem {
+  tacticalItemId: string;
+  tacticalItemData: CardTacticalItemData;
+}
+
+export interface WeaponSkill {
+  key: string;
+  value: string;
+}
+
+export interface CardWeaponData {
+  id: string;
+  name: string;
+  iconUrl: string;
+  rarity: SkEnumItem;
+  type: SkEnumItem;
+  function: string;
+  description: string;
+  skills: WeaponSkill[];
+}
+
+export interface CardWeapon {
+  weaponData: CardWeaponData;
+  level: number;
+  refineLevel: number;
+  breakthroughLevel: number;
+  gem: any; // Using any for null/unknown structure for now
+}
+
+export interface CardChar {
+  charData: CardCharData;
+  id: string;
+  level: number;
+  userSkills: Record<string, UserSkillInfo>;
+  bodyEquip?: CardEquip;
+  armEquip?: CardEquip;
+  firstAccessory?: CardEquip;
+  tacticalItem?: CardTacticalItem;
+  evolvePhase: number;
+  potentialLevel: number;
+  weapon?: CardWeapon;
+  gender: string;
+  ownTs: string;
+}
+
+export interface CardDungeon {
+  curStamina: string;
+  maxStamina: string;
+  maxTs: string;
+}
+
+export interface CardDailyMission {
+  dailyActivation: number;
+  maxDailyActivation: number;
+}
+
+export interface CardBpSystem {
+  curLevel: number;
+  maxLevel: number;
+}
+
+export interface CardDetail {
+  base: CardUserInfo;
+  chars: CardChar[];
+  dungeon: CardDungeon;
+  dailyMission: CardDailyMission;
+  bpSystem: CardBpSystem;
+}
+
+export interface CardDetailResponse {
+  code: number;
+  message: string;
+  timestamp: string;
+  data: {
+    detail: CardDetail;
+  };
+}
+
+export async function getUserInfo(
+  cred: string,
+  locale?: string,
+): Promise<UserInfoResponse | null> {
   const url = "https://zonai.skport.com/web/v2/user";
+  return makeRequest<UserInfoResponse>("GET", url, {
+    cred,
+    locale,
+  });
+}
 
-  // Default headers from request
-  const headers = {
-    authority: "zonai.skport.com",
-    accept: "*/*",
+/**
+ * Helper to construct the sk-game-role header value
+ */
+export function formatSkGameRole(
+  gameId: number,
+  roleId: string,
+  serverId: string,
+): string {
+  return `${gameId}_${roleId}_${serverId}`;
+}
+
+// Core Helper
+function getCommonHeaders(cred: string | undefined, locale?: string) {
+  return {
+    accept: "application/json",
     "accept-language": formatAcceptLanguage(locale),
     "content-type": "application/json",
-    cred: "HmGa3FL1u3S3T0ZWbBHjd1KbBP1nElR5",
-    origin: "https://www.skport.com",
+    cred: cred,
     platform: "3",
-    referer: "https://www.skport.com/",
-    sign: "ce0e9f569220bc834eab6d7637119e09",
+    priority: "u=1, i",
+    "sec-ch-ua":
+      '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-site",
     "sk-language": formatSkLanguage(locale),
+    "x-language": locale?.toLowerCase().startsWith("zh") ? "zh-tw" : "en-us",
     vname: "1.0.0",
     "user-agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-    Cookie: cookie,
+    timestamp: Math.floor(Date.now() / 1000).toString(),
   };
+}
+
+async function makeRequest<T>(
+  method: "GET" | "POST",
+  url: string,
+  options: {
+    locale?: string;
+    headers?: Record<string, string>;
+    params?: any;
+    data?: any;
+    cred?: string;
+  } = {},
+): Promise<T | null> {
+  const commonHeaders = getCommonHeaders(options.cred, options.locale);
+  const headers = { ...commonHeaders, ...options.headers };
 
   try {
-    const response = await axios.get(url, { headers });
+    const config: AxiosRequestConfig = {
+      method,
+      url,
+      headers,
+      params: options.params,
+      data: options.data,
+    };
+    const response = await axios(config);
     return response.data;
-  } catch (error) {
-    console.error("Error verifying cookie:", error);
+  } catch (error: any) {
+    if (error.response?.status !== 404) {
+      // Avoid excessive logging for expected 404s
+      console.error(`Error requesting ${url}:`, error.message);
+    }
     return null;
   }
 }
 
-export async function getCharacterPool(locale?: string) {
+// Pool Interfaces
+export interface SkPoolItem {
+  id: string;
+  name: string;
+  poolStartAtTs: number;
+  poolEndAtTs: number;
+  chars: Array<{
+    name: string;
+    pic: string;
+  }>;
+  weapons: Array<{
+    name: string;
+    pic: string;
+  }>;
+}
+
+export interface SkPoolResponse {
+  code: number;
+  message: string;
+  data: {
+    list: SkPoolItem[];
+  };
+}
+
+/**
+ * Gryphline OAuth Grant to get exchange code
+ */
+async function grantOAuthCode(token: string) {
+  const url = "https://as.gryphline.com/user/oauth2/v2/grant";
+  return makeRequest<any>("POST", url, {
+    headers: {
+      "sec-fetch-site": "cross-site",
+      referrer: "https://www.skport.com/",
+    },
+    data: {
+      token: token,
+      appCode: "6eb76d4e13aa36e6",
+      type: 0,
+    },
+  });
+}
+
+/**
+ * Skport Credential Generation using OAuth code
+ */
+async function generateCredByCode(code: string) {
+  const url = "https://zonai.skport.com/web/v1/user/auth/generate_cred_by_code";
+  return makeRequest<any>("POST", url, {
+    headers: {
+      platform: "3",
+      referrer: "https://www.skport.com/",
+      origin: "https://www.skport.com",
+      "sec-ch-ua":
+        '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+      priority: "u=1, i",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-site": "same-site",
+    },
+    data: {
+      code,
+      kind: 1,
+    },
+  });
+}
+
+export async function verifyToken(cookie: string, locale?: string) {
+  // Strip prefix and decode to get raw token
+  const rawToken = cookie.replace("ACCOUNT_TOKEN=", "").trim();
+  let cleanToken = rawToken;
+  try {
+    // If user provided encoded token, decode it so we can re-encode correctly or use raw
+    cleanToken = decodeURIComponent(rawToken);
+  } catch (e) {}
+
+  // 1. Get Basic Info from Gryphline
+  // The Gryphline API seems sensitive. Let's construct the URL manually to match the exact successful fetch.
+  // Using encodeURIComponent(cleanToken) ensures characters like / become %2F once.
+  const basicUrl = `https://as.gryphline.com/user/info/v1/basic?token=${encodeURIComponent(cleanToken)}`;
+
+  const basicResult = await makeRequest<any>("GET", basicUrl, {
+    locale,
+    headers: {
+      "sec-fetch-site": "cross-site",
+    },
+  });
+
+  if (!basicResult || basicResult.status !== 0) {
+    return basicResult; // Error or null
+  }
+
+  // 2. Grant OAuth Code
+  const grantResult = await grantOAuthCode(cleanToken);
+  console.log("Grant Result:", grantResult);
+  if (grantResult && grantResult.status === 0 && grantResult.data?.code) {
+    const code = grantResult.data.code;
+
+    // 3. Generate Skport Cred
+    const credResult = await generateCredByCode(code);
+    console.log("Cred Result:", credResult);
+    if (credResult && credResult.code === 0 && credResult.data?.cred) {
+      return {
+        ...basicResult,
+        cred: credResult.data.cred, // Attach the user-specific cred
+      };
+    }
+  }
+
+  return basicResult; // Return basic info even if cred exchange fails (fallback)
+}
+
+export async function getCharacterPool(
+  locale?: string,
+): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/char-pool";
-  const headers = {
-    authority: "zonai.skport.com",
-    accept: "*/*",
-    "accept-language": formatAcceptLanguage(locale),
-    "content-type": "application/json",
-    cred: "HmGa3FL1u3S3T0ZWbBHjd1KbBP1nElR5",
-    origin: "https://www.skport.com",
-    platform: "3",
-    referer: "https://wiki.skport.com/",
-    sign: "df10a1a3392f6c87e3941ad9a5783834",
-    "sk-language": formatSkLanguage(locale),
-    vname: "1.0.0",
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  };
-
-  try {
-    const response = await axios.get(url, { headers });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching character pool:", error);
-    return null;
-  }
+  return makeRequest("GET", url, {
+    locale,
+    headers: {
+      authority: "zonai.skport.com",
+      origin: "https://www.skport.com",
+      referer: "https://wiki.skport.com/",
+    },
+  });
 }
 
-export async function getWeaponPool(locale?: string) {
+export async function getWeaponPool(
+  locale?: string,
+): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/weapon-pool";
-  const headers = {
-    authority: "zonai.skport.com",
-    accept: "*/*",
-    "accept-language": formatAcceptLanguage(locale),
-    "content-type": "application/json",
-    cred: "HmGa3FL1u3S3T0ZWbBHjd1KbBP1nElR5",
-    origin: "https://www.skport.com",
-    platform: "3",
-    referer: "https://wiki.skport.com/",
-    sign: "247688e66256a8e71fccf07b7342696e",
-    "sk-language": formatSkLanguage(locale),
-    vname: "1.0.0",
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  };
+  return makeRequest("GET", url, {
+    locale,
+    headers: {
+      authority: "zonai.skport.com",
+      origin: "https://www.skport.com",
+      referer: "https://wiki.skport.com/",
+    },
+  });
+}
 
-  try {
-    const response = await axios.get(url, { headers });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching weapon pool:", error);
-    return null;
-  }
+// Wiki Interfaces
+export interface SkWikiItem {
+  id: string;
+  itemId: string;
+  name: string;
+  brief?: { description?: string; cover?: string };
+  intro?: string;
+  desc?: string;
+  caption?: Array<{ kind: "text"; text?: { text: string } }>;
+  pic?: string;
+  image?: string;
+  icon?: string;
+  typeMainId?: string;
+  typeSubId?: string;
+}
+
+export interface SkWikiSubCategory {
+  id: string;
+  name: string;
+  items?: SkWikiItem[];
+}
+
+export interface SkWikiCategory {
+  id: string;
+  name: string;
+  typeSub?: SkWikiSubCategory[];
+}
+
+export interface SkWikiCatalogResponse {
+  code: number;
+  message: string;
+  data: {
+    catalog: SkWikiCategory[];
+  };
+}
+
+export interface SkWikiItemDetailResponse {
+  code: number;
+  message: string;
+  data: SkWikiItem;
 }
 
 export async function getWikiCatalog(
   locale?: string,
   typeMainId: string = "",
   typeSubId: string = "",
-) {
+): Promise<SkWikiCatalogResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/item/catalog";
-  const headers = {
-    accept: "*/*",
-    "accept-language": formatAcceptLanguage(locale),
-    "content-type": "application/json",
-    cred: "HmGa3FL1u3S3T0ZWbBHjd1KbBP1nElR5",
-    platform: "3",
-    priority: "u=1, i",
-    "sec-ch-ua":
-      '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site",
-    sign: "beaa4eec5233d4c2de149f85d6fbeee0",
-    "sk-language": formatSkLanguage(locale),
-    timestamp: "1768988164",
-    vname: "1.0.0",
-    Referer: "https://wiki.skport.com/",
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  };
-
-  try {
-    const response = await axios.get(url, {
-      headers,
-      params: {
-        typeMainId,
-        typeSubId,
-      },
-    });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching wiki catalog:", error);
-    return null;
-  }
+  return makeRequest("GET", url, {
+    locale,
+    headers: {
+      Referer: "https://wiki.skport.com/",
+    },
+    params: {
+      typeMainId,
+      typeSubId,
+    },
+  });
 }
 
-export async function getWikiItemDetail(id: number | string, locale?: string) {
+export async function getWikiItemDetail(
+  id: number | string,
+  locale?: string,
+): Promise<SkWikiItemDetailResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/item/info";
-  const headers = {
-    accept: "*/*",
-    "accept-language": formatAcceptLanguage(locale),
-    "content-type": "application/json",
-    cred: "HmGa3FL1u3S3T0ZWbBHjd1KbBP1nElR5",
-    platform: "3",
-    priority: "u=1, i",
-    "sec-ch-ua":
-      '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
-    "sec-fetch-dest": "empty",
-    "sec-fetch-mode": "cors",
-    "sec-fetch-site": "same-site",
-    sign: "e144167a879fba3b2c5d6eb063a9c5fe",
-    "sk-language": formatSkLanguage(locale),
-    timestamp: "1768988662",
-    vname: "1.0.0",
-    Referer: "https://wiki.skport.com/",
-    "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  };
+  return makeRequest("GET", url, {
+    locale,
+    headers: {
+      Referer: "https://wiki.skport.com/",
+    },
+    params: { id },
+  });
+}
 
-  try {
-    const response = await axios.get(url, {
-      headers,
-      params: { id },
-    });
-    return response.data;
-  } catch (error) {
-    console.error("Error fetching wiki item detail:", error);
-    return null;
+export async function getGamePlayerBinding(
+  cookie: string | undefined, // Make optional
+  locale?: string,
+  cred?: string,
+): Promise<GameBinding[] | null> {
+  const url = "https://zonai.skport.com/api/v1/game/player/binding?";
+  const headers: any = {
+    referrer: "https://game.skport.com/",
+  };
+  if (cookie) headers.Cookie = cookie;
+
+  const res = await makeRequest<{
+    code: number;
+    data: { list: GameBinding[] };
+  }>("GET", url, {
+    locale,
+    cred,
+    headers,
+  });
+  if (res && res.code === 0) {
+    return res.data.list;
   }
+  return null;
+}
+
+export async function getAttendanceList(
+  gameRole: string,
+  cookie: string | undefined,
+  locale?: string,
+  cred?: string,
+): Promise<AttendanceResponse | null> {
+  const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
+  const headers: any = {
+    "sk-game-role": gameRole,
+    referrer: "https://game.skport.com/",
+  };
+  if (cookie) headers.Cookie = cookie;
+
+  const res = await makeRequest<{ code: number; data: AttendanceResponse }>(
+    "GET",
+    url,
+    {
+      locale,
+      cred,
+      headers,
+    },
+  );
+  if (res && res.code === 0) {
+    return res.data;
+  }
+  return null;
+}
+
+export async function getAttendanceRecords(
+  gameRole: string,
+  cookie: string | undefined, // Make optional
+  locale?: string,
+  cred?: string,
+) {
+  const url = "https://zonai.skport.com/web/v1/game/endfield/attendance/record";
+  const headers: any = {
+    "sk-game-role": gameRole,
+    referrer: "https://game.skport.com/",
+  };
+  if (cookie) headers.Cookie = cookie;
+
+  const res = await makeRequest<{ code: number; data: any }>("GET", url, {
+    locale,
+    cred,
+    headers,
+  });
+  if (res && res.code === 0) {
+    return res.data;
+  }
+  return null;
+}
+
+export async function executeAttendance(
+  gameRole: string,
+  cookie: string | undefined, // Make optional
+  locale?: string,
+  cred?: string,
+) {
+  const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
+  const headers: any = {
+    "sk-game-role": gameRole,
+    referrer: "https://game.skport.com/",
+  };
+  if (cookie) headers.Cookie = cookie;
+
+  const res = await makeRequest<any>("POST", url, {
+    locale,
+    cred,
+    headers,
+  });
+  return res || { code: -1, message: "Request failed" };
+}
+
+export async function getEnums(
+  locale?: string,
+): Promise<SkEnumsResponse | null> {
+  const url = "https://zonai.skport.com/web/v1/game/endfield/enums";
+  return makeRequest("GET", url, {
+    locale,
+    headers: {
+      referrer: "https://game.skport.com/",
+    },
+  });
 }

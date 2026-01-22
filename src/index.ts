@@ -2,15 +2,18 @@ import { ExtendedClient } from "./structures/Client";
 import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
 import { SkportNewsService } from "./services/SkportNewsService";
+import { AutoDailyService } from "./services/AutoDailyService";
 
 (async () => {
   const client = new ExtendedClient();
   client.newsService = new SkportNewsService(client);
+  client.autoDailyService = new AutoDailyService(client);
 
   await loadCommands(client);
   await loadEvents(client);
   client.start();
   client.newsService.start();
+  client.autoDailyService.start();
 
   // Process Error Handling
   const { WebhookClient } = require("discord.js");

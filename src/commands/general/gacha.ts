@@ -49,12 +49,7 @@ const command: Command = {
         charPoolData.data.list.length > 0
       ) {
         for (const charPool of charPoolData.data.list) {
-          const charNames =
-            charPool.chars
-              .map((c: any) => c.name)
-              .filter((n: string) => n)
-              .join(", ") || "";
-          const charPoolHeader = `## 角色池：${charPool.name}\n${charNames ? `-# 包含角色: ${charNames}\n` : ""}-# 卡池時間: <t:${charPool.poolStartAtTs}:f> - <t:${charPool.poolEndAtTs}:f>`;
+          const charPoolHeader = `## 角色池：${charPool.name}\n-# 卡池時間: <t:${charPool.poolStartAtTs}:f> - <t:${charPool.poolEndAtTs}:f>`;
 
           container.addSeparatorComponents(
             new SeparatorBuilder().setDivider(true).setSpacing(2),
@@ -76,6 +71,13 @@ const command: Command = {
           }
           hasData = true;
         }
+      } else {
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            "## 角色池\n目前沒有開啟的角色池。",
+          ),
+        );
+        hasData = true; // Still show the message
       }
 
       // --- Weapon Pools ---
@@ -85,12 +87,7 @@ const command: Command = {
         weaponPoolData.data.list.length > 0
       ) {
         for (const weaponPool of weaponPoolData.data.list) {
-          const weaponNames =
-            weaponPool.weapons
-              .map((w: any) => w.name)
-              .filter((n: string) => n)
-              .join(", ") || "";
-          const weaponPoolHeader = `## 武器池：${weaponPool.name}\n${weaponNames ? `-# 包含武器: ${weaponNames}\n` : ""}-# 卡池時間: <t:${weaponPool.poolStartAtTs}:f> - <t:${weaponPool.poolEndAtTs}:f>`;
+          const weaponPoolHeader = `## 武器池：${weaponPool.name}\n-# 卡池時間: <t:${weaponPool.poolStartAtTs}:f> - <t:${weaponPool.poolEndAtTs}:f>`;
 
           container.addSeparatorComponents(
             new SeparatorBuilder().setDivider(true).setSpacing(2),
@@ -112,6 +109,16 @@ const command: Command = {
           }
           hasData = true;
         }
+      } else {
+        container.addSeparatorComponents(
+          new SeparatorBuilder().setDivider(true).setSpacing(2),
+        );
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            "## 武器池\n目前沒有開啟的武器池。",
+          ),
+        );
+        hasData = true;
       }
 
       if (!hasData) {

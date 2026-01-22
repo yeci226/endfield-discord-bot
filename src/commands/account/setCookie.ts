@@ -17,7 +17,7 @@ import {
   MediaGalleryItemBuilder,
 } from "discord.js";
 import { CustomDatabase } from "../../utils/Database";
-import { verifyCookie } from "../../utils/skportApi";
+import { verifyToken, getUserInfo } from "../../utils/skportApi";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 
@@ -86,6 +86,19 @@ const command: Command = {
       return accounts;
     };
 
+    const extractAccountToken = (input: string): string => {
+      // 1. If it's a full cookie string, find ACCOUNT_TOKEN
+      const tokenMatch = input.match(/ACCOUNT_TOKEN=([^;\s]+)/);
+      if (tokenMatch) return tokenMatch[1];
+
+      // 2. If it's just the value or something else, handle it
+      // If it contains other keys but not ACCOUNT_TOKEN, it might be the value itself if it's long
+      if (!input.includes("=") && input.length > 20) return input;
+
+      // Fallback
+      return input;
+    };
+
     if (interaction.isModalSubmit()) {
       if (interaction.customId === "set-cookie:modal") {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -94,34 +107,86 @@ const command: Command = {
           .trim();
 
         if (!cookie.includes("=") && cookie.length > 20) {
-          cookie = `acw_tc=${cookie}`;
+          cookie = `ACCOUNT_TOKEN=${cookie}`;
+        } else {
+          // Robust parsing for full cookie strings
+          const token = extractAccountToken(cookie);
+          cookie = `ACCOUNT_TOKEN=${token}`;
         }
 
-        const result = await verifyCookie(cookie, interaction.locale);
+        interface verifyTokenResponse {
+          status: number;
+          msg?: string;
+          cred?: string;
+          data?: {
+            nickName: string;
+            hgId: string;
+          };
+        }
 
-        if (result && result.code === 0 && result.data && result.data.user) {
-          const user = result.data.user.basicUser;
+        const result = (await verifyToken(
+          cookie,
+          interaction.locale,
+        )) as verifyTokenResponse;
+
+        if (result && result.status === 0 && result.cred) {
+          const cred = result.cred;
+
+          // Fetch Skport User Info
+          const userResponse = await getUserInfo(cred, interaction.locale);
+
+          let nickName = "Unknown";
+          let hgId = "";
+          let avatar = "";
+
+          if (
+            userResponse &&
+            userResponse.code === 0 &&
+            userResponse.data?.user?.basicUser
+          ) {
+            const basicUser = userResponse.data.user.basicUser;
+            nickName = basicUser.nickname || "Unknown";
+            hgId = basicUser.id;
+            if (basicUser.avatar) {
+              avatar = basicUser.avatar;
+            }
+          }
+
           const accounts = await getAccounts();
 
           // Check duplicate
           const exists = accounts.find(
-            (acc) =>
-              acc.info.id === user.id || acc.info.nickname === user.nickname,
-          ); // Adjust based on unique ID availability
+            (acc) => acc.info.id === hgId || acc.info.nickname === nickName,
+          );
+
+          const accountData = {
+            cred: cred,
+            info: {
+              id: hgId,
+              nickname: nickName,
+              avatar: avatar,
+            },
+          };
 
           if (exists) {
             // Update existing
-            exists.cookie = cookie;
-            exists.info = user;
+            Object.assign(exists, accountData);
           } else {
             if (accounts.length >= 5) {
-              // Should have been caught in setup, but double check
+              const limitContainer =
+                new ContainerBuilder().addTextDisplayComponents(
+                  new TextDisplayBuilder().setContent(
+                    "❌ **管理員，您可綁定的帳號數量已達上限 (5)**",
+                  ),
+                );
               await interaction.editReply({
-                content: "❌ **管理員，您可綁定的帳號數量已達上限 (5)**",
+                content: "",
+                flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+                components: [limitContainer],
               });
               return;
             }
-            accounts.push({ cookie, info: user });
+            accounts.push(accountData);
           }
 
           await db.set(`${userId}.accounts`, accounts);
@@ -130,19 +195,10 @@ const command: Command = {
           const container = new ContainerBuilder();
 
           const textDisplay = new TextDisplayBuilder().setContent(
-            `✅ **驗證成功**\n歡迎管理員，**${user.nickname}**!\n已將此帳號加入綁定列表。`,
+            `✅ **驗證成功**\n歡迎管理員，**${nickName}**!\n已將此帳號加入綁定列表，並自動同步憑證。`,
           );
 
-          if (user.avatar) {
-            const headerSection = new SectionBuilder()
-              .addTextDisplayComponents(textDisplay)
-              .setThumbnailAccessory(
-                new ThumbnailBuilder({ media: { url: user.avatar } }),
-              );
-            container.addSectionComponents(headerSection);
-          } else {
-            container.addTextDisplayComponents(textDisplay);
-          }
+          container.addTextDisplayComponents(textDisplay);
 
           await interaction.editReply({
             content: "",
@@ -153,7 +209,7 @@ const command: Command = {
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
               `❌ **驗證失敗**\nCookie 無效或已過期。${
-                result && result.message ? `\nErrors: ${result.message}` : ""
+                result && result.msg ? `\nErrors: ${result.msg}` : ""
               }`,
             ),
           );
@@ -195,7 +251,7 @@ const command: Command = {
           .setCustomId("cookie-input")
           .setLabel("輸入您的 Cookie")
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("acw_tc=...; other_cookie=...")
+          .setPlaceholder("ACCOUNT_TOKEN=...")
           .setRequired(true);
 
         const firstActionRow =
@@ -247,7 +303,7 @@ const command: Command = {
 
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            "❓ **如何獲取 Cookie**\n1. 前往 [Skport Zonai](https://zonai.skport.com/) 並登入\n2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n3. 找到 `acw_tc` 欄位 (例如: `0a094e7c17689829098664154e425dc9a26`)\n4. 複製該值並填入",
+            "❓ **如何獲取 Cookie**\n1. 前往 [Skport](https://www.skport.com/) 並登入\n2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n3. 找到 `ACCOUNT_TOKEN` 欄位 (例如: `%2FbSkkfDymDO7ci...`)\n4. 複製該值並填入",
           ),
         );
 

@@ -28,9 +28,11 @@ const event: Event = {
     // We will do it here for simplicity as we have client.commands loaded.
 
     const commandsData = client.commands.map((c) => c.data.toJSON());
-    const rest = new REST({ version: "10" }).setToken(
-      process.env.DISCORD_TOKEN!,
-    );
+    const isDev = process.env.NODE_ENV === "development";
+    const token = isDev
+      ? process.env.TEST_DISCORD_TOKEN
+      : process.env.DISCORD_TOKEN;
+    const rest = new REST({ version: "10" }).setToken(token!);
 
     try {
       logger.info("Started refreshing application (/) commands.");

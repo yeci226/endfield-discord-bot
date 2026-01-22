@@ -254,7 +254,7 @@ export class SkportNewsService {
     const author = news.user.nickname || "Official";
     const date = `<t:${Math.floor(parseInt(news.item.timestamp))}:f>`;
     const link = `https://www.skport.com/article?id=${news.item.id}`;
-    const headerContent = `## [${title}](${link})\n-# ${author} • ${date}`;
+    const headerContent = `### [${title}](${link})\n-# ${author} • ${date}`;
 
     const textDisplayHelper = new TextDisplayBuilder().setContent(
       headerContent,
@@ -290,15 +290,15 @@ export class SkportNewsService {
 
       for (const block of news.item.caption) {
         if (block.kind === "text" && block.text) {
-          textBuffer += block.text.text + "\n";
+          textBuffer += block.text.text;
         } else if (block.kind === "link" && block.link) {
           const linkText = block.link.text;
           const linkUrl = block.link.link;
 
           if (linkText === linkUrl) {
-            textBuffer += `${linkUrl}\n`;
+            textBuffer += `${linkUrl}`;
           } else {
-            textBuffer += `[${linkText}](${linkUrl})\n`;
+            textBuffer += `[${linkText}](${linkUrl})`;
           }
         }
       }
