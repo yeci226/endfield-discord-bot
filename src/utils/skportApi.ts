@@ -473,17 +473,29 @@ async function generateCredByCode(code: string) {
 }
 
 export async function verifyToken(cookie: string, locale?: string) {
-  // Strip prefix and decode to get raw token
-  const rawToken = cookie.replace("ACCOUNT_TOKEN=", "").trim();
-  let cleanToken = rawToken;
+  // 1. Extract raw token value regardless of input format (raw value or full cookie)
+  let cleanToken = cookie.trim();
+
+  // If it's a cookie string, extract ACCOUNT_TOKEN
+  const match = cleanToken.match(/ACCOUNT_TOKEN=([^;\s]+)/);
+  if (match) {
+    cleanToken = match[1];
+  } else if (cleanToken.includes("=")) {
+    // If it has '=' but no ACCOUNT_TOKEN, it might be an invalid cookie or another key
+    // We try to find any value that looks like a token if ACCOUNT_TOKEN is missing
+    const parts = cleanToken.split(";")[0].split("=");
+    if (parts.length > 1) cleanToken = parts[1];
+  }
+
+  // Ensure we have a decoded version if it was already encoded
   try {
-    // If user provided encoded token, decode it so we can re-encode correctly or use raw
-    cleanToken = decodeURIComponent(rawToken);
+    const decoded = decodeURIComponent(cleanToken);
+    // Only use decoded if it's different (to handle potential double encoding issues)
+    if (decoded !== cleanToken) cleanToken = decoded;
   } catch (e) {}
 
   // 1. Get Basic Info from Gryphline
-  // The Gryphline API seems sensitive. Let's construct the URL manually to match the exact successful fetch.
-  // Using encodeURIComponent(cleanToken) ensures characters like / become %2F once.
+  // The Gryphline API only needs the raw ACCOUNT_TOKEN value in the query param.
   const basicUrl = `https://as.gryphline.com/user/info/v1/basic?token=${encodeURIComponent(cleanToken)}`;
 
   const basicResult = await makeRequest<any>("GET", basicUrl, {

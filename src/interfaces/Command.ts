@@ -21,5 +21,9 @@ export interface Command {
     tr: any, // Translation function placeholder
     db: CustomDatabase,
   ) => Promise<any>;
-  autocomplete?: (interaction: AutocompleteInteraction) => Promise<any>;
+  autocomplete?: (
+    client: ExtendedClient,
+    interaction: AutocompleteInteraction,
+    db: CustomDatabase,
+  ) => Promise<any>;
 }

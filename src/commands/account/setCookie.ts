@@ -15,6 +15,7 @@ import {
   ThumbnailBuilder,
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
+  AutocompleteInteraction,
 } from "discord.js";
 import { CustomDatabase } from "../../utils/Database";
 import { verifyToken, getUserInfo } from "../../utils/skportApi";
@@ -58,12 +59,28 @@ const command: Command = {
             value: "help",
             name_localizations: { "zh-TW": "如何設定 Cookie" },
           },
+          {
+            name: "Unbind Account",
+            value: "unbind",
+            name_localizations: { "zh-TW": "解除帳號綁定" },
+          },
         ),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("account")
+        .setDescription("Select an account to unbind")
+        .setNameLocalizations({ "zh-TW": "帳號" })
+        .setDescriptionLocalizations({ "zh-TW": "選擇要解除綁定的帳號" })
+        .setAutocomplete(true),
     ),
 
   execute: async (
     client: ExtendedClient,
-    interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
+    interaction:
+      | ChatInputCommandInteraction
+      | ModalSubmitInteraction
+      | AutocompleteInteraction,
     tr: any,
     db: CustomDatabase,
   ) => {
@@ -346,8 +363,88 @@ const command: Command = {
             { attachment: image2Path, name: "image2.png" },
           ],
         });
+      } else if (action === "unbind") {
+        const accountIndexStr = interaction.options.getString("account");
+        if (!accountIndexStr) {
+          const container = new ContainerBuilder().addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              "❌ **解除綁定失敗**\n請選擇一個帳號。",
+            ),
+          );
+          await interaction.reply({
+            content: "",
+            flags: (1 << 15) | MessageFlags.Ephemeral,
+            components: [container],
+          });
+          return;
+        }
+
+        const accounts = await getAccounts();
+        const index = parseInt(accountIndexStr);
+        if (isNaN(index) || !accounts[index]) {
+          const container = new ContainerBuilder().addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              "❌ **解除綁定失敗**\n無效的帳號索引。",
+            ),
+          );
+          await interaction.reply({
+            content: "",
+            flags: (1 << 15) | MessageFlags.Ephemeral,
+            components: [container],
+          });
+          return;
+        }
+
+        const removed = accounts.splice(index, 1)[0];
+        await db.set(`${userId}.accounts`, accounts);
+
+        const container = new ContainerBuilder().addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `✅ **解除綁定成功**\n管理員，已成功解除綁定帳號：**${removed.info.nickname}** (${removed.info.id})。`,
+          ),
+        );
+
+        await interaction.reply({
+          content: "",
+          flags: (1 << 15) | MessageFlags.Ephemeral,
+          components: [container],
+        });
       }
     }
+  },
+
+  autocomplete: async (
+    client: ExtendedClient,
+    interaction: AutocompleteInteraction,
+    db: CustomDatabase,
+  ) => {
+    const userId = interaction.user.id;
+    let accounts = (await db.get(`${userId}.accounts`)) as any[];
+
+    // Migration / Fallback same as execute
+    if (!accounts) {
+      const oldCookie = await db.get(`${userId}.cookie`);
+      const oldInfo = await db.get(`${userId}.info`);
+      if (oldCookie && oldInfo) {
+        accounts = [{ cookie: oldCookie, info: oldInfo }];
+      } else {
+        accounts = [];
+      }
+    }
+
+    if (!accounts || accounts.length === 0) {
+      return interaction.respond([]);
+    }
+
+    const focusedValue = interaction.options.getFocused();
+    const filtered = accounts
+      .map((acc, index) => ({
+        name: `${acc.info.nickname} (${acc.info.id})`,
+        value: index.toString(),
+      }))
+      .filter((choice) => choice.name.includes(focusedValue));
+
+    await interaction.respond(filtered.slice(0, 25));
   },
 };
 

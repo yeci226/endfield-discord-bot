@@ -294,6 +294,15 @@ const event: Event = {
           flags: (1 << 15) | MessageFlags.Ephemeral,
         });
       }
+    } else if (interaction.isAutocomplete()) {
+      const command = client.commands.get(interaction.commandName);
+      if (command && command.autocomplete) {
+        try {
+          await command.autocomplete(client, interaction, client.db);
+        } catch (error) {
+          console.error("Error handling autocomplete interaction:", error);
+        }
+      }
     }
   },
 };

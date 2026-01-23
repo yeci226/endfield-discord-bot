@@ -9,6 +9,7 @@ import {
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
   ModalSubmitInteraction,
+  AutocompleteInteraction,
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
@@ -30,7 +31,22 @@ const command: Command = {
     })
     .setDescriptionLocalizations({
       "zh-TW": "查看終末地遊戲角色名片與幹員資訊",
-    }),
+    })
+    .addUserOption((option) =>
+      option
+        .setName("user")
+        .setDescription("View another user's profile")
+        .setNameLocalizations({ "zh-TW": "使用者" })
+        .setDescriptionLocalizations({ "zh-TW": "查看其他使用者的名片" }),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("account")
+        .setDescription("Select an account")
+        .setNameLocalizations({ "zh-TW": "帳號" })
+        .setDescriptionLocalizations({ "zh-TW": "選擇要查看的帳號" })
+        .setAutocomplete(true),
+    ),
 
   execute: async (
     client: ExtendedClient,
@@ -41,13 +57,20 @@ const command: Command = {
     tr: any,
     db: CustomDatabase,
   ) => {
-    const userId = interaction.user.id;
+    const targetUser =
+      interaction.isChatInputCommand() && interaction.options.getUser("user")
+        ? interaction.options.getUser("user")
+        : interaction.user;
+
+    const userId = targetUser!.id;
     const accounts = (await db.get(`${userId}.accounts`)) as any[];
 
     if (!accounts || accounts.length === 0) {
       const container = new ContainerBuilder();
       const textDisplay = new TextDisplayBuilder().setContent(
-        "❌ **未找到綁定帳號**\n請先使用 `/set-cookie` 綁定您的終末地帳號。",
+        targetUser?.id === interaction.user.id
+          ? "❌ **未找到綁定帳號**\n請先使用 `/set-cookie` 綁定您的終末地帳號。"
+          : `❌ **未找到該使用者的綁定帳號**\n使用者 <@${targetUser?.id}> 尚未綁定帳號。`,
       );
       container.addTextDisplayComponents(textDisplay);
 
@@ -68,8 +91,11 @@ const command: Command = {
       return;
     }
 
-    // For simplicity, we use the first account found
-    const account = accounts[0];
+    // Use selected account or default to the first one
+    const accountIndex = interaction.isChatInputCommand()
+      ? parseInt(interaction.options.getString("account") || "0")
+      : 0;
+    const account = accounts[accountIndex] || accounts[0];
 
     if (interaction.isChatInputCommand()) {
       await interaction.deferReply({ flags: 1 << 15 });
@@ -210,6 +236,30 @@ const command: Command = {
         await interaction.editReply("⚠️ 生成圖片失敗");
       }
     }
+  },
+
+  autocomplete: async (
+    client: ExtendedClient,
+    interaction: AutocompleteInteraction,
+    db: CustomDatabase,
+  ) => {
+    const targetUser = interaction.options.get("user")?.value as string;
+    const userId = targetUser || interaction.user.id;
+    const accounts = (await db.get(`${userId}.accounts`)) as any[];
+
+    if (!accounts || accounts.length === 0) {
+      return interaction.respond([]);
+    }
+
+    const focusedValue = interaction.options.getFocused();
+    const filtered = accounts
+      .map((acc, index) => ({
+        name: `${acc.info.nickname} (${acc.info.id})`,
+        value: index.toString(),
+      }))
+      .filter((choice) => choice.name.includes(focusedValue));
+
+    await interaction.respond(filtered.slice(0, 25));
   },
 };
 
