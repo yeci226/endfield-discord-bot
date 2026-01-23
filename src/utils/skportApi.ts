@@ -511,13 +511,11 @@ export async function verifyToken(cookie: string, locale?: string) {
 
   // 2. Grant OAuth Code
   const grantResult = await grantOAuthCode(cleanToken);
-  console.log("Grant Result:", grantResult);
   if (grantResult && grantResult.status === 0 && grantResult.data?.code) {
     const code = grantResult.data.code;
 
     // 3. Generate Skport Cred
     const credResult = await generateCredByCode(code);
-    console.log("Cred Result:", credResult);
     if (credResult && credResult.code === 0 && credResult.data?.cred) {
       return {
         ...basicResult,
@@ -741,4 +739,35 @@ export async function getEnums(
       referrer: "https://game.skport.com/",
     },
   });
+}
+
+export async function loginByEmailPassword(
+  credentials: { email: string; password?: string },
+  captcha?: any,
+) {
+  const url = "https://as.gryphline.com/user/auth/v1/token_by_email_password";
+  console.log(`[Debug] loginByEmailPassword using URL: ${url}`);
+
+  const data: any = {
+    email: credentials.email,
+    password: credentials.password,
+  };
+
+  if (captcha) {
+    data.captcha = captcha;
+  }
+
+  // Use a simpler request for Gryphline to avoid 403 from excess headers
+  try {
+    const response = await axios.post(url, data, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`Error requesting ${url}:`, error.message);
+    return null;
+  }
 }

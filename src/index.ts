@@ -3,11 +3,15 @@ import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
 import { SkportNewsService } from "./services/SkportNewsService";
 import { AutoDailyService } from "./services/AutoDailyService";
+import { VerificationServer } from "./utils/VerificationServer";
 
 (async () => {
   const client = new ExtendedClient();
   client.newsService = new SkportNewsService(client);
   client.autoDailyService = new AutoDailyService(client);
+
+  const verifyServer = new VerificationServer();
+  verifyServer.start();
 
   await loadCommands(client);
   await loadEvents(client);
