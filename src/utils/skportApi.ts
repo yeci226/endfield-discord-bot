@@ -718,11 +718,13 @@ export async function executeAttendance(
 }
 
 export async function getEnums(
+  cred?: string,
   locale?: string,
 ): Promise<SkEnumsResponse | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/enums";
   return makeRequest("GET", url, {
     locale,
+    cred,
     headers: {
       referrer: "https://game.skport.com/",
     },

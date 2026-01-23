@@ -2,3 +2,4 @@
 /dist
 /json.sqlite
 /node_modules
+/src/assets/remote_cache/*

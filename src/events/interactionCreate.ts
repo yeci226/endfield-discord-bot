@@ -84,6 +84,23 @@ const event: Event = {
           });
         }
       }
+    } else if (interaction.isStringSelectMenu()) {
+      const customId = interaction.customId;
+      const commandName = customId.split(":")[0];
+      const command = client.commands.get(commandName);
+
+      if (command) {
+        try {
+          await command.execute(
+            client,
+            interaction,
+            (key: string) => key,
+            client.db,
+          );
+        } catch (error) {
+          console.error("Error handling select menu interaction:", error);
+        }
+      }
     } else if (interaction.isModalSubmit()) {
       // Dispatch modal submit to the relevant command.
       // Convention: customId = "commandName:..."

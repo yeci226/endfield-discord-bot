@@ -300,25 +300,51 @@ const command: Command = {
         });
       } else if (action === "help") {
         const imagePath = path.join(__dirname, "../../assets/image.png");
+        const image2Path = path.join(__dirname, "../../assets/image2.png");
 
-        const container = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            "❓ **如何獲取 Cookie**\n1. 前往 [Skport](https://www.skport.com/) 並登入\n2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n3. 找到 `ACCOUNT_TOKEN` 欄位 (例如: `%2FbSkkfDymDO7ci...`)\n4. 複製該值並填入",
-          ),
-        );
-
-        const mediaGallery = new MediaGalleryBuilder().addItems(
-          new MediaGalleryItemBuilder({
-            media: { url: "attachment://image.png" },
-          }),
-        );
-        container.addMediaGalleryComponents(mediaGallery);
+        const container = new ContainerBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              "❓ **如何獲取 Cookie**\n" +
+                "**方法一：Application 分頁**\n" +
+                "1. 前往 [Skport](https://www.skport.com/) 並登入\n" +
+                "2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n" +
+                "3. 找到 `ACCOUNT_TOKEN` 欄位並複製其數值",
+            ),
+          )
+          .addMediaGalleryComponents(
+            new MediaGalleryBuilder().addItems(
+              new MediaGalleryItemBuilder({
+                media: { url: "attachment://image1.png" },
+              }),
+            ),
+          )
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              "\n**方法二：Network 分頁 (推薦)**\n" +
+                "1. 前往 [Skport](https://www.skport.com/) 並登入\n" +
+                "2. 按下 `F12` -> `Network` (網路)\n" +
+                "3. 在搜尋框輸入 `account_token` 並重新整理網頁\n" +
+                "4. 點擊任意一個請求，在右側的 `Request Headers` 中找到 `cookie` 欄位\n" +
+                "5. 複製整串 Cookie 內容並填入即可",
+            ),
+          )
+          .addMediaGalleryComponents(
+            new MediaGalleryBuilder().addItems(
+              new MediaGalleryItemBuilder({
+                media: { url: "attachment://image2.png" },
+              }),
+            ),
+          );
 
         await interaction.reply({
           content: "",
           flags: (1 << 15) | MessageFlags.Ephemeral,
           components: [container],
-          files: [{ attachment: imagePath, name: "image.png" }],
+          files: [
+            { attachment: imagePath, name: "image1.png" },
+            { attachment: image2Path, name: "image2.png" },
+          ],
         });
       }
     }

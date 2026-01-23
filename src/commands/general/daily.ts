@@ -143,6 +143,8 @@ const command: Command = {
     );
     container.addTextDisplayComponents(summaryText);
 
+    const processedRoles = new Set<string>();
+
     for (const account of accounts) {
       const bindings = await getGamePlayerBinding(
         account.cookie,
@@ -164,13 +166,16 @@ const command: Command = {
 
       for (const binding of endfieldApp.bindingList) {
         for (const role of binding.roles) {
-          hasResult = true;
-          // Use roleId directly as string, matching AutoDailyService update
           const gameRoleStr = formatSkGameRole(
             binding.gameId,
             role.roleId,
             role.serverId,
           );
+
+          if (processedRoles.has(gameRoleStr)) continue;
+          processedRoles.add(gameRoleStr);
+
+          hasResult = true;
 
           let status = await getAttendanceList(
             gameRoleStr,

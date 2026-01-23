@@ -123,6 +123,8 @@ export class AutoDailyService {
         status: string;
       }[] = [];
 
+      const processedRoles = new Set<string>();
+
       for (const account of accounts) {
         const bindings = await getGamePlayerBinding(
           account.cookie,
@@ -144,6 +146,9 @@ export class AutoDailyService {
               role.roleId,
               role.serverId,
             );
+
+            if (processedRoles.has(gameRole)) continue;
+            processedRoles.add(gameRole);
 
             const status = await getAttendanceList(
               gameRole,

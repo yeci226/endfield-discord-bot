@@ -10,6 +10,7 @@ import fs from "fs";
 import axios from "axios";
 import { CardDetail } from "./skportApi";
 import moment from "moment";
+import crypto from "crypto";
 
 // Register Fonts
 const fontDir = path.join(__dirname, "../assets/fonts");
@@ -23,6 +24,12 @@ GlobalFonts.registerFromPath(
 );
 
 const ASSETS_DIR = path.join(__dirname, "../assets");
+const CACHE_DIR = path.join(ASSETS_DIR, "remote_cache");
+
+// Ensure cache directory exists
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
 
 const imageCache = new Map<string, Image>();
 
@@ -375,80 +382,91 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
 
   // 6. Characters List (Grid)
 
-  // PRE-LOAD ALL ASSETS IN PARALLEL
   const charAssetsPromises = chars.map(async (char) => {
-    let avatarImg: Image | null = null;
-    let profImg: Image | null = null;
-    let propImg: Image | null = null;
-    let weaponImg: Image | null = null;
-    let phaseImg: Image | null = null;
-
     const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
     if (iconUrl) {
-      try {
-        avatarImg = await fetchImage(iconUrl);
-      } catch (e) {
-        // console.error("Failed to load avatar", e);
-      }
+      // fetchImage now handles disk/memory caching automatically
+      fetchImage(iconUrl).catch(() => {});
     }
 
     const profKey = char.charData.profession?.key;
     if (profKey) {
       const strippedKey = profKey.replace("profession_", "").toLowerCase();
-      try {
-        profImg = await loadLocalImage(`prof/${strippedKey}.jpg`);
-      } catch (e) {
-        console.error(`[Canvas] Failed to load prof icon: ${strippedKey}`);
-      }
+      loadLocalImage(`prof/${strippedKey}.jpg`).catch(() => {});
     }
 
     const propKey = char.charData.property?.key;
     if (propKey) {
       const strippedKey = propKey.replace("char_property_", "").toLowerCase();
-      try {
-        propImg = await loadLocalImage(`element/${strippedKey}.jpg`);
-      } catch (e) {
-        console.error(`[Canvas] Failed to load property icon: ${strippedKey}`);
-      }
+      loadLocalImage(`element/${strippedKey}.jpg`).catch(() => {});
     }
 
     const weaponKey = char.charData.weaponType?.key;
     if (weaponKey) {
       const strippedKey = weaponKey.replace("weapon_type_", "").toLowerCase();
-      try {
-        weaponImg = await loadLocalImage(`weapon/black/${strippedKey}.png`);
-      } catch (e) {
-        console.error(`[Canvas] Failed to load weapon icon: ${strippedKey}`);
-      }
+      loadLocalImage(`weapon/black/${strippedKey}.png`).catch(() => {});
     }
 
     if (char.evolvePhase !== undefined) {
-      try {
-        phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.webp`);
-      } catch (e) {}
+      loadLocalImage(`phase/${char.evolvePhase}.webp`).catch(() => {});
     }
-
-    return {
-      char,
-      avatarImg,
-      profImg,
-      propImg,
-      weaponImg,
-      phaseImg,
-    };
   });
 
-  const loadedChars = await Promise.all(charAssetsPromises);
+  await Promise.all(charAssetsPromises);
 
-  for (let i = 0; i < loadedChars.length; i++) {
-    const { char, avatarImg, profImg, propImg, weaponImg, phaseImg } =
-      loadedChars[i];
+  for (let i = 0; i < chars.length; i++) {
+    const char = chars[i];
     const row = Math.floor(i / charCols);
     const col = i % charCols;
     const x = padding + (charWidth + charGap) * col;
     const y = charGridY + (charHeight + charGap) * row;
 
     if (y + charHeight > height) break;
+
+    // Load images (fast from cache)
+    const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
+    let avatarImg: Image | null = null;
+    try {
+      avatarImg = iconUrl ? await fetchImage(iconUrl) : null;
+    } catch (e) {}
+
+    let profImg: Image | null = null;
+    let propImg: Image | null = null;
+    let weaponImg: Image | null = null;
+    let phaseImg: Image | null = null;
+
+    try {
+      const profKey = char.charData.profession?.key;
+      if (profKey) {
+        profImg = await loadLocalImage(
+          `prof/${profKey.replace("profession_", "").toLowerCase()}.jpg`,
+        );
+      }
+    } catch (e) {}
+
+    try {
+      const propKey = char.charData.property?.key;
+      if (propKey) {
+        propImg = await loadLocalImage(
+          `element/${propKey.replace("char_property_", "").toLowerCase()}.jpg`,
+        );
+      }
+    } catch (e) {}
+
+    try {
+      const weaponKey = char.charData.weaponType?.key;
+      if (weaponKey) {
+        weaponImg = await loadLocalImage(
+          `weapon/black/${weaponKey.replace("weapon_type_", "").toLowerCase()}.png`,
+        );
+      }
+    } catch (e) {}
+
+    try {
+      if (char.evolvePhase !== undefined) {
+        phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.webp`);
+      }
+    } catch (e) {}
 
     // Image Area with White Background (Top rounded, Bottom square)
     ctx.save();
@@ -577,8 +595,39 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
 }
 
 async function fetchImage(url: string): Promise<Image> {
-  const response = await axios.get(url, { responseType: "arraybuffer" });
-  return await loadImage(Buffer.from(response.data));
+  if (imageCache.has(url)) return imageCache.get(url)!;
+
+  const urlHash = crypto.createHash("md5").update(url).digest("hex");
+  const ext = url.split(".").pop()?.split(/[?#]/)[0] || "png";
+  const cachePath = path.join(CACHE_DIR, `${urlHash}.${ext}`);
+
+  // 1. Check disk cache
+  if (fs.existsSync(cachePath)) {
+    try {
+      const img = await loadImage(fs.readFileSync(cachePath));
+      imageCache.set(url, img);
+      return img;
+    } catch (e) {
+      // If corruption occurs, delete and re-fetch
+      fs.unlinkSync(cachePath);
+    }
+  }
+
+  // 2. Fetch remote
+  try {
+    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const buffer = Buffer.from(response.data);
+
+    // Save to disk cache
+    fs.writeFileSync(cachePath, buffer);
+
+    const img = await loadImage(buffer);
+    imageCache.set(url, img);
+    return img;
+  } catch (e) {
+    console.error(`Failed to fetch image: ${url}`, e);
+    throw e;
+  }
 }
 
 function roundRect(
@@ -602,24 +651,96 @@ function roundRect(
   if (fill) ctx.fill();
   else ctx.stroke();
 }
-// ... (Existing code)
+function parseEffectString(effectStr: string, params: any): string {
+  if (!effectStr) return "";
+  let res = effectStr;
+  // Strip tags like <@ba.vup> or </>
+  res = res.replace(/<[^>]+>/g, "");
+  // Replace {key:0} or {key}
+  res = res.replace(/\{(\w+)(?::\d+%?)?\}/g, (match, key) => {
+    let val = params[key];
+    if (val === undefined) return match;
+    // Basic percentage handling if requested in placeholder
+    if (match.includes("%") && !isNaN(Number(val))) {
+      return (Number(val) * 100).toFixed(0) + "%";
+    }
+    return val;
+  });
+  res = res
+    .replace(/，/g, ", ")
+    .replace(/。/g, ". ")
+    .replace(/：/g, ": ")
+    .replace(/；/g, "; ")
+    .replace(/？/g, "?")
+    .replace(/！/g, "!");
+  return res;
+}
 
-export async function drawCharacterDetail(char: any): Promise<Buffer> {
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+  maxHeight: number = 0,
+) {
+  const paragraphs = text.split("\n");
+  let testY = y;
+
+  for (let p = 0; p < paragraphs.length; p++) {
+    const para = paragraphs[p];
+    const chars = para.split("");
+    let line = "";
+
+    for (let n = 0; n < chars.length; n++) {
+      let testLine = line + chars[n];
+      let metrics = ctx.measureText(testLine);
+      let testWidth = metrics.width;
+      if (testWidth > maxWidth && n > 0) {
+        if (maxHeight > 0 && testY + lineHeight - y > maxHeight) {
+          ctx.fillText(line.substring(0, line.length - 1) + "...", x, testY);
+          return testY;
+        }
+        ctx.fillText(line, x, testY);
+        line = chars[n];
+        testY += lineHeight;
+      } else {
+        line = testLine;
+      }
+    }
+
+    if (maxHeight > 0 && testY + lineHeight - y > maxHeight) {
+      ctx.fillText(line.substring(0, line.length - 1) + "...", x, testY);
+      return testY;
+    }
+
+    ctx.fillText(line, x, testY);
+    testY += lineHeight;
+  }
+  return testY;
+}
+
+export async function drawCharacterDetail(
+  char: any,
+  enums: any[] = [],
+): Promise<Buffer> {
   const width = 2400;
-  const height = 1200;
-  const leftW = 720; // 30% of 2400
+  const height = 1400; // Increased height
+  const leftW = 720;
   const padding = 60;
   const rightX = leftW + 60;
   const rightW = width - rightX - padding;
-
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
 
-  // Helper for local image loading
+  const imgUrl =
+    char.charData.illustrationUrl ||
+    char.charData.avatarRtUrl ||
+    char.charData.avatarSqUrl;
+
   const loadLocalImage = async (relPath: string) => {
-    if (imageCache.has(relPath)) {
-      return imageCache.get(relPath)!;
-    }
+    if (imageCache.has(relPath)) return imageCache.get(relPath)!;
     try {
       const fullPath = path.join(ASSETS_DIR, relPath);
       const img = await loadImage(fs.readFileSync(fullPath));
@@ -630,18 +751,82 @@ export async function drawCharacterDetail(char: any): Promise<Buffer> {
     }
   };
 
-  // 1. Backgrounds
-  ctx.fillStyle = "#f2f2f2"; // Base
-  ctx.fillRect(0, 0, width, height);
+  const starImg = await loadLocalImage("star.png");
 
-  ctx.fillStyle = "#d8d8d8"; // Left Panel
+  // --- PRE-LOAD ALL ASSETS IN PARALLEL ---
+  const skillUrls = (char.charData.skills || [])
+    .map((s: any) => s.iconUrl)
+    .filter(Boolean);
+  const equipUrls: string[] = [
+    char.bodyEquip?.equipData?.iconUrl,
+    char.armEquip?.equipData?.iconUrl,
+    char.firstAccessory?.equipData?.iconUrl,
+    char.secondAccessory?.equipData?.iconUrl,
+    char.tacticalItem?.tacticalItemData?.iconUrl,
+  ].filter(Boolean);
+
+  const weaponUrl = char.weapon?.weaponData?.iconUrl;
+  const gemUrl = char.weapon?.gem?.iconUrl || char.weapon?.gem?.icon;
+
+  const remoteUrls = [
+    imgUrl,
+    ...skillUrls,
+    ...equipUrls,
+    weaponUrl,
+    gemUrl,
+  ].filter((url) => url && url.startsWith("http"));
+
+  const localAssets = [
+    char.charData.profession?.key
+      ? `prof/${char.charData.profession.key.replace("profession_", "").toLowerCase()}.jpg`
+      : null,
+    char.charData.property?.key
+      ? `element/${char.charData.property.key.replace("char_property_", "").toLowerCase()}.jpg`
+      : null,
+    char.weapon?.weaponData?.type?.key
+      ? `weapon/black/${char.weapon.weaponData.type.key.replace("weapon_type_", "").toLowerCase()}.png`
+      : null,
+    char.evolvePhase !== undefined ? `phase/${char.evolvePhase}.webp` : null,
+    char.potentialLevel > 0 ? `rank/${char.potentialLevel}.png` : null,
+    char.weapon?.breakthroughLevel > 0
+      ? `rank/${char.weapon.breakthroughLevel}.png`
+      : null,
+  ].filter(Boolean) as string[];
+
+  // Trigger parallel loading
+  await Promise.all([
+    ...remoteUrls.map((url) => fetchImage(url)),
+    ...localAssets.map((path) => loadLocalImage(path)),
+  ]);
+
+  // 1. Backgrounds
+  ctx.fillStyle = "#f2f2f2";
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = "#d8d8d8";
   ctx.fillRect(0, 0, leftW, height);
 
-  // 2. Character Art (Left Panel)
-  const imgUrl =
-    char.charData.illustrationUrl ||
-    char.charData.avatarRtUrl ||
-    char.charData.avatarSqUrl;
+  // Branding Polygon (Behind character)
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(leftW, 0);
+  ctx.lineTo(leftW, 550);
+  ctx.lineTo(leftW - 350, 0);
+  ctx.closePath();
+  ctx.fillStyle = "#ffcc00"; // Endfield Yellow
+  ctx.fill();
+
+  // Vertical Branding Text
+  ctx.save();
+  ctx.translate(leftW - 25, 40);
+  ctx.rotate(Math.PI / 2);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 80px NotoSansTCBold";
+  ctx.letterSpacing = "4px";
+  ctx.fillText("ENDFIELD INDUSTRIES —", 0, 0);
+  ctx.restore();
+  ctx.restore();
+
+  // 2. Character Art
   if (imgUrl) {
     try {
       const img = await fetchImage(imgUrl);
@@ -650,119 +835,113 @@ export async function drawCharacterDetail(char: any): Promise<Buffer> {
       let drawW = height * ratio;
       const x = (leftW - drawW) / 2;
       ctx.drawImage(img, x, 0, drawW, drawH);
-    } catch (e) {
-      console.error("Failed to load art", e);
-    }
+    } catch (e) {}
   }
 
-  // Fade art at bottom
   const grad = ctx.createLinearGradient(0, height - 350, 0, height);
   grad.addColorStop(0, "rgba(216, 216, 216, 0)");
   grad.addColorStop(1, "rgba(216, 216, 216, 1)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, height - 350, leftW, 350);
 
-  // 3. Left Panel Info
-  const contentY = height - 100;
+  // 3. Left Panel Info Redesign (v7)
+  const infoY = height - 420;
 
-  // Name
-  ctx.fillStyle = "#111111";
-  ctx.font = "bold 90px NotoSansTCBold";
-  ctx.textAlign = "left";
-  ctx.fillText(char.charData.name, padding, contentY - 140);
+  // Row 1: Name + Stars
+  ctx.fillStyle = "#000000";
+  ctx.font = "bold 80px NotoSansTCBold";
+  ctx.fillText(`${char.charData.name}`, padding, infoY + 60);
 
-  // Level Badge
-  const lvBoxW = 220;
-  const lvBoxH = 120;
-  const lvX = leftW - lvBoxW - 40;
-  const lvY = contentY - 260;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
-  roundRect(ctx, lvX, lvY, lvBoxW, lvBoxH, 15, true);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 70px NotoSansTCBold";
-  ctx.fillText(`${char.level}`, lvX + 25, lvY + 85);
-  ctx.font = "24px NotoSans";
-  ctx.fillText("Level", lvX + 115, lvY + 85);
+  const charRarity = parseInt(char.charData.rarity?.value) || 0;
+  const charStarS = 40;
+  for (let i = 0; i < charRarity; i++) {
+    ctx.drawImage(
+      starImg,
+      padding + i * (charStarS + 8),
+      infoY + 80,
+      charStarS,
+      charStarS,
+    );
+  }
 
-  // Icons Row: Profession, Property, WeaponType
-  const iconSize = 70;
-  const iconGap = 25;
-  let curIX = padding;
-  const iconY = contentY - 100;
+  // Row 2: Icons
+  const row2Y = infoY + 160;
+  const iconS = 80;
+  const iconG = 25;
+  let row2X = padding;
 
-  // Prof
+  // Profession Icon
   const profKey = char.charData.profession?.key;
   if (profKey) {
     try {
       const img = await loadLocalImage(
         `prof/${profKey.replace("profession_", "").toLowerCase()}.jpg`,
       );
-      ctx.drawImage(img, curIX, iconY, iconSize, iconSize);
-      curIX += iconSize + iconGap;
+      ctx.drawImage(img, row2X, row2Y, iconS, iconS);
+      row2X += iconS + iconG;
     } catch (e) {}
   }
-  // Prop
+
+  // Property Icon
   const propKey = char.charData.property?.key;
   if (propKey) {
     try {
       const img = await loadLocalImage(
         `element/${propKey.replace("char_property_", "").toLowerCase()}.jpg`,
       );
-      ctx.drawImage(img, curIX, iconY, iconSize, iconSize);
-      curIX += iconSize + iconGap;
-    } catch (e) {}
-  }
-  // WeaponType
-  const wKey = char.charData.weaponType?.key;
-  if (wKey) {
-    try {
-      const img = await loadLocalImage(
-        `weapon/black/${wKey.replace("weapon_type_", "").toLowerCase()}.png`,
-      );
-      ctx.drawImage(img, curIX, iconY, iconSize, iconSize);
-      curIX += iconSize + iconGap;
+      ctx.drawImage(img, row2X, row2Y, iconS, iconS);
+      row2X += iconS + iconG;
     } catch (e) {}
   }
 
-  // Potential Rank (Dots)
-  const potSize = 20;
-  const potGap = 12;
-  const potTotal = 6;
-  const potLevel = char.potentialLevel || 0;
-  const potY = iconY + iconSize + 30;
-  for (let i = 0; i < potTotal; i++) {
-    ctx.fillStyle = i < potLevel ? "#ffcc00" : "#aaaaaa";
-    ctx.beginPath();
-    ctx.arc(
-      padding + i * (potSize + potGap) + potSize / 2,
-      potY,
-      potSize / 2,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  }
+  // Level display in the corner of image area
+  const numText = `${char.level}`;
+  const labelText = "LEVEL";
+
+  ctx.font = "bold 90px NotoSansTCBold";
+  const numW = ctx.measureText(numText).width;
+  ctx.font = "bold 44px NotoSansTCBold";
+  const labelW = ctx.measureText(labelText).width;
+
+  const totalW = numW + labelW + 10;
+  const startX = leftW - totalW - 20;
+
+  ctx.fillStyle = "#111";
+  ctx.font = "bold 90px NotoSansTCBold";
+  ctx.fillText(numText, startX, infoY + 70);
+  ctx.font = "44px NotoSans";
+  ctx.fillText(labelText, startX + numW + 10, infoY + 70);
+
+  // Row 3: Tags
+  const row3Y = row2Y + iconS + 20;
+  const tags = char.charData.tags || [];
+  let tagX = padding;
+  tags.forEach((tag: string) => {
+    ctx.font = "bold 26px NotoSansTCBold";
+    const tw = ctx.measureText(tag).width;
+    ctx.fillStyle = "rgba(0,0,0,0.1)";
+    roundRect(ctx, tagX, row3Y, tw + 24, 45, 10, true);
+    ctx.fillStyle = "#444";
+    ctx.fillText(tag, tagX + 12, row3Y + 32);
+    tagX += tw + 40;
+  });
 
   // --- RIGHT SECTION ---
-
-  // 4. Skills (Top section of right)
   const skillsY = 80;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
   ctx.fillText("I 技能", rightX, skillsY);
 
-  const skY = skillsY + 20;
-  const skSize = 130;
+  const skY = skillsY + 20,
+    skSize = 130;
   const skList = char.charData.skills || [];
   for (let i = 0; i < 4; i++) {
-    const s = skList[i];
-    const sx = rightX + i * (skSize + 110);
-
+    const s = skList[i],
+      sx = rightX + i * (skSize + 110);
     ctx.fillStyle = "#cccccc";
     ctx.beginPath();
     ctx.arc(sx + skSize / 2, skY + skSize / 2 + 20, skSize / 2, 0, Math.PI * 2);
     ctx.fill();
-
     if (s && s.iconUrl) {
       try {
         const sImg = await fetchImage(s.iconUrl);
@@ -783,29 +962,58 @@ export async function drawCharacterDetail(char: any): Promise<Buffer> {
     ctx.fillStyle = "#222";
     ctx.font = "bold 28px NotoSansTCBold";
     ctx.textAlign = "center";
-    ctx.fillText(s?.name || "未知", sx + skSize / 2, skY + skSize + 65);
+    const skName = (s?.name || "未知")
+      .replace(/，/g, ", ")
+      .replace(/。/g, ". ")
+      .replace(/：/g, ": ")
+      .replace(/；/g, "; ")
+      .replace(/？/g, "?")
+      .replace(/！/g, "!");
+    ctx.fillText(skName, sx + skSize / 2, skY + skSize + 65);
     ctx.font = "bold 20px NotoSans";
     ctx.fillStyle = "#666";
     ctx.fillText("RANK 1", sx + skSize / 2, skY + skSize + 95);
   }
   ctx.textAlign = "left";
 
-  // 5. Weapon & Tactical Cards (Side by side?)
-  // Actually, let's keep vertical for space if we want 3x2 grid.
-  // Col 1 (Right): Skills + Weapon
-  // Col 2 (Right): Equipment Grid
+  const getRarityColor = (rKey: string) => {
+    if (rKey.includes("_6")) return "rgba(255, 113, 0, 1)"; // Orange
+    if (rKey.includes("_5")) return "rgba(255, 204, 0, 1)"; // Yellow
+    if (rKey.includes("_4")) return "rgba(179, 128, 255, 1)"; // Purple
+    if (rKey.includes("_3")) return "rgba(51, 194, 255, 1)"; // Blue
+    if (rKey.includes("_2")) return "rgba(180, 217, 69, 1)"; // Green
+    if (rKey.includes("_1")) return "rgba(178, 178, 178, 1)"; // Gray
+    return "rgba(178, 178, 178, 1)";
+  };
 
-  const col1W = 850;
+  const drawPlaceholder = (x: number, y: number, w: number, h: number) => {
+    ctx.strokeStyle = "#eee";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([10, 10]);
+    ctx.strokeRect(x + 20, y + 20, w - 40, h - 40);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(x + w / 2 - 40, y + h / 2 - 40);
+    ctx.lineTo(x + w / 2 + 40, y + h / 2 + 40);
+    ctx.moveTo(x + w / 2 + 40, y + h / 2 - 40);
+    ctx.lineTo(x + w / 2 - 40, y + h / 2 + 40);
+    ctx.stroke();
+  };
 
-  // Weapon Card
-  const weaponY = 380;
+  const weaponTitleY = 380;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
-  ctx.fillText("I 武器", rightX, weaponY);
+  ctx.fillText("I 武器", rightX, weaponTitleY);
 
-  const wCardW = col1W;
-  const wCardH = 260;
-  const wCardY = weaponY + 30;
+  const eGap = 20;
+  const wCardW = (rightW - eGap) * 0.66;
+  const wSlotW = rightW - wCardW - eGap;
+  const wCardH = 180;
+  const wCardY = weaponTitleY + 30;
+
+  // Weapon Card
   ctx.fillStyle = "#fcfcfc";
   ctx.shadowColor = "rgba(0,0,0,0.05)";
   ctx.shadowBlur = 10;
@@ -814,111 +1022,345 @@ export async function drawCharacterDetail(char: any): Promise<Buffer> {
 
   if (char.weapon) {
     const wd = char.weapon.weaponData;
-    ctx.fillStyle = "#111";
-    ctx.font = "bold 70px NotoSansTCBold";
-    ctx.fillText(`${char.weapon.level}`, rightX + 35, wCardY + 90);
-    ctx.font = "26px NotoSans";
-    ctx.fillText("LEVEL", rightX + 145, wCardY + 90);
-
-    ctx.fillStyle = "#a38634"; // Stars
-    ctx.font = "30px NotoSans";
-    const rarity = parseInt(wd.rarity?.value) || 0;
-    ctx.fillText("★".repeat(rarity), rightX + 35, wCardY + 140);
+    const rKey = wd.rarity?.key || "";
+    ctx.fillStyle = getRarityColor(rKey);
+    ctx.fillRect(rightX, wCardY, 15, wCardH);
 
     ctx.fillStyle = "#111";
-    ctx.font = "bold 40px NotoSansTCBold";
-    ctx.fillText(wd.name || "Unknown", rightX + 35, wCardY + 200);
+    ctx.font = "bold 50px NotoSansTCBold";
+    ctx.fillText(`${char.weapon.level}`, rightX + 45, wCardY + 70);
+    const wLvW = ctx.measureText(`${char.weapon.level}`).width;
+    ctx.font = "20px NotoSans";
+    ctx.fillText("LEVEL", rightX + 45 + wLvW + 10, wCardY + 70);
+    const wLabelW = ctx.measureText("LEVEL").width;
+
+    const wRarity = parseInt(rKey.split("_").pop() || "0");
+    for (let j = 0; j < wRarity; j++) {
+      ctx.drawImage(starImg, rightX + 45 + j * 30, wCardY + 85, 25, 25);
+    }
+
+    ctx.fillStyle = "#111";
+    ctx.font = "bold 32px NotoSansTCBold";
+    ctx.fillText(wd.name || "Unknown", rightX + 45, wCardY + 160);
 
     if (wd.iconUrl) {
       try {
         const wImg = await fetchImage(wd.iconUrl);
         ctx.save();
-        ctx.translate(rightX + wCardW - 130, wCardY + 130);
-        ctx.rotate(-Math.PI / 10);
-        ctx.drawImage(wImg, -110, -110, 220, 220);
+        ctx.translate(rightX + wCardW - 120, wCardY + 90);
+        ctx.rotate(-Math.PI / 15);
+        ctx.drawImage(wImg, -100, -100, 200, 200);
         ctx.restore();
       } catch (e) {}
     }
   }
 
-  // 6. Equipment Grid (3x2) - Right Column
-  const gridX = rightX + col1W + 40;
-  const gridY = skillsY;
+  // Weapon Section Slot (Gem/Plugin)
+  ctx.fillStyle = "#fcfcfc";
+  ctx.shadowColor = "rgba(0,0,0,0.05)";
+  ctx.shadowBlur = 10;
+  const slotX = rightX + wCardW + eGap;
+  roundRect(ctx, slotX, wCardY, wSlotW, wCardH, 15, true);
+  ctx.shadowBlur = 0;
+
+  let hasGem = false;
+  const gemData = char.weapon?.gem;
+  if (gemData) {
+    const gIcon = gemData.iconUrl || gemData.icon;
+    if (gIcon) {
+      try {
+        const gImg = gIcon.startsWith("http")
+          ? await fetchImage(gIcon)
+          : await loadLocalImage(gIcon);
+        ctx.drawImage(gImg, slotX + 15, wCardY + 15, wSlotW - 30, wCardH - 30);
+        hasGem = true;
+      } catch (e) {}
+    }
+  }
+
+  if (!hasGem) {
+    drawPlaceholder(slotX, wCardY, wSlotW, wCardH);
+  }
+
+  // 6. Configuration Grid (2:3)
+  const gridTitleY = wCardY + wCardH + 50;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
-  ctx.fillText("I 裝備", gridX, gridY);
+  ctx.fillText("I 裝配配置", rightX, gridTitleY);
 
-  const eCardW = width - gridX - padding - 30;
-  const eCardH = 230;
-  const eGap = 25;
-  const eGridY = gridY + 30;
+  const egX = rightX;
+  const egY = gridTitleY + 30;
+  const totalGridH = height - egY - 60;
+  const colW1 = (rightW - eGap) / 2;
+  const colW2 = colW1;
+  const itemH_L = (totalGridH - eGap) / 2;
+  const itemH_R = (totalGridH - 2 * eGap) / 3;
 
-  // Layout logic based on user:
-  // Body (0,0)  | Accessory 1 (0,1)
-  // Arm (1,0)   | (Empty/Acc 2) (1,1)
-  // (Empty) (2,0)| Tactical (2,1)
-
-  const equipGrid = [
-    { item: char.bodyEquip, pos: [0, 0] },
-    { item: char.firstAccessory, pos: [0, 1] },
-    { item: char.armEquip, pos: [1, 0] },
-    { item: null, pos: [1, 1] },
-    { item: null, pos: [2, 0] },
-    { item: char.tacticalItem, pos: [2, 1], isTac: true },
+  const leftItems = [
+    { item: char.bodyEquip, type: "護甲" },
+    { item: char.armEquip, type: "護手" },
+  ];
+  const rightItems = [
+    { item: char.firstAccessory, type: "配件" },
+    { item: char.secondAccessory, type: "配件" },
+    { item: char.tacticalItem, type: "戰術物品", isTac: true },
   ];
 
-  const colW = (eCardW - eGap) / 2;
-
-  for (const e of equipGrid) {
-    const ex = gridX + e.pos[1] * (colW + eGap);
-    const ey = eGridY + e.pos[0] * (eCardH + eGap);
+  // Draw Left Column
+  for (let i = 0; i < leftItems.length; i++) {
+    const e = leftItems[i];
+    const ex = egX;
+    const ey = egY + i * (itemH_L + eGap);
 
     ctx.fillStyle = "#fcfcfc";
     ctx.shadowColor = "rgba(0,0,0,0.05)";
     ctx.shadowBlur = 8;
-    roundRect(ctx, ex, ey, colW, eCardH, 15, true);
+    roundRect(ctx, ex, ey, colW1, itemH_L, 15, true);
     ctx.shadowBlur = 0;
 
-    if (e.item || e.isTac) {
-      const data = e.item?.equipData || (e.item as any)?.tacticalItemData;
-      const level =
-        e.item?.level || (e.item as any)?.level || (e.item as any)?.weaponData
-          ? "Weapon"
-          : "??";
-
-      // If it's Tactical Item, it might have different structure
-      const isTactical = e.isTac;
-      const itemName = data?.name || (e.item as any)?.name || "未知";
-      const itemLevel = level;
+    if (e.item) {
+      const ed = e.item.equipData;
+      const rKey = ed.rarity?.key || "";
+      ctx.fillStyle = getRarityColor(rKey);
+      ctx.fillRect(ex, ey, 12, itemH_L);
 
       ctx.fillStyle = "#111";
-      ctx.font = "bold 60px NotoSansTCBold";
-      ctx.fillText(`${itemLevel}`, ex + 25, ey + 75);
-      ctx.font = "22px NotoSans";
-      ctx.fillText("LEVEL", ex + 105, ey + 75);
+      ctx.font = "bold 44px NotoSansTCBold";
+      const lvVal = ed.level?.value || "??";
+      ctx.fillText(`${lvVal}`, ex + 35, ey + 60);
+      const lvW = ctx.measureText(lvVal).width;
+      ctx.font = "18px NotoSans";
+      ctx.fillText("LEVEL", ex + 35 + lvW + 10, ey + 60);
 
+      // Stars
+      const eRarity = parseInt(rKey.split("_").pop() || "0");
+      for (let j = 0; j < eRarity; j++) {
+        ctx.drawImage(starImg, ex + 35 + j * 32, ey + 75, 28, 28);
+      }
+
+      // Suit Skill Description
+      let skillY = ey + 135;
+      const nameY = ey + itemH_L - 25;
+      if (ed.suit && ed.suit.skillDesc) {
+        const skillStr = parseEffectString(
+          ed.suit.skillDesc,
+          ed.suit.skillDescParams,
+        );
+        ctx.fillStyle = "#666";
+        ctx.font = "20px NotoSansTCBold";
+        wrapText(
+          ctx,
+          skillStr,
+          ex + 30,
+          skillY,
+          colW1 - 125,
+          28,
+          nameY - 45 - skillY,
+        );
+      }
+
+      // Properties and Suit Name at the bottom right, aligned with name
+      const props = ed.properties || [];
+      const suitName = ed.suit?.name;
+      let currentRightX = ex + colW1 - 30;
+
+      // Render segments in reverse to align right
+      [...props]
+        .slice(0, 3)
+        .reverse()
+        .forEach((pKey: string) => {
+          const enumItem = enums.find((v: any) => v.key === pKey);
+          const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
+          if (!labelText) return;
+
+          ctx.font = "bold 22px NotoSansTCBold";
+          const textW = ctx.measureText(labelText).width;
+          const bgW = textW + 24;
+          const labelX = currentRightX - bgW;
+
+          ctx.fillStyle = "rgba(0,0,0,0.05)";
+          roundRect(ctx, labelX, nameY - 32, bgW, 40, 6, true);
+          ctx.fillStyle = "#555";
+          ctx.textAlign = "center";
+          ctx.fillText(labelText, labelX + bgW / 2, nameY - 4);
+          ctx.textAlign = "left";
+          currentRightX -= bgW + 12;
+        });
+
+      // Suit Name Pill
+      if (suitName) {
+        ctx.font = "bold 22px NotoSansTCBold";
+        const tw = ctx.measureText(suitName).width;
+        const bgW = tw + 24;
+        const labelX = currentRightX - bgW;
+
+        ctx.fillStyle = getRarityColor(rKey);
+        roundRect(ctx, labelX, nameY - 32, bgW, 40, 6, true);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.fillText(suitName, labelX + bgW / 2, nameY - 4);
+        ctx.textAlign = "left";
+        currentRightX -= bgW + 12;
+      }
+
+      // Name at the very bottom, with dynamic max width to avoid overlap
+      ctx.fillStyle = "#111";
       ctx.font = "bold 32px NotoSansTCBold";
-      ctx.fillText(itemName, ex + 30, ey + 155);
+      const availableNameW = currentRightX - (ex + 35) - 15; // 15px gap
+      ctx.fillText(ed.name || "未知", ex + 35, nameY, availableNameW);
 
-      const iconUrl = data?.iconUrl || (e.item as any)?.iconUrl;
-      if (iconUrl) {
+      if (ed.iconUrl) {
         try {
-          const img = await fetchImage(iconUrl);
-          ctx.drawImage(img, ex + colW - 170, ey + 15, 160, 160);
+          const eImg = await fetchImage(ed.iconUrl);
+          ctx.drawImage(eImg, ex + colW1 - 160, ey + 10, 150, 150);
         } catch (e) {}
       }
     } else {
-      // Dotted placeholder
-      ctx.strokeStyle = "#ddd";
-      ctx.setLineDash([10, 10]);
-      ctx.lineWidth = 3;
-      ctx.strokeRect(ex + 30, ey + 30, colW - 60, eCardH - 60);
-      ctx.setLineDash([]);
+      drawPlaceholder(ex, ey, colW1, itemH_L);
+    }
+  }
 
-      // Small circle icon in middle
-      ctx.beginPath();
-      ctx.arc(ex + colW / 2, ey + eCardH / 2, 40, 0, Math.PI * 2);
-      ctx.stroke();
+  // Draw Right Column
+  for (let i = 0; i < rightItems.length; i++) {
+    const e = rightItems[i];
+    const ex = egX + colW1 + eGap;
+    const ey = egY + i * (itemH_R + eGap);
+
+    ctx.fillStyle = "#fcfcfc";
+    ctx.shadowColor = "rgba(0,0,0,0.05)";
+    ctx.shadowBlur = 8;
+    roundRect(ctx, ex, ey, colW2, itemH_R, 15, true);
+    ctx.shadowBlur = 0;
+
+    if (e.item) {
+      const data = e.isTac ? e.item.tacticalItemData : e.item.equipData;
+      const rKey = data?.rarity?.key || "";
+      ctx.fillStyle = getRarityColor(rKey);
+      ctx.fillRect(ex, ey, 12, itemH_R);
+
+      if (e.isTac) {
+        ctx.fillStyle = "#111";
+        ctx.font = "bold 32px NotoSansTCBold";
+        ctx.fillText(data?.name || "未知", ex + 35, ey + 50);
+
+        const tRarity = parseInt(rKey.split("_").pop() || "0");
+        for (let j = 0; j < tRarity; j++) {
+          ctx.drawImage(starImg, ex + 35 + j * 24, ey + 65, 22, 22);
+        }
+
+        // Tactical Item Effect
+        const effectStr = parseEffectString(
+          data?.activeEffect,
+          data?.activeEffectParams,
+        );
+        if (effectStr) {
+          ctx.fillStyle = "#666";
+          ctx.font = "22px NotoSansTCBold";
+          wrapText(
+            ctx,
+            effectStr,
+            ex + 35,
+            ey + 120,
+            colW2 - 180,
+            30,
+            ey + itemH_R - 35 - (ey + 120),
+          );
+        }
+      } else {
+        ctx.fillStyle = "#111";
+        ctx.font = "bold 36px NotoSansTCBold";
+        const lvVal = data?.level?.value || "??";
+        ctx.fillText(`${lvVal}`, ex + 35, ey + 45);
+        const lvW = ctx.measureText(lvVal).width;
+        ctx.font = "16px NotoSans";
+        ctx.fillText("LEVEL", ex + 35 + lvW + 10, ey + 45);
+
+        // Stars
+        const aRarity = parseInt(rKey.split("_").pop() || "0");
+        for (let j = 0; j < aRarity; j++) {
+          ctx.drawImage(starImg, ex + 35 + j * 26, ey + 55, 24, 24);
+        }
+
+        // Suit Skill Description
+        let finalY = ey + 105;
+        const nameY = ey + itemH_R - 25;
+        if (data?.suit && data?.suit.skillDesc) {
+          const skillStr = parseEffectString(
+            data.suit.skillDesc,
+            data.suit.skillDescParams,
+          );
+          ctx.fillStyle = "#666";
+          ctx.font = "16px NotoSansTCBold";
+          wrapText(
+            ctx,
+            skillStr,
+            ex + 30,
+            finalY,
+            colW2 - 180,
+            22,
+            nameY - 40 - finalY,
+          );
+        }
+
+        // Properties and Suit Name at the bottom right, aligned with name
+        const props = data?.properties || [];
+        const suitName = data?.suit?.name;
+        let currentRightX = ex + colW2 - 30;
+
+        [...props]
+          .slice(0, 3)
+          .reverse()
+          .forEach((pKey: string) => {
+            const enumItem = enums.find((v: any) => v.key === pKey);
+            const labelText =
+              enumItem?.value || pKey.replace("equip_attr_", "");
+            if (!labelText) return;
+
+            ctx.font = "bold 20px NotoSansTCBold";
+            const textW = ctx.measureText(labelText).width;
+            const bgW = textW + 18;
+            const labelX = currentRightX - bgW;
+
+            ctx.fillStyle = "rgba(0,0,0,0.05)";
+            roundRect(ctx, labelX, nameY - 28, bgW, 35, 5, true);
+            ctx.fillStyle = "#555";
+            ctx.textAlign = "center";
+            ctx.fillText(labelText, labelX + bgW / 2, nameY - 4);
+            ctx.textAlign = "left";
+            currentRightX -= bgW + 10;
+          });
+
+        // Suit Name Pill
+        if (suitName) {
+          ctx.font = "bold 20px NotoSansTCBold";
+          const tw = ctx.measureText(suitName).width;
+          const bgW = tw + 24; // use consistent bgW
+          const labelX = currentRightX - bgW;
+
+          ctx.fillStyle = getRarityColor(rKey);
+          roundRect(ctx, labelX, nameY - 28, bgW, 35, 5, true);
+          ctx.fillStyle = "#fff";
+          ctx.textAlign = "center";
+          ctx.fillText(suitName, labelX + bgW / 2, nameY - 4);
+          ctx.textAlign = "left";
+          currentRightX -= bgW + 10;
+        }
+
+        // Name at the bottom, with dynamic max width to avoid overlap
+        ctx.fillStyle = "#111";
+        ctx.font = "bold 28px NotoSansTCBold";
+        const availableNameW = currentRightX - (ex + 35) - 15; // 15px gap
+        ctx.fillText(data?.name || "未知", ex + 35, nameY, availableNameW);
+      }
+
+      if (data?.iconUrl) {
+        try {
+          const eImg = await fetchImage(data.iconUrl);
+          ctx.drawImage(eImg, ex + colW2 - 150, ey + 10, 140, 140);
+        } catch (e) {}
+      }
+    } else {
+      drawPlaceholder(ex, ey, colW2, itemH_R);
     }
   }
 
