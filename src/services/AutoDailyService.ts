@@ -21,6 +21,7 @@ interface AutoDailyConfig {
   time: number; // 0-23
   auto_balance: boolean;
   notify: boolean;
+  notify_method: "dm" | "channel";
   channelId?: string;
 }
 
@@ -277,27 +278,40 @@ export class AutoDailyService {
           }
         }
 
-        try {
-          const user = await this.client.users.fetch(userId);
-          if (user) {
-            await user.send({
-              content: "",
-              flags: MessageFlags.IsComponentsV2,
-              components: [container],
-            });
-          }
-        } catch (e) {
-          if (config.channelId) {
-            const channel = (await this.client.channels.fetch(
-              config.channelId,
-            )) as TextChannel;
-            if (channel)
-              await channel.send({
+        if (config.notify_method === "dm") {
+          try {
+            const user = await this.client.users.fetch(userId);
+            if (user) {
+              await user.send({
                 content: "",
                 flags: MessageFlags.IsComponentsV2,
                 components: [container],
               });
+            }
+          } catch (e) {
+            // Fallback to channel if DM fails
+            if (config.channelId) {
+              const channel = (await this.client.channels.fetch(
+                config.channelId,
+              )) as TextChannel;
+              if (channel)
+                await channel.send({
+                  content: "",
+                  flags: MessageFlags.IsComponentsV2,
+                  components: [container],
+                });
+            }
           }
+        } else if (config.notify_method === "channel" && config.channelId) {
+          const channel = (await this.client.channels.fetch(
+            config.channelId,
+          )) as TextChannel;
+          if (channel)
+            await channel.send({
+              content: "",
+              flags: MessageFlags.IsComponentsV2,
+              components: [container],
+            });
         }
       }
     } catch (error) {

@@ -21,10 +21,7 @@ import {
   getAttendanceList,
   executeAttendance,
   formatSkGameRole,
-  AttendanceReward,
-  GameBinding,
 } from "../../utils/skportApi";
-// import { createTranslator } from "../../utils/i18n"; // Removed as file does not exist
 import { CustomDatabase } from "../../utils/Database";
 
 const command: Command = {
@@ -89,10 +86,24 @@ const command: Command = {
           op
             .setName("notify")
             .setDescription("Notify when signed in")
-            .setNameLocalizations({ "zh-TW": "簽到時提及" })
+            .setNameLocalizations({ "zh-TW": "通知" })
             .setDescriptionLocalizations({
-              "zh-TW": "簽到時是否提及管理員",
+              "zh-TW": "是否在簽到時通知",
             })
+            .setRequired(false),
+        )
+        .addStringOption((op) =>
+          op
+            .setName("notify_method")
+            .setDescription("Notification method (default: DM)")
+            .setNameLocalizations({ "zh-TW": "通知方式" })
+            .setDescriptionLocalizations({
+              "zh-TW": "通知發送方式 (預設: 私訊)",
+            })
+            .addChoices(
+              { name: "私訊", value: "dm" },
+              { name: "當前頻道", value: "channel" },
+            )
             .setRequired(false),
         ),
     ) as SlashCommandBuilder,
@@ -306,6 +317,7 @@ async function handleSetup(
   const time = interaction.options.getInteger("time");
   const autoBalance = interaction.options.getBoolean("auto_balance");
   const notify = interaction.options.getBoolean("notify");
+  const notifyMethod = interaction.options.getString("notify_method");
 
   // Load existing or default
   const dailyData = ((await db.get("autoDaily")) as Record<string, any>) || {};
@@ -313,6 +325,7 @@ async function handleSetup(
     time: 13,
     auto_balance: false,
     notify: true,
+    notify_method: "dm",
     channelId: interaction.channelId,
   };
 
@@ -330,6 +343,10 @@ async function handleSetup(
     userConfig.notify = notify;
   }
 
+  if (notifyMethod !== null) {
+    userConfig.notify_method = notifyMethod as "dm" | "channel";
+  }
+
   // Always update channelId to current where command is run
   userConfig.channelId = interaction.channelId;
 
@@ -341,7 +358,8 @@ async function handleSetup(
     new TextDisplayBuilder().setContent(
       `✅ **自動簽到設定已更新**\n` +
         `簽到時間: \`${userConfig.time}:00\` (Asia/Taipei)\n` +
-        `通知: \`${userConfig.notify ? "開啟" : "關閉"}\`\n` +
+        `通知開關: \`${userConfig.notify ? "開啟" : "關閉"}\`\n` +
+        `通知方式: \`${userConfig.notify_method === "dm" ? "私訊" : "頻道"}\`\n` +
         `頻道: <#${userConfig.channelId}>`,
     ),
   );
