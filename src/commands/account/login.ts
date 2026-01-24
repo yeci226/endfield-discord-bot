@@ -73,7 +73,7 @@ const command: Command = {
         .setDescription("Choose login method or action")
         .setNameLocalizations({ "zh-TW": "動作" })
         .setDescriptionLocalizations({ "zh-TW": "選擇登入方式或管理動作" })
-        .setRequired(false)
+        .setRequired(true)
         .addChoices(
           {
             name: "Email & Password",
@@ -574,7 +574,17 @@ const command: Command = {
             `✅ **驗證成功**\n歡迎管理員，**${nickName}**!\n已將此帳號加入綁定列表，並自動同步憑證。`,
           );
 
-          container.addTextDisplayComponents(textDisplay);
+          if (avatar) {
+            container.addSectionComponents(
+              new SectionBuilder()
+                .addTextDisplayComponents(textDisplay)
+                .setThumbnailAccessory(
+                  new ThumbnailBuilder({ media: { url: avatar } }),
+                ),
+            );
+          } else {
+            container.addTextDisplayComponents(textDisplay);
+          }
 
           await interaction.editReply({
             content: "",

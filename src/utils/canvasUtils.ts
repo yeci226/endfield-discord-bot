@@ -724,6 +724,7 @@ function wrapText(
 export async function drawCharacterDetail(
   char: any,
   enums: any[] = [],
+  charIndex: number = 1,
 ): Promise<Buffer> {
   const width = 2400;
   const height = 1400; // Increased height
@@ -814,19 +815,15 @@ export async function drawCharacterDetail(
   ctx.closePath();
   ctx.fillStyle = "#ffcc00"; // Endfield Yellow
   ctx.fill();
-
-  // Vertical Branding Text
-  ctx.save();
-  ctx.translate(leftW - 25, 40);
-  ctx.rotate(Math.PI / 2);
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 80px NotoSansTCBold";
-  ctx.letterSpacing = "4px";
-  ctx.fillText("ENDFIELD INDUSTRIES —", 0, 0);
-  ctx.restore();
   ctx.restore();
 
   // 2. Character Art
+  // Clip to leftW to prevent overflow
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, leftW, height);
+  ctx.clip();
+
   if (imgUrl) {
     try {
       const img = await fetchImage(imgUrl);
@@ -837,6 +834,21 @@ export async function drawCharacterDetail(
       ctx.drawImage(img, x, 0, drawW, drawH);
     } catch (e) {}
   }
+  ctx.restore();
+
+  // Vertical Branding Text (On top of character art)
+  ctx.save();
+  ctx.translate(leftW - 25, 40);
+  ctx.rotate(Math.PI / 2);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 80px NotoSansTCBold";
+  ctx.letterSpacing = "4px";
+  ctx.fillText(
+    `ENDFIELD INDUSTRIES — ${charIndex.toString().padStart(2, "0")}`,
+    0,
+    0,
+  );
+  ctx.restore();
 
   const grad = ctx.createLinearGradient(0, height - 350, 0, height);
   grad.addColorStop(0, "rgba(216, 216, 216, 0)");
@@ -926,6 +938,13 @@ export async function drawCharacterDetail(
     tagX += tw + 40;
   });
 
+  if (char.ownTs) {
+    const ownDate = moment(parseInt(char.ownTs) * 1000).format("YYYY/MM/DD");
+    ctx.fillStyle = "#888";
+    ctx.font = "24px NotoSans";
+    ctx.fillText(`結識時間 ${ownDate}`, padding - 40, height - 20);
+  }
+
   // --- RIGHT SECTION ---
   const skillsY = 80;
   ctx.fillStyle = "#333";
@@ -959,6 +978,40 @@ export async function drawCharacterDetail(
         ctx.restore();
       } catch (e) {}
     }
+    // Dynamic Skill Rank & Level (Now on top)
+    const userSk = char.userSkills?.[s?.id || ""] || { level: 1, maxLevel: 1 };
+    const rankLabel = "RANK";
+    const levelNum = `${userSk.level}`;
+    const maxLevel = `/${userSk.maxLevel}`;
+
+    ctx.font = "bold 18px NotoSans";
+    const rankW = ctx.measureText(rankLabel).width;
+    ctx.font = "bold 26px NotoSans";
+    const levelW = ctx.measureText(levelNum).width;
+    ctx.font = "16px NotoSans";
+    const maxW = ctx.measureText(maxLevel).width;
+
+    const totalW = rankW + levelW + maxW + 15;
+    const infoX = sx + skSize / 2 - totalW / 2;
+    const infoY = skY + skSize + 45;
+
+    // Rank Label (Gray)
+    ctx.textAlign = "left";
+    ctx.font = "bold 18px NotoSans";
+    ctx.fillStyle = "#888";
+    ctx.fillText(rankLabel, infoX, infoY + 2);
+
+    // Level Num (Dark)
+    ctx.font = "bold 26px NotoSans";
+    ctx.fillStyle = "#111";
+    ctx.fillText(levelNum, infoX + rankW + 10, infoY + 2);
+
+    // Max Level (Gray)
+    ctx.font = "16px NotoSans";
+    ctx.fillStyle = "#888";
+    ctx.fillText(maxLevel, infoX + rankW + levelW + 15, infoY + 2);
+
+    // Skill Name (Now at bottom)
     ctx.fillStyle = "#222";
     ctx.font = "bold 28px NotoSansTCBold";
     ctx.textAlign = "center";
@@ -969,10 +1022,7 @@ export async function drawCharacterDetail(
       .replace(/；/g, "; ")
       .replace(/？/g, "?")
       .replace(/！/g, "!");
-    ctx.fillText(skName, sx + skSize / 2, skY + skSize + 65);
-    ctx.font = "bold 20px NotoSans";
-    ctx.fillStyle = "#666";
-    ctx.fillText("RANK 1", sx + skSize / 2, skY + skSize + 95);
+    ctx.fillText(skName, sx + skSize / 2, skY + skSize + 80);
   }
   ctx.textAlign = "left";
 
@@ -1139,7 +1189,7 @@ export async function drawCharacterDetail(
       }
 
       // Suit Skill Description
-      let skillY = ey + 135;
+      let skillY = ey + 130;
       const nameY = ey + itemH_L - 25;
       if (ed.suit && ed.suit.skillDesc) {
         const skillStr = parseEffectString(
@@ -1153,7 +1203,7 @@ export async function drawCharacterDetail(
           skillStr,
           ex + 30,
           skillY,
-          colW1 - 125,
+          colW1 - 60,
           28,
           nameY - 45 - skillY,
         );
@@ -1261,9 +1311,9 @@ export async function drawCharacterDetail(
             effectStr,
             ex + 35,
             ey + 120,
-            colW2 - 180,
+            colW2 - 50,
             30,
-            ey + itemH_R - 35 - (ey + 120),
+            itemH_R - 110,
           );
         }
       } else {
@@ -1290,15 +1340,15 @@ export async function drawCharacterDetail(
             data.suit.skillDescParams,
           );
           ctx.fillStyle = "#666";
-          ctx.font = "16px NotoSansTCBold";
+          ctx.font = "20px NotoSansTCBold";
           wrapText(
             ctx,
             skillStr,
             ex + 30,
             finalY,
-            colW2 - 180,
+            colW2 - 45,
             22,
-            nameY - 40 - finalY,
+            nameY - 10 - finalY,
           );
         }
 

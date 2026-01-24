@@ -154,7 +154,9 @@ const command: Command = {
         .addOptions(
           detail.chars.slice(0, 25).map((char) => ({
             label: char.charData.name,
-            description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
+            description: `Lv.${char.level} | ${
+              char.charData.profession?.value || ""
+            }`,
             value: char.id,
           })),
         );
@@ -177,6 +179,61 @@ const command: Command = {
       const [, , roleId, serverId, uid] = parts;
       const charId = interaction.values[0];
 
+      if (charId === "home") {
+        await interaction.deferUpdate();
+
+        // Fetch Data again
+        const cardRes: CardDetailResponse | null = await getCardDetail(
+          roleId,
+          serverId,
+          uid,
+          interaction.locale,
+          account.cred,
+        );
+
+        if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
+          await interaction.editReply("⚠️ **無法取得角色詳情 (可能已過期)**");
+          return;
+        }
+
+        const detail = cardRes.data.detail;
+        const buffer = await drawDashboard(detail);
+        const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
+
+        let selectMenu = StringSelectMenuBuilder.from(
+          (interaction.message.components[0] as any).components[0] as any,
+        );
+
+        // Returning to Home: Remove the Home option if it exists
+        // We can just rebuild the options cleanly from detail.chars
+        // But since we just want to remove the first option if it is "home":
+        const options = selectMenu.options.filter(
+          (o) => o.data.value !== "home",
+        );
+        // If we sliced before, we might want to add back the 25th char if we can find it?
+        // Actually, easiest is to just rebuild options from detail data since we have it.
+        selectMenu.setOptions(
+          detail.chars.slice(0, 25).map((char) => ({
+            label: char.charData.name,
+            description: `Lv.${char.level} | ${
+              char.charData.profession?.value || ""
+            }`,
+            value: char.id,
+          })),
+        );
+        const row =
+          new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+            selectMenu,
+          );
+
+        await interaction.editReply({
+          content: "",
+          files: [attachment],
+          components: [row],
+        });
+        return;
+      }
+
       await interaction.deferUpdate();
 
       // Fetch Data again
@@ -194,7 +251,8 @@ const command: Command = {
       }
 
       const detail = cardRes.data.detail;
-      const selectedChar = detail.chars.find((c) => c.id === charId);
+      const charIndex = detail.chars.findIndex((c) => c.id === charId) + 1;
+      const selectedChar = detail.chars[charIndex - 1];
 
       if (!selectedChar) {
         await interaction.editReply("⚠️ 未找到該幹員資訊");
@@ -212,15 +270,38 @@ const command: Command = {
       ];
 
       try {
-        const buffer = await drawCharacterDetail(selectedChar, equipEnums);
+        const buffer = await drawCharacterDetail(
+          selectedChar,
+          equipEnums,
+          charIndex,
+        );
         const attachment = new AttachmentBuilder(buffer, {
           name: "char_detail.png",
         });
 
-        // We keep the same select menu so they can switch again
-        const selectMenu = StringSelectMenuBuilder.from(
+        // We need to add "Home" option if it's not present
+        // Since we are in character view now.
+        let selectMenu = StringSelectMenuBuilder.from(
           (interaction.message.components[0] as any).components[0] as any,
         );
+
+        const hasHome = selectMenu.options.some((o) => o.data.value === "home");
+        if (!hasHome) {
+          selectMenu.setOptions([
+            {
+              label: "🏠 主頁",
+              description: "回到主要卡片",
+              value: "home",
+            },
+            ...detail.chars.slice(0, 24).map((char) => ({
+              label: char.charData.name,
+              description: `Lv.${char.level} | ${
+                char.charData.profession?.value || ""
+              }`,
+              value: char.id,
+            })),
+          ]);
+        }
         const row =
           new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
             selectMenu,
