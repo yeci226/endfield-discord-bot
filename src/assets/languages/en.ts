@@ -1,0 +1,157 @@
+const langs: Record<string, any> = {
+  // General
+  None: "None",
+  True: "Yes",
+  False: "No",
+  Hour: "h",
+  Minute: "m",
+  Second: "s",
+  Year: "Y",
+  Month: "M",
+  Day: "D",
+  Auto: "Auto",
+  isSet: "Set",
+  isNotSet: "Not Set",
+  NewLocale: "Language set to <locale>",
+  Searching: "Searching data...",
+  MainPage: "Main Page",
+  Error: "Error",
+  UnknownError: "Unknown Error",
+  FetchDataFailed:
+    "Failed to fetch game data. Please check if your Cookie is valid or try again later.",
+  BindingNotFound:
+    "No game binding info found. Please make sure you have created a character in the game.",
+  AuthError: "Authentication failed. Please re-bind your account.",
+
+  // Account
+  AccountNotFound:
+    "❌ **Account Not Found**\nPlease use `/set-cookie` to bind your Endfield account first.",
+  AccountNotFoundUser: `❌ **Account Not Found**\nUser <targetUser> has not set an account.`,
+  NoSetAccount: "Please use `/set-cookie` to bind your Endfield account first.",
+
+  // Daily Command
+  daily_Check: "Check status",
+  daily_CheckDesc: "Check attendance records",
+  daily_Claim: "Claim now",
+  daily_ClaimDesc: "Manually claim daily rewards",
+  daily_Setup: "Auto-sign setup",
+  daily_SetupDesc: "Configure auto-sign settings",
+  daily_Time: "Time",
+  daily_TimeDesc: "Schedule time (1-24 UTC-8)",
+  daily_AutoBalance: "Auto Balance",
+  daily_AutoBalanceDesc: "Automatically choose the best time",
+  daily_Notify: "Notify",
+  daily_NotifyDesc: "Notify when signed in",
+  daily_NotifyMethod: "Method",
+  daily_NotifyMethodDesc: "Notification method (default: DM)",
+  daily_DM: "DM",
+  daily_Channel: "Current Channel",
+  daily_Checking: "🔄 **Executing daily attendance...**",
+  daily_Status: "📅 **Daily Attendance Status**",
+  daily_Success: "✅ **Attendance Successful**",
+  daily_Failed: "❌ **Not Signed In**",
+  daily_StatusAlready: "Already Signed",
+  daily_TodayReward: "Today's Reward",
+  daily_TodayPending: "Today's Pending",
+  daily_FirstReward: "Newbie Reward",
+  daily_TotalDays: "Cumulative Days",
+  daily_RoleNotFound: "⚠️ **No Endfield characters found**",
+  daily_SetupSuccess: "✅ **Auto-sign settings updated**",
+  daily_SetupTime: "Schedule Time",
+  daily_SetupNotify: "Notification",
+  daily_SetupNotifyMethod: "Method",
+  daily_SetupChannel: "Channel",
+
+  // Profile Command
+  profile_SelectCharacter: "Select an operator to show details",
+
+  // Canvas UI Labels
+  canvas_ExploreLevel: "Explore Lv.",
+  canvas_Operators: "Operators",
+  canvas_Weapons: "Weapons",
+  canvas_Files: "Files",
+  canvas_AwakeDate: "Awake Date",
+  canvas_LastLogin: "Last Login",
+  canvas_JoinedDate: "Joined At",
+  canvas_MainMission: "Mission Log",
+  canvas_AuthLevel: "Auth Lv.",
+  canvas_RealtimeData: "Real-time Data",
+  canvas_Stamina: "Stamina",
+  canvas_RecoveryTime: "Recovery",
+  canvas_FullyRecovered: "Fully Recovered",
+  canvas_Activity: "Activity",
+  canvas_BP: "BP Level",
+  canvas_Skills: "Skills",
+  canvas_Rank: "RANK",
+  canvas_Equipment: "Equipment",
+  canvas_Armor: "Armor",
+  canvas_Bracer: "Bracer",
+  canvas_Accessory: "Accessory",
+  canvas_TacticalItem: "Tactical Item",
+
+  // Login
+  login_Title: "Endfield Login",
+  login_EmailPlaceholder: "Email",
+  login_PasswordPlaceholder: "Password",
+  login_EmailInput: "example@gmail.com",
+  login_PasswordInput: "Enter your password",
+  login_Limit:
+    "❌ **Binding Failed**\nAdmin, you have reached the limit of 5 accounts.",
+  login_UnbindFail: "❌ **Unbinding Failed**\nPlease select an account.",
+  login_UnbindInvalid: "❌ **Unbinding Failed**\nInvalid account index.",
+  login_UnbindSuccess:
+    "✅ **Unbinding Successful**\nAdmin, account **<name>** (<id>) has been unbound.",
+  login_ListTitle: "**Bound Accounts (<current>/5)**",
+  login_ListEmpty: "No accounts bound currently.",
+  login_Welcome: "Admin, **<name>**",
+  login_HelpTitle: "❓ **How to get Cookie**",
+  login_CookieSetTitle: "Set Endfield Cookie",
+  login_CookiePlaceholder: "ACCOUNT_TOKEN=...",
+  login_CookieSuccess:
+    "✅ **Verification Successful**\nWelcome Admin, **<name>**!\nAccount added and credentials synchronized.",
+  login_CaptchaRequired:
+    "🛡️ **Captcha Required by Gryphline**\nPlease click the URL below to open in your browser:\n**[👉 Click here to verify](<url>)**\n\n1. The captcha will load automatically.\n2. After completing, the result will be sent back.\n3. **The bot will finish login automatically upon detection.**",
+  login_ManualVerify: "Check Status Manually",
+
+  // Gacha
+  gacha_Title: "# Current Gacha Pools",
+  gacha_CharPool: "Character: <name>",
+  gacha_WeaponPool: "Weapon: <name>",
+  gacha_Time: "-# Duration: <start> - <end>",
+  gacha_CharEmpty: "## Character Pool\nNo active character pools currently.",
+  gacha_WeaponEmpty: "## Weapon Pool\nNo active weapon pools currently.",
+  gacha_NoData: "No gacha information available currently.",
+
+  // Wiki
+  wiki_SearchTitle: "# Search Results (Category)",
+  wiki_SearchNote:
+    "\nCurrently only category search is supported. Use the menu to browse items.",
+  wiki_NotFound: 'No category named "<query>" found. Try browsing via menu.',
+  wiki_CatalogTitle: "# Endfield Wiki Catalog",
+  wiki_BrowseTip: "Please select a main category to start browsing:",
+  wiki_MainSelect: "Select Main Category",
+  wiki_SubSelect: "Select Sub Category",
+  wiki_ItemSelect: "Select Item (<range> / <total>)",
+  wiki_EmptyCat: "No items in this category.",
+  wiki_Back: "Back",
+  wiki_NextPage: "Next",
+  wiki_PrevPage: "Prev",
+  wiki_ViewPage: "View Wiki Page",
+
+  // News
+  news_NoPerm: "❌ You need `Manage Server` permission to use this command.",
+  news_BindPlaceholder: "<count> channels bound currently",
+  news_BindDefault: "Select text channel...",
+  news_BindCurrent: "Bind Current Channel",
+  news_BindTip: "Select channels to receive news (multi-select):",
+  news_DmBound: "✅ **This DM channel is already bound**",
+  news_DmSuccess:
+    "✅ **Binding Successful**\nYou will receive news in this DM.",
+  news_UnbindSuccess: "✅ **Unbinding Successful**",
+  news_UnbindDetail: "Unbound <scope> subscriptions (<count> channels).",
+  news_UnbindScopeAll: "all server",
+  news_UnbindScopeSingle: "this",
+  news_NoSub: "No channels are currently bound.",
+};
+
+export default langs;

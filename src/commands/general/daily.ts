@@ -132,7 +132,7 @@ const command: Command = {
     if (!accounts || accounts.length === 0) {
       const container = new ContainerBuilder();
       const textDisplay = new TextDisplayBuilder().setContent(
-        "❌ **未找到綁定帳號**\n請先使用 `/set-cookie` 綁定您的終末地帳號。",
+        t("NoSetAccount"),
       );
       container.addTextDisplayComponents(textDisplay);
 
@@ -150,7 +150,7 @@ const command: Command = {
 
     // Summary Section
     const summaryText = new TextDisplayBuilder().setContent(
-      isClaim ? "🔄 **正在執行每日簽到...**" : "📅 **每日簽到狀態**",
+      isClaim ? t("daily_Checking") : t("daily_Status"),
     );
     container.addTextDisplayComponents(summaryText);
 
@@ -159,14 +159,14 @@ const command: Command = {
     for (const account of accounts) {
       const bindings = await getGamePlayerBinding(
         account.cookie,
-        interaction.locale,
+        t.lang,
         account.cred,
       );
 
       if (!bindings) {
         container.addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `⚠️ **取得綁定失敗**: ${account.info.nickname}`,
+            `⚠️ **${t("FetchDataFailed")}**: ${account.info.nickname}`,
           ),
         );
         continue;
@@ -191,7 +191,7 @@ const command: Command = {
           let status = await getAttendanceList(
             gameRoleStr,
             account.cookie,
-            interaction.locale,
+            t.lang,
             account.cred,
           );
           let claimResult = null;
@@ -201,7 +201,7 @@ const command: Command = {
             claimResult = await executeAttendance(
               gameRoleStr,
               account.cookie,
-              interaction.locale,
+              t.lang,
               account.cred,
             );
             if (claimResult && claimResult.code === 0) {
@@ -210,7 +210,7 @@ const command: Command = {
               status = await getAttendanceList(
                 gameRoleStr,
                 account.cookie,
-                interaction.locale,
+                t.lang,
                 account.cred,
               );
             }
@@ -220,9 +220,9 @@ const command: Command = {
           const totalDays = status?.calendar.filter((d) => d.done).length || 0;
           const todayReward =
             status?.calendar.find((r) => r.available) ||
-            status?.calendar.find((r) => r.done);
+            [...(status?.calendar || [])].reverse().find((r) => r.done);
 
-          let rewardName = "未知獎勵";
+          let rewardName = t("None");
           let rewardIcon = "";
 
           if (todayReward) {
@@ -261,19 +261,19 @@ const command: Command = {
 
           let statusText = "";
           if (status?.hasToday || claimedNow) {
-            statusText = `## ✅ **已簽到**\n### 今日獎勵: \`${rewardName}\``;
+            statusText = `## ${t("daily_Success")}\n### ${t("daily_TodayReward")}: \`${rewardName}\``;
             if (firstRewardName) {
-              statusText += `\n### 新人獎勵: \`${firstRewardName}\``;
+              statusText += `\n### ${t("daily_FirstReward")}: \`${firstRewardName}\``;
             }
-            statusText += `\n### 累計簽到: \`${totalDays}\` 天`;
+            statusText += `\n### ${t("daily_TotalDays")}: \`${totalDays}\` ${t("Day")}`;
           } else {
-            statusText = `## ❌ **未簽到**\n### 今日待領: \`${rewardName}\``;
+            statusText = `## ${t("daily_Failed")}\n### ${t("daily_TodayPending")}: \`${rewardName}\``;
             if (firstRewardName) {
-              statusText += `\n### 新人獎勵: \`${firstRewardName}\``;
+              statusText += `\n### ${t("daily_FirstReward")}: \`${firstRewardName}\``;
             }
-            statusText += `\n### 累計簽到: \`${totalDays}\` 天`;
+            statusText += `\n### ${t("daily_TotalDays")}: \`${totalDays}\` ${t("Day")}`;
             if (isClaim && !claimedNow) {
-              statusText += `\n⚠️ 簽到失敗: \`${claimResult?.message || "未知錯誤"}\``;
+              statusText += `\n⚠️ ${t("Error")}: \`${claimResult?.message || t("UnknownError")}\``;
             }
           }
 
@@ -296,7 +296,7 @@ const command: Command = {
 
     if (!hasResult) {
       container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("⚠️ **未找到任何 Endfield 角色**"),
+        new TextDisplayBuilder().setContent(t("daily_RoleNotFound")),
       );
     }
 
@@ -353,14 +353,20 @@ async function handleSetup(
   dailyData[userId] = userConfig;
   await db.set("autoDaily", dailyData);
 
+  const { createTranslator, toI18nLang } = require("../../utils/i18n");
+  const userLang =
+    (await db.get(`${interaction.user.id}.locale`)) ||
+    toI18nLang(interaction.locale);
+  const t = createTranslator(userLang);
+
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
     new TextDisplayBuilder().setContent(
-      `✅ **自動簽到設定已更新**\n` +
-        `簽到時間: \`${userConfig.time}:00\` (Asia/Taipei)\n` +
-        `通知開關: \`${userConfig.notify ? "開啟" : "關閉"}\`\n` +
-        `通知方式: \`${userConfig.notify_method === "dm" ? "私訊" : "頻道"}\`\n` +
-        `頻道: <#${userConfig.channelId}>`,
+      `### ${t("daily_SetupSuccess")}\n` +
+        `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
+        `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
+        `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\`\n` +
+        `**${t("daily_SetupChannel")}**: <#${userConfig.channelId}>`,
     ),
   );
 

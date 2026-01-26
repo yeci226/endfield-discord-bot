@@ -37,7 +37,7 @@ const command: Command = {
 
       // Title
       container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("# 當前卡池資訊"),
+        new TextDisplayBuilder().setContent(tr("gacha_Title")),
       );
 
       let hasData = false;
@@ -49,7 +49,12 @@ const command: Command = {
         charPoolData.data.list.length > 0
       ) {
         for (const charPool of charPoolData.data.list) {
-          const charPoolHeader = `## 角色池：${charPool.name}\n-# 卡池時間: <t:${charPool.poolStartAtTs}:f> - <t:${charPool.poolEndAtTs}:f>`;
+          const charPoolHeader =
+            tr("gacha_CharPool").replace("<name>", charPool.name) +
+            "\n" +
+            tr("gacha_Time")
+              .replace("<start>", `<t:${charPool.poolStartAtTs}:f>`)
+              .replace("<end>", `<t:${charPool.poolEndAtTs}:f>`);
 
           container.addSeparatorComponents(
             new SeparatorBuilder().setDivider(true).setSpacing(2),
@@ -73,9 +78,7 @@ const command: Command = {
         }
       } else {
         container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            "## 角色池\n目前沒有開啟的角色池。",
-          ),
+          new TextDisplayBuilder().setContent(tr("gacha_CharEmpty")),
         );
         hasData = true; // Still show the message
       }
@@ -87,7 +90,12 @@ const command: Command = {
         weaponPoolData.data.list.length > 0
       ) {
         for (const weaponPool of weaponPoolData.data.list) {
-          const weaponPoolHeader = `## 武器池：${weaponPool.name}\n-# 卡池時間: <t:${weaponPool.poolStartAtTs}:f> - <t:${weaponPool.poolEndAtTs}:f>`;
+          const weaponPoolHeader =
+            tr("gacha_WeaponPool").replace("<name>", weaponPool.name) +
+            "\n" +
+            tr("gacha_Time")
+              .replace("<start>", `<t:${weaponPool.poolStartAtTs}:f>`)
+              .replace("<end>", `<t:${weaponPool.poolEndAtTs}:f>`);
 
           container.addSeparatorComponents(
             new SeparatorBuilder().setDivider(true).setSpacing(2),
@@ -114,16 +122,14 @@ const command: Command = {
           new SeparatorBuilder().setDivider(true).setSpacing(2),
         );
         container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            "## 武器池\n目前沒有開啟的武器池。",
-          ),
+          new TextDisplayBuilder().setContent(tr("gacha_WeaponEmpty")),
         );
         hasData = true;
       }
 
       if (!hasData) {
         return interaction.editReply({
-          content: "暫時沒有可用的卡池資訊。",
+          content: tr("gacha_NoData"),
         });
       }
 
@@ -135,7 +141,7 @@ const command: Command = {
     } catch (error) {
       console.error("Error in gacha command:", error);
       await interaction.editReply({
-        content: "獲取卡池資訊時發生錯誤。",
+        content: tr("UnknownError"),
       });
     }
   },

@@ -51,9 +51,9 @@ export async function getCardDetail(
  * @returns Skport language code (e.g., 'zh_Hant')
  */
 export function formatSkLanguage(locale?: string): string {
-  const base = locale || "zh-TW";
-  if (base === "zh-TW" || base === "zh-HK") return "zh_Hant";
-  if (base === "zh-CN") return "zh_Hans";
+  const base = locale || "tw";
+  if (base === "zh-TW" || base === "zh-HK" || base === "tw") return "zh_Hant";
+  if (base === "zh-CN" || base === "cn") return "zh_Hans";
   return "en_US";
 }
 
@@ -63,8 +63,8 @@ export function formatSkLanguage(locale?: string): string {
  * @returns Formatted Accept-Language string
  */
 export function formatAcceptLanguage(locale?: string): string {
-  const base = locale || "zh-TW";
-  if (base.startsWith("zh")) {
+  const base = locale || "tw";
+  if (base.startsWith("zh") || base === "tw") {
     return "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6";
   }
   return `${base},en;q=0.9`;

@@ -59,9 +59,7 @@ const command: Command = {
         !member.permissions.has(PermissionFlagsBits.ManageGuild)
       ) {
         const container = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            "❌ 你需要 `管理伺服器` 權限才能使用此指令。",
-          ),
+          new TextDisplayBuilder().setContent(tr("news_NoPerm")),
         );
         await interaction.reply({
           content: "",
@@ -98,8 +96,11 @@ const command: Command = {
           ])
           .setPlaceholder(
             guildSubscriptions.length > 0
-              ? `目前已綁定 ${guildSubscriptions.length} 個頻道`
-              : "選擇文字頻道...",
+              ? tr("news_BindPlaceholder").replace(
+                  "<count>",
+                  guildSubscriptions.length.toString(),
+                )
+              : tr("news_BindDefault"),
           )
           .setMinValues(0)
           .setMaxValues(25);
@@ -112,13 +113,13 @@ const command: Command = {
         const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
             .setCustomId("news:bind_current")
-            .setLabel("綁定當前頻道")
+            .setLabel(tr("news_BindCurrent"))
             .setStyle(ButtonStyle.Primary)
             .setEmoji("📌"),
         );
 
         await interaction.reply({
-          content: "請選擇要接收最新新聞通知的頻道（可多選）：",
+          content: tr("news_BindTip"),
           flags: MessageFlags.Ephemeral,
           components: [buttonRow, row],
         });
@@ -132,7 +133,7 @@ const command: Command = {
 
         if (existing) {
           container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent("✅ **此私訊頻道已綁定**"),
+            new TextDisplayBuilder().setContent(tr("news_DmBound")),
           );
         } else {
           subscriptions.push({
@@ -143,9 +144,7 @@ const command: Command = {
           await db.set("news_subscriptions", subscriptions);
 
           container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              "✅ **成功綁定**\n將會在此私訊接收最新新聞。",
-            ),
+            new TextDisplayBuilder().setContent(tr("news_DmSuccess")),
           );
         }
 
@@ -176,7 +175,7 @@ const command: Command = {
       await db.set("news_subscriptions", newSubscriptions);
 
       const container = new ContainerBuilder().addTextDisplayComponents(
-        new TextDisplayBuilder().setContent("✅ **成功解除綁定**"),
+        new TextDisplayBuilder().setContent(tr("news_UnbindSuccess")),
       );
 
       container.addSeparatorComponents(
@@ -186,8 +185,15 @@ const command: Command = {
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
           removedCount > 0
-            ? `已解除 ${isGuild ? "本伺服器所有" : "此"} 綁定 (${removedCount} 個頻道)。`
-            : "目前沒有綁定任何頻道。",
+            ? tr("news_UnbindDetail")
+                .replace(
+                  "<scope>",
+                  isGuild
+                    ? tr("news_UnbindScopeAll")
+                    : tr("news_UnbindScopeSingle"),
+                )
+                .replace("<count>", removedCount.toString())
+            : tr("news_NoSub"),
         ),
       );
 

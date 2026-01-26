@@ -126,10 +126,14 @@ export class AutoDailyService {
 
       const processedRoles = new Set<string>();
 
+      const { createTranslator, toI18nLang } = require("../utils/i18n");
+      const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
+      const tr = createTranslator(userLang);
+
       for (const account of accounts) {
         const bindings = await getGamePlayerBinding(
           account.cookie,
-          undefined,
+          tr.lang,
           account.cred,
         );
         if (!bindings) {
@@ -154,7 +158,7 @@ export class AutoDailyService {
             const status = await getAttendanceList(
               gameRole,
               account.cookie,
-              undefined,
+              tr.lang,
               account.cred,
             );
             if (status) {
@@ -163,7 +167,7 @@ export class AutoDailyService {
                 const result = await executeAttendance(
                   gameRole,
                   account.cookie,
-                  undefined,
+                  tr.lang,
                   account.cred,
                 );
                 if (result && result.code === 0) {
@@ -181,7 +185,7 @@ export class AutoDailyService {
                 ? await getAttendanceList(
                     gameRole,
                     account.cookie,
-                    undefined,
+                    tr.lang,
                     account.cred,
                   )
                 : status;
@@ -189,9 +193,11 @@ export class AutoDailyService {
                 finalStatus?.calendar.filter((d) => d.done).length || 0;
               const todayReward =
                 finalStatus?.calendar.find((d) => d.available) ||
-                finalStatus?.calendar.find((d) => d.done); // Adjust based on logic
+                [...(finalStatus?.calendar || [])]
+                  .reverse()
+                  .find((d) => d.done); // Pick the latest 'done' item if none are available
 
-              let rewardName = "未知獎勵";
+              let rewardName = tr("None");
               let rewardIcon = "";
               if (todayReward) {
                 const res = finalStatus?.resourceInfoMap[todayReward.awardId];
@@ -204,35 +210,15 @@ export class AutoDailyService {
               // First Reward Logic
               let firstRewardName = "";
               let firstRewardIcon = "";
-              // "first" array logic: check if any item is done/available corresponding to this check-in
-              // Since we don't know the exact day index easily without more logic, we check for available or done in the 'first' list
-              // that matches the current context. However, 'first' usually has 3 items.
-              // We'll check if there is a 'first' reward that is available or done TODAY.
-              // Note: 'done' in 'first' might stay true forever. We only want to show it if it was JUST done or is available today.
-              // But 'finalStatus' reflects the state AFTER check-in.
-              // If we just signed in (signedNow=true), 'done' will be true for the current day.
-              // If we are just checking, 'available' might be true if not signed yet.
-
-              // Filter for the specific first reward that corresponds to the current progress.
-              // Currently, we just look for the one that is 'done' (if signedNow) or 'available'.
-              // But since previous ones are also 'done', we need to be careful.
-              // Actually, for simplicity in "Today's Status", we can check if the user is within the first 3 days.
-              // But easier: check if `finalStatus.first` has an item that matches the criteria.
 
               if (finalStatus?.first) {
-                // If we successfully signed TODAY, we look for the reward that corresponds to today's cumulative count.
-                // The 'first' array usually has 3 items.
-                // If totalDays is 1 -> first[0], 2 -> first[1], 3 -> first[2].
-                // Let's protect bounds.
                 if (totalDays >= 1 && totalDays <= 3) {
                   const fReward = finalStatus.first[totalDays - 1];
                   if (fReward && (fReward.done || fReward.available)) {
                     const res = finalStatus.resourceInfoMap[fReward.awardId];
                     if (res) {
                       firstRewardName = `${res.name} x${res.count}`;
-                      // specific icon for first reward or just keep daily one?
-                      // Requirements say "Also display it".
-                      if (!rewardIcon) firstRewardIcon = res.icon; // Fallback if daily has no icon?
+                      if (!rewardIcon) firstRewardIcon = res.icon;
                     }
                   }
                 }
@@ -244,7 +230,9 @@ export class AutoDailyService {
                 rewardIcon,
                 firstRewardName,
                 totalDays,
-                status: signedNow ? "成功簽到" : "已簽到",
+                status: signedNow
+                  ? tr("daily_Success")
+                  : tr("daily_StatusAlready"),
               });
             } else {
               failCount++;
@@ -256,13 +244,13 @@ export class AutoDailyService {
       if (config.notify && (successCount > 0 || alreadySignedCount > 0)) {
         const container = new ContainerBuilder();
         for (const res of results) {
-          let content = `# **${res.roleName}** - ${res.status}\n### 今日獎勵: \`${res.rewardName}\``;
+          let content = `# **${res.roleName}** - ${res.status}\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
 
           if (res.firstRewardName) {
-            content += `\n### 新人獎勵: \`${res.firstRewardName}\``;
+            content += `\n### ${tr("daily_FirstReward")}: \`${res.firstRewardName}\``;
           }
 
-          content += `\n### 累計簽到: \`${res.totalDays}\` 天`;
+          content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
 
           const textDisplay = new TextDisplayBuilder().setContent(content);
 

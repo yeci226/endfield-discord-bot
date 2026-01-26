@@ -123,22 +123,20 @@ const command: Command = {
       const action = interaction.options.getString("action") || "email";
 
       if (action === "email") {
-        const modal = new ModalBuilder()
-          .setCustomId("login:credentials")
-          .setTitle("Endfield 帳號登入");
+        const modal = new ModalBuilder().setTitle(tr("login_Title"));
 
         const emailInput = new TextInputBuilder()
           .setCustomId("email")
-          .setLabel("電子信箱")
+          .setLabel(tr("login_EmailPlaceholder"))
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("example@gmail.com")
+          .setPlaceholder(tr("login_EmailInput"))
           .setRequired(true);
 
         const passwordInput = new TextInputBuilder()
           .setCustomId("password")
-          .setLabel("密碼")
+          .setLabel(tr("login_PasswordPlaceholder"))
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("請輸入您的密碼")
+          .setPlaceholder(tr("login_PasswordInput"))
           .setRequired(true);
 
         modal.addComponents(
@@ -152,9 +150,7 @@ const command: Command = {
         const accounts = await getAccounts(db, userId);
         if (accounts.length >= 5) {
           const container = new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              "❌ **綁定失敗**\n管理員，您已綁定 5 個帳號，無法再新增。",
-            ),
+            new TextDisplayBuilder().setContent(tr("login_Limit")),
           );
           await interaction.reply({
             content: "",
@@ -164,15 +160,13 @@ const command: Command = {
           return;
         }
 
-        const modal = new ModalBuilder()
-          .setCustomId("login:cookie")
-          .setTitle("設定 Endfield Cookie");
+        const modal = new ModalBuilder().setTitle(tr("login_CookieSetTitle"));
 
         const cookieInput = new TextInputBuilder()
           .setCustomId("cookie-input")
-          .setLabel("輸入您的 Cookie")
+          .setLabel(tr("login_CookieSetTitle"))
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("ACCOUNT_TOKEN=...")
+          .setPlaceholder(tr("login_CookiePlaceholder"))
           .setRequired(true);
 
         modal.addComponents(
@@ -187,19 +181,22 @@ const command: Command = {
 
         if (accounts.length === 0) {
           container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent("目前沒有綁定任何帳號。"),
+            new TextDisplayBuilder().setContent(tr("login_ListEmpty")),
           );
         } else {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `**已綁定帳號 (${accounts.length}/5)**`,
+              tr("login_ListTitle").replace(
+                "<current>",
+                accounts.length.toString(),
+              ),
             ),
           );
 
           for (const acc of accounts) {
             const user = acc.info;
             const textDisplay = new TextDisplayBuilder().setContent(
-              `管理員，**${user.nickname}**`,
+              tr("login_Welcome").replace("<name>", user.nickname),
             );
 
             if (user.avatar) {
@@ -228,7 +225,8 @@ const command: Command = {
         const container = new ContainerBuilder()
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              "❓ **如何獲取 Cookie**\n" +
+              tr("login_HelpTitle") +
+                "\n" +
                 "**方法一：Application 分頁**\n" +
                 "1. 前往 [Skport](https://www.skport.com/) 並登入\n" +
                 "2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n" +
@@ -274,9 +272,7 @@ const command: Command = {
         const accountIndexStr = interaction.options.getString("account");
         if (!accountIndexStr) {
           const container = new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              "❌ **解除綁定失敗**\n請選擇一個帳號。",
-            ),
+            new TextDisplayBuilder().setContent(tr("login_UnbindFail")),
           );
           await interaction.reply({
             content: "",
@@ -290,9 +286,7 @@ const command: Command = {
         const index = parseInt(accountIndexStr);
         if (isNaN(index) || !accounts[index]) {
           const container = new ContainerBuilder().addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              "❌ **解除綁定失敗**\n無效的帳號索引。",
-            ),
+            new TextDisplayBuilder().setContent(tr("login_UnbindInvalid")),
           );
           await interaction.reply({
             content: "",
@@ -307,7 +301,9 @@ const command: Command = {
 
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `✅ **解除綁定成功**\n管理員，已成功解除綁定帳號：**${removed.info.nickname}** (${removed.info.id})。`,
+            tr("login_UnbindSuccess")
+              .replace("<name>", removed.info.nickname)
+              .replace("<id>", removed.info.id),
           ),
         );
 
@@ -378,6 +374,7 @@ const command: Command = {
                 interaction,
                 loginRes.data.token,
                 db,
+                tr,
                 true,
               );
             } else {
@@ -397,18 +394,13 @@ const command: Command = {
 
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              "🛡️ **由 Gryphline 觸發的人機驗證**\n" +
-                "請點擊下方網址並在瀏覽器中開啟：\n" +
-                `**[👉 點我進行驗證](${verifyUrl})**\n\n` +
-                "1. 開啟上述網址後，驗證碼會自動載入。\n" +
-                "2. 完成驗證後，網頁會自動傳回結果。\n" +
-                "3. **機器人偵測到驗證成功後會自動完成登入。**",
+              tr("login_CaptchaRequired").replace("<url>", verifyUrl),
             ),
           );
 
           const verifyBtn = new ButtonBuilder()
             .setCustomId(`login:verify:${email}:${password}:${sessionId}`)
-            .setLabel("手動檢查驗證狀態")
+            .setLabel(tr("login_ManualVerify"))
             .setStyle(ButtonStyle.Secondary);
 
           const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -424,7 +416,7 @@ const command: Command = {
         }
 
         if (result.status === 0 && result.data?.token) {
-          return handleLoginSuccess(interaction, result.data.token, db);
+          return handleLoginSuccess(interaction, result.data.token, db, tr);
         }
 
         const container = new ContainerBuilder().addTextDisplayComponents(
@@ -451,7 +443,7 @@ const command: Command = {
           );
 
           if (loginRes && loginRes.status === 0 && loginRes.data?.token) {
-            return handleLoginSuccess(interaction, loginRes.data.token, db);
+            return handleLoginSuccess(interaction, loginRes.data.token, db, tr);
           } else {
             const container = new ContainerBuilder().addTextDisplayComponents(
               new TextDisplayBuilder().setContent(
@@ -571,7 +563,7 @@ const command: Command = {
           const container = new ContainerBuilder();
 
           const textDisplay = new TextDisplayBuilder().setContent(
-            `✅ **驗證成功**\n歡迎管理員，**${nickName}**!\n已將此帳號加入綁定列表，並自動同步憑證。`,
+            tr("login_CookieSuccess").replace("<name>", nickName),
           );
 
           if (avatar) {
@@ -594,9 +586,8 @@ const command: Command = {
         } else {
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `❌ **驗證失敗**\nCookie 無效或已過期。${
-                result && result.msg ? `\nErrors: ${result.msg}` : ""
-              }`,
+              tr("AuthError") +
+                (result && result.msg ? `\nErrors: ${result.msg}` : ""),
             ),
           );
 
@@ -653,6 +644,12 @@ export const handleLoginButton = async (
   client: ExtendedClient,
   db: CustomDatabase,
 ) => {
+  const { createTranslator, toI18nLang } = require("../../utils/i18n");
+  const userLang =
+    (await db.get(`${interaction.user.id}.locale`)) ||
+    toI18nLang(interaction.locale);
+  const tr = createTranslator(userLang);
+
   if (interaction.customId.startsWith("login:verify:")) {
     const [, , email, password, sessionId] = interaction.customId.split(":");
 
@@ -666,11 +663,11 @@ export const handleLoginButton = async (
         serverResult,
       );
       if (loginRes && loginRes.status === 0 && loginRes.data?.token) {
-        return handleLoginSuccess(interaction, loginRes.data.token, db);
+        return handleLoginSuccess(interaction, loginRes.data.token, db, tr);
       } else {
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `❌ **驗證後登入失敗**\n${loginRes?.msg || "代碼已過期"}`,
+            `❌ ${tr("AuthError")}\n${loginRes?.msg || tr("UnknownError")}`,
           ),
         );
         await interaction.editReply({
@@ -685,7 +682,7 @@ export const handleLoginButton = async (
     // Fallback to Modal if not found automatically
     const modal = new ModalBuilder()
       .setCustomId(`login:captcha:${email}:${password}`)
-      .setTitle("填寫驗證結果 (自動偵測失敗)");
+      .setTitle(tr("login_ManualVerify"));
 
     const resultInput = new TextInputBuilder()
       .setCustomId("captcha_result")
@@ -705,6 +702,7 @@ async function handleLoginSuccess(
   interaction: any,
   token: string,
   db: CustomDatabase,
+  tr: any,
   isFollowUp: boolean = false,
 ) {
   const userId = interaction.user.id;
@@ -762,7 +760,7 @@ async function handleLoginSuccess(
 
     const container = new ContainerBuilder();
     const textDisplay = new TextDisplayBuilder().setContent(
-      `✅ **登入並綁定成功**\n歡迎回來，**${nickName}**!`,
+      tr("login_CookieSuccess").replace("<name>", nickName),
     );
 
     if (avatar) {
@@ -786,9 +784,7 @@ async function handleLoginSuccess(
     else await interaction.editReply(finalReply);
   } else {
     const container = new ContainerBuilder().addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        "❌ **獲取登入憑證失敗**\n請重新嘗試登入。",
-      ),
+      new TextDisplayBuilder().setContent(tr("AuthError")),
     );
     const failReply = {
       content: "",

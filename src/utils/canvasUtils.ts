@@ -33,7 +33,10 @@ if (!fs.existsSync(CACHE_DIR)) {
 
 const imageCache = new Map<string, Image>();
 
-export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
+export async function drawDashboard(
+  detail: CardDetail,
+  tr: any,
+): Promise<Buffer> {
   const { base, chars } = detail;
 
   // Canvas dimensions (2400x1600)
@@ -140,22 +143,54 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
 
   // Name & Stats
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 80px NotoSansTCBold";
-  ctx.fillText(base.name, padding + avatarSize + 40, padding + 90);
+  const nameMaxW = width - (padding + avatarSize + 40) - padding;
+  fillDynamicText(
+    ctx,
+    base.name,
+    padding + avatarSize + 40,
+    padding + 90,
+    nameMaxW,
+    80,
+  );
 
-  ctx.font = "36px NotoSans";
+  ctx.font = "32px NotoSans";
   ctx.fillStyle = "#aaaaaa";
   const awakeDate = moment(parseInt(base.createTime) * 1000).format(
-    "YYYY/MM/DD",
+    tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
   );
   const lastLoginTime = moment(parseInt(base.lastLoginTime) * 1000).format(
-    "YYYY/MM/DD",
+    tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
   );
-  ctx.fillText(
-    `UID ${base.roleId} | 甦醒日 ${awakeDate} | 最後登入 ${lastLoginTime} | ${base.serverName}`,
-    padding + avatarSize + 40,
-    padding + 150,
-  );
+  if (tr.lang === "en") {
+    const infoText = `UID ${base.roleId} | ${tr("canvas_AwakeDate")} ${awakeDate} | ${tr("canvas_LastLogin")} ${lastLoginTime}`;
+    const infoY = padding + 145;
+    const serverNameW = ctx.measureText(base.serverName).width;
+    const infoMaxW =
+      width - (padding + avatarSize + 40) - serverNameW - padding - 40;
+    fillDynamicText(
+      ctx,
+      infoText,
+      padding + avatarSize + 40,
+      infoY,
+      infoMaxW,
+      32,
+      false,
+    );
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#aaaaaa";
+    ctx.font = "32px NotoSans";
+    ctx.fillText(base.serverName, width - padding, infoY);
+    ctx.textAlign = "left";
+  } else {
+    ctx.font = "36px NotoSans";
+    ctx.fillStyle = "#aaaaaa";
+    ctx.fillText(
+      `UID ${base.roleId} | ${tr("canvas_AwakeDate")} ${awakeDate} | ${tr("canvas_LastLogin")} ${lastLoginTime} | ${base.serverName}`,
+      padding + avatarSize + 40,
+      padding + 150,
+    );
+  }
 
   // 3. Stats Grid - Shrunk
   const gridY = 320;
@@ -164,10 +199,10 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
   const gap = 30;
 
   const stats = [
-    { label: "探索等級", value: base.worldLevel.toString() },
-    { label: "幹員", value: base.charNum.toString() },
-    { label: "武器", value: base.weaponNum.toString() },
-    { label: "檔案", value: base.docNum.toString() },
+    { label: tr("canvas_ExploreLevel"), value: base.worldLevel.toString() },
+    { label: tr("canvas_Operators"), value: base.charNum.toString() },
+    { label: tr("canvas_Weapons"), value: base.weaponNum.toString() },
+    { label: tr("canvas_Files"), value: base.docNum.toString() },
   ];
 
   stats.forEach((stat, i) => {
@@ -205,7 +240,7 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
 
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "32px NotoSans";
-    ctx.fillText("使命記事", padding + 40, mlY + 120);
+    ctx.fillText(tr("canvas_MainMission"), padding + 40, mlY + 120);
   }
 
   // Level Box (Right, 30%)
@@ -221,14 +256,14 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
 
   ctx.fillStyle = "#aaaaaa";
   ctx.font = "32px NotoSans";
-  ctx.fillText("權限等級", levelX + levelW / 2, mlY + 130);
+  ctx.fillText(tr("canvas_AuthLevel"), levelX + levelW / 2, mlY + 130);
   ctx.textAlign = "left"; // Reset
 
   // 4. Real-time Data (即時數據) - Compact
   const realTimeY = mlY + mlH + 30; // Reduced gap from 50 to 30
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 50px NotoSansTCBold";
-  ctx.fillText("即時數據", padding + 70, realTimeY + 40);
+  ctx.fillText(tr("canvas_RealtimeData"), padding + 70, realTimeY + 40);
   ctx.fillRect(padding, realTimeY + 10, 12, 35);
   ctx.fillRect(padding + 20, realTimeY - 5, 12, 50);
   ctx.fillRect(padding + 40, realTimeY + 15, 12, 25);
@@ -273,7 +308,9 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
       diff = maxTs - now;
       const h = Math.floor(diff / 3600);
       const m = Math.floor((diff % 3600) / 60);
-      recoveryText = `${h}小時${m}分鐘`;
+      recoveryText = `${h}${tr("Hour")}${m}${tr("Minute")}`;
+    } else if (parseInt(dungeon.curStamina) >= parseInt(dungeon.maxStamina)) {
+      recoveryText = tr("canvas_FullyRecovered");
     }
 
     // Dynamic Color for Dot
@@ -318,9 +355,9 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "24px NotoSans";
     const labelY = realTimeY + 210;
-    ctx.fillText("理智", padding + 40, labelY);
+    ctx.fillText(tr("canvas_Stamina"), padding + 40, labelY);
     ctx.textAlign = "right";
-    ctx.fillText("恢復時間", padding + leftW - 30, labelY); // Align with pill right
+    ctx.fillText(tr("canvas_RecoveryTime"), padding + leftW - 30, labelY); // Align with pill right
     ctx.textAlign = "left";
   }
 
@@ -356,7 +393,11 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
     );
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "28px NotoSans";
-    ctx.fillText("活躍度", actX + halfRightW / 2, rightItemCenterY + 55);
+    ctx.fillText(
+      tr("canvas_Activity"),
+      actX + halfRightW / 2,
+      rightItemCenterY + 55,
+    );
   }
 
   if (bpSystem) {
@@ -371,14 +412,14 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
     );
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "28px NotoSans";
-    ctx.fillText("通行證等級", bpX + halfRightW / 2, rightItemCenterY + 55);
+    ctx.fillText(tr("canvas_BP"), bpX + halfRightW / 2, rightItemCenterY + 55);
   }
 
   // 5. Characters Title
   ctx.textAlign = "left";
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 50px NotoSansTCBold";
-  ctx.fillText("幹員", padding, realTimeY + sectionH + 140);
+  ctx.fillText(tr("canvas_Operators"), padding, realTimeY + sectionH + 140);
 
   // 6. Characters List (Grid)
 
@@ -407,8 +448,10 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
       loadLocalImage(`weapon/black/${strippedKey}.png`).catch(() => {});
     }
 
-    if (char.evolvePhase !== undefined) {
-      loadLocalImage(`phase/${char.evolvePhase}.webp`).catch(() => {});
+    const phase = Number(char.evolvePhase) || 0;
+    if (phase > 0) {
+      loadLocalImage(`phase/${phase}.png`).catch(() => {});
+      loadLocalImage("phase/bg.png").catch(() => {});
     }
   });
 
@@ -463,8 +506,8 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
     } catch (e) {}
 
     try {
-      if (char.evolvePhase !== undefined) {
-        phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.webp`);
+      if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
+        phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.png`);
       }
     } catch (e) {}
 
@@ -541,23 +584,35 @@ export async function drawDashboard(detail: CardDetail): Promise<Buffer> {
     );
     ctx.fillText(levelText, x + 10 + lvPrefixWidth + 2, y + charImageSize - 18);
 
-    // Phase (Bottom Right)
-    if (phaseImg) {
-      const phaseSize = 24;
-      const phaseX = x + charImageSize - 45;
-      const phaseY = y + charImageSize - 35;
+    // Phase (Bottom Right) - Refined
+    if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
+      try {
+        const phaseBg = await loadLocalImage("phase/bg.png");
+        const phaseNum = await loadLocalImage(`phase/${char.evolvePhase}.png`);
 
-      ctx.drawImage(phaseImg, phaseX, phaseY, phaseSize, phaseSize);
+        const phaseSize = 32; // Slightly larger for visibility
+        const phaseX = x + charImageSize - 45;
+        const phaseY = y + charImageSize - 40;
 
-      ctx.textAlign = "left";
-      ctx.font = "bold 24px NotoSans";
-      ctx.strokeText(
-        `${char.evolvePhase}`,
-        phaseX + phaseSize + 5,
-        phaseY + 22,
-      );
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(`${char.evolvePhase}`, phaseX + phaseSize + 5, phaseY + 22);
+        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
+
+        const numSize = phaseSize * (204 / 336);
+        const numX = phaseX + (phaseSize - numSize) / 2;
+        const numY = phaseY + (phaseSize - numSize) / 2;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(
+          numX + numSize / 2,
+          numY + numSize / 2,
+          numSize / 2,
+          0,
+          Math.PI * 2,
+        );
+        ctx.clip();
+        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
+        ctx.restore();
+      } catch (e) {}
     }
 
     // Rarity Color Bar
@@ -676,6 +731,28 @@ function parseEffectString(effectStr: string, params: any): string {
   return res;
 }
 
+function fillDynamicText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  baseFontSize: number,
+  bold: boolean = true,
+) {
+  let fontSize = baseFontSize;
+  ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
+  let textWidth = ctx.measureText(text).width;
+
+  while (textWidth > maxWidth && fontSize > 20) {
+    fontSize -= 2;
+    ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
+    textWidth = ctx.measureText(text).width;
+  }
+
+  ctx.fillText(text, x, y, maxWidth);
+}
+
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -690,20 +767,30 @@ function wrapText(
 
   for (let p = 0; p < paragraphs.length; p++) {
     const para = paragraphs[p];
-    const chars = para.split("");
+    // Smart split: split by spaces for Western text, but keep CJK chars as individual units
+    const words =
+      para.match(/[\u4e00-\u9fa5]|[\u3040-\u30ff]|[\uff00-\uffef]|\S+/g) || [];
     let line = "";
 
-    for (let n = 0; n < chars.length; n++) {
-      let testLine = line + chars[n];
+    for (let n = 0; n < words.length; n++) {
+      let testLine = line + (line === "" ? "" : " ") + words[n];
+      // If it's a CJK char, we don't want the space prefix if the previous was also CJK or empty
+      if (
+        /[\u4e00-\u9fa5]/.test(words[n]) &&
+        (line === "" || /[\u4e00-\u9fa5]/.test(line.slice(-1)))
+      ) {
+        testLine = line + words[n];
+      }
+
       let metrics = ctx.measureText(testLine);
       let testWidth = metrics.width;
       if (testWidth > maxWidth && n > 0) {
         if (maxHeight > 0 && testY + lineHeight - y > maxHeight) {
-          ctx.fillText(line.substring(0, line.length - 1) + "...", x, testY);
+          ctx.fillText(line + "...", x, testY);
           return testY;
         }
         ctx.fillText(line, x, testY);
-        line = chars[n];
+        line = words[n];
         testY += lineHeight;
       } else {
         line = testLine;
@@ -711,7 +798,7 @@ function wrapText(
     }
 
     if (maxHeight > 0 && testY + lineHeight - y > maxHeight) {
-      ctx.fillText(line.substring(0, line.length - 1) + "...", x, testY);
+      ctx.fillText(line + "...", x, testY);
       return testY;
     }
 
@@ -723,6 +810,7 @@ function wrapText(
 
 export async function drawCharacterDetail(
   char: any,
+  tr: any,
   enums: any[] = [],
   charIndex: number = 1,
 ): Promise<Buffer> {
@@ -787,7 +875,10 @@ export async function drawCharacterDetail(
     char.weapon?.weaponData?.type?.key
       ? `weapon/black/${char.weapon.weaponData.type.key.replace("weapon_type_", "").toLowerCase()}.png`
       : null,
-    char.evolvePhase !== undefined ? `phase/${char.evolvePhase}.webp` : null,
+    (Number(char.evolvePhase) || 0) > 0
+      ? `phase/${char.evolvePhase}.png`
+      : null,
+    (Number(char.evolvePhase) || 0) > 0 ? "phase/bg.png" : null,
     char.potentialLevel > 0 ? `rank/${char.potentialLevel}.png` : null,
     char.weapon?.breakthroughLevel > 0
       ? `rank/${char.weapon.breakthroughLevel}.png`
@@ -859,25 +950,148 @@ export async function drawCharacterDetail(
   // 3. Left Panel Info Redesign (v7)
   const infoY = height - 420;
 
-  // Row 1: Name + Stars
-  ctx.fillStyle = "#000000";
-  ctx.font = "bold 80px NotoSansTCBold";
-  ctx.fillText(`${char.charData.name}`, padding, infoY + 60);
+  if (tr.lang === "en") {
+    // 1. Level display first to calculate available space for name
+    const numText = `${char.level}`;
+    const labelText = "LEVEL";
 
-  const charRarity = parseInt(char.charData.rarity?.value) || 0;
-  const charStarS = 40;
-  for (let i = 0; i < charRarity; i++) {
-    ctx.drawImage(
-      starImg,
-      padding + i * (charStarS + 8),
-      infoY + 80,
-      charStarS,
-      charStarS,
+    ctx.font = "bold 90px NotoSansTCBold";
+    const numW = ctx.measureText(numText).width;
+    ctx.font = "bold 44px NotoSansTCBold";
+    const labelW = ctx.measureText(labelText).width;
+
+    const totalW = numW + labelW + 10;
+    const startX = leftW - totalW - 20;
+
+    ctx.fillStyle = "#111";
+    ctx.font = "bold 90px NotoSansTCBold";
+    ctx.fillText(numText, startX, infoY + 70);
+    ctx.font = "44px NotoSans";
+    ctx.fillText(labelText, startX + numW + 10, infoY + 70);
+
+    // --- English Phase Indicator ---
+    const phase = Number(char.evolvePhase) || 0;
+    if (phase > 0) {
+      try {
+        const phaseBg = await loadLocalImage("phase/bg.png");
+        const phaseNum = await loadLocalImage(`phase/${phase}.png`);
+        const phaseSize = 120;
+        const phaseX = startX + numW / 2 - phaseSize / 2;
+        const phaseY = infoY + 65;
+        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
+        const numSize = phaseSize * (204 / 336);
+        const numX = phaseX + (phaseSize - numSize) / 2;
+        const numY = phaseY + (phaseSize - numSize) / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(
+          numX + numSize / 2,
+          numY + numSize / 2,
+          numSize / 2,
+          0,
+          Math.PI * 2,
+        );
+        ctx.clip();
+        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
+        ctx.restore();
+      } catch (e) {}
+    }
+
+    // 2. Name + Stars (Width limited by Level text)
+    ctx.fillStyle = "#000000";
+    const nameMaxWidth = startX - padding - 20;
+    fillDynamicText(
+      ctx,
+      char.charData.name,
+      padding,
+      infoY + 60,
+      nameMaxWidth,
+      80,
     );
+
+    const charRarity = parseInt(char.charData.rarity?.value) || 0;
+    const charStarS = 40;
+    for (let i = 0; i < charRarity; i++) {
+      ctx.drawImage(
+        starImg,
+        padding + i * (charStarS + 8),
+        infoY + 80,
+        charStarS,
+        charStarS,
+      );
+    }
+  } else {
+    // Original Chinese Layout: Name First
+    ctx.fillStyle = "#000000";
+    ctx.font = "bold 80px NotoSansTCBold";
+    ctx.fillText(`${char.charData.name}`, padding, infoY + 60);
+
+    const charRarity = parseInt(char.charData.rarity?.value) || 0;
+    const charStarS = 40;
+    for (let i = 0; i < charRarity; i++) {
+      ctx.drawImage(
+        starImg,
+        padding + i * (charStarS + 8),
+        infoY + 80,
+        charStarS,
+        charStarS,
+      );
+    }
+
+    // Level Display (Original behavior)
+    const numText = `${char.level}`;
+    const labelText = "LEVEL";
+    ctx.font = "bold 90px NotoSansTCBold";
+    const numW = ctx.measureText(numText).width;
+    ctx.font = "bold 44px NotoSansTCBold";
+    const labelW = ctx.measureText(labelText).width;
+    const totalW = numW + labelW + 10;
+    const startX = leftW - totalW - 20;
+
+    ctx.fillStyle = "#111";
+    ctx.font = "bold 90px NotoSansTCBold";
+    ctx.fillText(numText, startX, infoY + 70);
+    ctx.font = "44px NotoSans";
+    ctx.fillText(labelText, startX + numW + 10, infoY + 70);
+
+    // 菁英化顯示 (Phase Indicator) - 1.png + bg.png (Refined v2)
+    const phase = Number(char.evolvePhase) || 0;
+    if (phase > 0) {
+      try {
+        const phaseBg = await loadLocalImage("phase/bg.png");
+        const phaseNum = await loadLocalImage(`phase/${phase}.png`);
+
+        const phaseSize = 120; // Increased size as requested
+        // Align center with the level number center
+        const phaseX = startX + numW / 2 - phaseSize / 2;
+        const phaseY = infoY + 65; // Slightly adjusted for better alignment with larger size
+
+        // Draw background
+        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
+
+        // Draw number with circle clip (Proportional to 204/336)
+        const numSize = phaseSize * (204 / 336);
+        const numX = phaseX + (phaseSize - numSize) / 2;
+        const numY = phaseY + (phaseSize - numSize) / 2;
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(
+          numX + numSize / 2,
+          numY + numSize / 2,
+          numSize / 2,
+          0,
+          Math.PI * 2,
+        );
+        ctx.clip();
+        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
+        ctx.restore();
+      } catch (e) {}
+    }
   }
 
   // Row 2: Icons
-  const row2Y = infoY + 160;
+  const row2Y = infoY + 160; // Reverted to original position
   const iconS = 80;
   const iconG = 25;
   let row2X = padding;
@@ -906,24 +1120,6 @@ export async function drawCharacterDetail(
     } catch (e) {}
   }
 
-  // Level display in the corner of image area
-  const numText = `${char.level}`;
-  const labelText = "LEVEL";
-
-  ctx.font = "bold 90px NotoSansTCBold";
-  const numW = ctx.measureText(numText).width;
-  ctx.font = "bold 44px NotoSansTCBold";
-  const labelW = ctx.measureText(labelText).width;
-
-  const totalW = numW + labelW + 10;
-  const startX = leftW - totalW - 20;
-
-  ctx.fillStyle = "#111";
-  ctx.font = "bold 90px NotoSansTCBold";
-  ctx.fillText(numText, startX, infoY + 70);
-  ctx.font = "44px NotoSans";
-  ctx.fillText(labelText, startX + numW + 10, infoY + 70);
-
   // Row 3: Tags
   const row3Y = row2Y + iconS + 20;
   const tags = char.charData.tags || [];
@@ -939,17 +1135,23 @@ export async function drawCharacterDetail(
   });
 
   if (char.ownTs) {
-    const ownDate = moment(parseInt(char.ownTs) * 1000).format("YYYY/MM/DD");
+    const ownDate = moment(parseInt(char.ownTs) * 1000).format(
+      tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
+    );
     ctx.fillStyle = "#888";
     ctx.font = "24px NotoSans";
-    ctx.fillText(`結識時間 ${ownDate}`, padding - 40, height - 20);
+    ctx.fillText(
+      `${tr("canvas_JoinedDate")} ${ownDate}`,
+      padding - 40,
+      height - 20,
+    );
   }
 
   // --- RIGHT SECTION ---
   const skillsY = 80;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
-  ctx.fillText("I 技能", rightX, skillsY);
+  ctx.fillText(`I ${tr("canvas_Skills")}`, rightX, skillsY);
 
   const skY = skillsY + 20,
     skSize = 130;
@@ -980,7 +1182,7 @@ export async function drawCharacterDetail(
     }
     // Dynamic Skill Rank & Level (Now on top)
     const userSk = char.userSkills?.[s?.id || ""] || { level: 1, maxLevel: 1 };
-    const rankLabel = "RANK";
+    const rankLabel = tr("canvas_Rank");
     const levelNum = `${userSk.level}`;
     const maxLevel = `/${userSk.maxLevel}`;
 
@@ -1012,17 +1214,26 @@ export async function drawCharacterDetail(
     ctx.fillText(maxLevel, infoX + rankW + levelW + 15, infoY + 2);
 
     // Skill Name (Now at bottom)
-    ctx.fillStyle = "#222";
-    ctx.font = "bold 28px NotoSansTCBold";
-    ctx.textAlign = "center";
-    const skName = (s?.name || "未知")
+    const skName = (s?.name || tr("None"))
       .replace(/，/g, ", ")
       .replace(/。/g, ". ")
       .replace(/：/g, ": ")
       .replace(/；/g, "; ")
       .replace(/？/g, "?")
       .replace(/！/g, "!");
-    ctx.fillText(skName, sx + skSize / 2, skY + skSize + 80);
+
+    ctx.fillStyle = "#222";
+    ctx.textAlign = "center";
+    ctx.font = "bold 24px NotoSansTCBold";
+    wrapText(
+      ctx,
+      skName,
+      sx + skSize / 2,
+      skY + skSize + 85,
+      skSize + 110,
+      30,
+      80, // Max height for skill name area
+    );
   }
   ctx.textAlign = "left";
 
@@ -1052,10 +1263,190 @@ export async function drawCharacterDetail(
     ctx.stroke();
   };
 
-  const weaponTitleY = 380;
+  /**
+   * Universal helper for rendering Equipment and Tactical items
+   */
+  async function drawEquipCard(
+    e: any,
+    ex: number,
+    ey: number,
+    cardW: number,
+    cardH: number,
+    hideSkill = false,
+  ) {
+    ctx.fillStyle = "#fcfcfc";
+    ctx.shadowColor = "rgba(0,0,0,0.05)";
+    ctx.shadowBlur = 8;
+    roundRect(ctx, ex, ey, cardW, cardH, 15, true);
+    ctx.shadowBlur = 0;
+
+    if (!e.item) {
+      drawPlaceholder(ex, ey, cardW, cardH);
+      return;
+    }
+
+    const data = e.isTac ? e.item.tacticalItemData : e.item.equipData;
+    const rKey = data?.rarity?.key || "";
+    const rarityColor = getRarityColor(rKey);
+    const isTac = !!e.isTac;
+
+    // Rarity indicator
+    ctx.fillStyle = rarityColor;
+    ctx.fillRect(ex, ey, 12, cardH);
+
+    // 1. Level / Title Section
+    ctx.fillStyle = "#111";
+    if (isTac) {
+      ctx.font = "bold 32px NotoSansTCBold";
+      ctx.fillText(data?.name || "??", ex + 35, ey + 50);
+    } else {
+      ctx.font = "bold 44px NotoSansTCBold";
+      const lvVal = data?.level?.value || "??";
+      ctx.fillText(`${lvVal}`, ex + 35, ey + 60);
+      const lvW = ctx.measureText(lvVal).width;
+      ctx.font = "18px NotoSans";
+      ctx.fillText("LEVEL", ex + 35 + lvW + 10, ey + 60);
+    }
+
+    // 2. Stars
+    const rarityNum = parseInt(rKey.split("_").pop() || "0");
+    const starSize = isTac ? 22 : 28;
+    const starY = ey + (isTac ? 65 : 75);
+    for (let j = 0; j < rarityNum; j++) {
+      ctx.drawImage(
+        starImg,
+        ex + 35 + j * (starSize + 4),
+        starY,
+        starSize,
+        starSize,
+      );
+    }
+
+    // 3. Skill / Effect Description
+    const skillY = ey + (isTac ? 120 : 130);
+    const nameY = ey + cardH - 25;
+    const effectStr = isTac
+      ? parseEffectString(data?.activeEffect, data?.activeEffectParams)
+      : data?.suit?.skillDesc
+        ? parseEffectString(data.suit.skillDesc, data.suit.skillDescParams)
+        : "";
+
+    if (effectStr && !hideSkill) {
+      const skillFontSize = tr.lang === "en" ? 18 : 20;
+      const skillLineH = tr.lang === "en" ? 22 : 28;
+      const skillMaxW = tr.lang === "en" ? cardW - 180 : cardW - 140;
+      // Tactical items can use more depth since they have no tags at bottom
+      const maxH = isTac ? cardH - skillY - 15 : nameY - 50 - skillY;
+
+      ctx.fillStyle = "#666";
+      ctx.font = `${skillFontSize}px NotoSansTCBold`;
+      wrapText(ctx, effectStr, ex + 30, skillY, skillMaxW, skillLineH, maxH);
+    }
+
+    if (isTac) {
+      // Tactical items don't have tags/suits at the bottom in current design
+    } else {
+      // 4. Multi-item Perfection Row: Name + Suit + Tags
+      const props = data?.properties || [];
+      const suitName = data?.suit?.name;
+      const tagFontSize = tr.lang === "en" ? 14 : 22; // Shrunk EN tags slightly more
+      const rowCenterY = nameY - 12;
+      const nudge = tr.lang === "en" ? 0 : 2;
+
+      // 4a. Calculate Tags total width (Priority 1)
+      ctx.font = `bold ${tagFontSize}px NotoSansTCBold`;
+      const textPadding = tr.lang === "en" ? 6 : 16;
+      const tagGap = 6;
+
+      const tagWidths: number[] = [];
+      let totalTagsW = 0;
+      const displayedProps = [...props].slice(0, 3);
+
+      displayedProps.forEach((pKey: string) => {
+        const enumItem = enums.find((v: any) => v.key === pKey);
+        const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
+        const tW = ctx.measureText(labelText).width + textPadding;
+        tagWidths.push(tW);
+        totalTagsW += tW + tagGap;
+      });
+
+      // 4b. Calculate available space for Name + Suit
+      const suitPillW = suitName
+        ? ctx.measureText(suitName).width + (tr.lang === "en" ? 10 : 20)
+        : 0;
+      const spaceForNameAndSuit = cardW - totalTagsW - 35 - 30 - 15;
+      const nameMaxWidth =
+        spaceForNameAndSuit - (suitPillW > 0 ? suitPillW + 8 : 0);
+
+      const nameStr = data?.name || tr("None");
+      const baseNameSize = tr.lang === "en" ? 30 : 32;
+
+      // 4c. Render Tags (Right to Left)
+      let currentRightX = ex + cardW - 30;
+      ctx.textBaseline = "middle";
+      [...displayedProps].reverse().forEach((pKey, i) => {
+        const enumItem = enums.find((v: any) => v.key === pKey);
+        const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
+        const bgW = tagWidths[displayedProps.length - 1 - i];
+        const labelX = currentRightX - bgW;
+
+        ctx.fillStyle = "rgba(0,0,0,0.05)";
+        roundRect(ctx, labelX, rowCenterY - 20 + nudge, bgW, 40, 6, true);
+        ctx.fillStyle = "#555";
+        ctx.textAlign = "center";
+        ctx.fillText(labelText, labelX + bgW / 2, rowCenterY + nudge);
+        ctx.textAlign = "left";
+        currentRightX -= bgW + tagGap;
+      });
+
+      // 4d. Render Name & Suit (scaled to fit)
+      ctx.fillStyle = "#111";
+      fillDynamicText(
+        ctx,
+        nameStr,
+        ex + 35,
+        rowCenterY + nudge,
+        nameMaxWidth,
+        baseNameSize,
+      );
+
+      ctx.font = `bold ${baseNameSize}px NotoSansTCBold`;
+      const actualNameW = ctx.measureText(nameStr).width;
+      const actualDisplayedNameW = Math.min(actualNameW, nameMaxWidth);
+
+      if (suitName) {
+        const suitX = ex + 35 + actualDisplayedNameW + 8;
+        ctx.font = `bold ${tagFontSize}px NotoSansTCBold`;
+        ctx.fillStyle = rarityColor;
+        roundRect(ctx, suitX, rowCenterY - 20 + nudge, suitPillW, 40, 6, true);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.fillText(suitName, suitX + suitPillW / 2, rowCenterY + nudge);
+        ctx.textAlign = "left";
+      }
+      ctx.textBaseline = "alphabetic";
+    }
+
+    // 5. Icon
+    if (data?.iconUrl) {
+      try {
+        const eImg = await fetchImage(data.iconUrl);
+        const iconSize = isTac ? 140 : 150;
+        ctx.drawImage(
+          eImg,
+          ex + cardW - (iconSize + 10),
+          ey + 10,
+          iconSize,
+          iconSize,
+        );
+      } catch (err) {}
+    }
+  }
+
+  const weaponTitleY = 400;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
-  ctx.fillText("I 武器", rightX, weaponTitleY);
+  ctx.fillText(`I ${tr("canvas_Weapons")}`, rightX, weaponTitleY);
 
   const eGap = 20;
   const wCardW = (rightW - eGap) * 0.66;
@@ -1091,7 +1482,7 @@ export async function drawCharacterDetail(
 
     ctx.fillStyle = "#111";
     ctx.font = "bold 32px NotoSansTCBold";
-    ctx.fillText(wd.name || "Unknown", rightX + 45, wCardY + 160);
+    ctx.fillText(wd.name || tr("None"), rightX + 45, wCardY + 160);
 
     if (wd.iconUrl) {
       try {
@@ -1136,7 +1527,7 @@ export async function drawCharacterDetail(
   const gridTitleY = wCardY + wCardH + 50;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
-  ctx.fillText("I 裝配配置", rightX, gridTitleY);
+  ctx.fillText(`I ${tr("canvas_Equipment")}`, rightX, gridTitleY);
 
   const egX = rightX;
   const egY = gridTitleY + 30;
@@ -1147,13 +1538,21 @@ export async function drawCharacterDetail(
   const itemH_R = (totalGridH - 2 * eGap) / 3;
 
   const leftItems = [
-    { item: char.bodyEquip, type: "護甲" },
-    { item: char.armEquip, type: "護手" },
+    { item: char.bodyEquip, type: tr("canvas_Armor") },
+    { item: char.armEquip, type: tr("canvas_Bracer") },
   ];
   const rightItems = [
-    { item: char.firstAccessory, type: "配件" },
-    { item: char.secondAccessory, type: "配件" },
-    { item: char.tacticalItem, type: "戰術物品", isTac: true },
+    {
+      item: char.firstAccessory,
+      type: tr("canvas_Accessory"),
+      hideSkill: true,
+    },
+    {
+      item: char.secondAccessory,
+      type: tr("canvas_Accessory"),
+      hideSkill: true,
+    },
+    { item: char.tacticalItem, type: tr("canvas_TacticalItem"), isTac: true },
   ];
 
   // Draw Left Column
@@ -1161,113 +1560,7 @@ export async function drawCharacterDetail(
     const e = leftItems[i];
     const ex = egX;
     const ey = egY + i * (itemH_L + eGap);
-
-    ctx.fillStyle = "#fcfcfc";
-    ctx.shadowColor = "rgba(0,0,0,0.05)";
-    ctx.shadowBlur = 8;
-    roundRect(ctx, ex, ey, colW1, itemH_L, 15, true);
-    ctx.shadowBlur = 0;
-
-    if (e.item) {
-      const ed = e.item.equipData;
-      const rKey = ed.rarity?.key || "";
-      ctx.fillStyle = getRarityColor(rKey);
-      ctx.fillRect(ex, ey, 12, itemH_L);
-
-      ctx.fillStyle = "#111";
-      ctx.font = "bold 44px NotoSansTCBold";
-      const lvVal = ed.level?.value || "??";
-      ctx.fillText(`${lvVal}`, ex + 35, ey + 60);
-      const lvW = ctx.measureText(lvVal).width;
-      ctx.font = "18px NotoSans";
-      ctx.fillText("LEVEL", ex + 35 + lvW + 10, ey + 60);
-
-      // Stars
-      const eRarity = parseInt(rKey.split("_").pop() || "0");
-      for (let j = 0; j < eRarity; j++) {
-        ctx.drawImage(starImg, ex + 35 + j * 32, ey + 75, 28, 28);
-      }
-
-      // Suit Skill Description
-      let skillY = ey + 130;
-      const nameY = ey + itemH_L - 25;
-      if (ed.suit && ed.suit.skillDesc) {
-        const skillStr = parseEffectString(
-          ed.suit.skillDesc,
-          ed.suit.skillDescParams,
-        );
-        ctx.fillStyle = "#666";
-        ctx.font = "20px NotoSansTCBold";
-        wrapText(
-          ctx,
-          skillStr,
-          ex + 30,
-          skillY,
-          colW1 - 60,
-          28,
-          nameY - 45 - skillY,
-        );
-      }
-
-      // Properties and Suit Name at the bottom right, aligned with name
-      const props = ed.properties || [];
-      const suitName = ed.suit?.name;
-      let currentRightX = ex + colW1 - 30;
-
-      // Render segments in reverse to align right
-      [...props]
-        .slice(0, 3)
-        .reverse()
-        .forEach((pKey: string) => {
-          const enumItem = enums.find((v: any) => v.key === pKey);
-          const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
-          if (!labelText) return;
-
-          ctx.font = "bold 22px NotoSansTCBold";
-          const textW = ctx.measureText(labelText).width;
-          const bgW = textW + 24;
-          const labelX = currentRightX - bgW;
-
-          ctx.fillStyle = "rgba(0,0,0,0.05)";
-          roundRect(ctx, labelX, nameY - 32, bgW, 40, 6, true);
-          ctx.fillStyle = "#555";
-          ctx.textAlign = "center";
-          ctx.fillText(labelText, labelX + bgW / 2, nameY - 4);
-          ctx.textAlign = "left";
-          currentRightX -= bgW + 12;
-        });
-
-      // Suit Name Pill
-      if (suitName) {
-        ctx.font = "bold 22px NotoSansTCBold";
-        const tw = ctx.measureText(suitName).width;
-        const bgW = tw + 24;
-        const labelX = currentRightX - bgW;
-
-        ctx.fillStyle = getRarityColor(rKey);
-        roundRect(ctx, labelX, nameY - 32, bgW, 40, 6, true);
-        ctx.fillStyle = "#fff";
-        ctx.textAlign = "center";
-        ctx.fillText(suitName, labelX + bgW / 2, nameY - 4);
-        ctx.textAlign = "left";
-        currentRightX -= bgW + 12;
-      }
-
-      // Name at the very bottom, with dynamic max width to avoid overlap
-      ctx.fillStyle = "#111";
-      ctx.font = "bold 32px NotoSansTCBold";
-      const availableNameW = currentRightX - (ex + 35) - 15; // 15px gap
-      ctx.fillText(ed.name || "未知", ex + 35, nameY, availableNameW);
-
-      if (ed.iconUrl) {
-        try {
-          const eImg = await fetchImage(ed.iconUrl);
-          ctx.drawImage(eImg, ex + colW1 - 160, ey + 10, 150, 150);
-        } catch (e) {}
-      }
-    } else {
-      drawPlaceholder(ex, ey, colW1, itemH_L);
-    }
+    await drawEquipCard(e, ex, ey, colW1, itemH_L);
   }
 
   // Draw Right Column
@@ -1275,143 +1568,7 @@ export async function drawCharacterDetail(
     const e = rightItems[i];
     const ex = egX + colW1 + eGap;
     const ey = egY + i * (itemH_R + eGap);
-
-    ctx.fillStyle = "#fcfcfc";
-    ctx.shadowColor = "rgba(0,0,0,0.05)";
-    ctx.shadowBlur = 8;
-    roundRect(ctx, ex, ey, colW2, itemH_R, 15, true);
-    ctx.shadowBlur = 0;
-
-    if (e.item) {
-      const data = e.isTac ? e.item.tacticalItemData : e.item.equipData;
-      const rKey = data?.rarity?.key || "";
-      ctx.fillStyle = getRarityColor(rKey);
-      ctx.fillRect(ex, ey, 12, itemH_R);
-
-      if (e.isTac) {
-        ctx.fillStyle = "#111";
-        ctx.font = "bold 32px NotoSansTCBold";
-        ctx.fillText(data?.name || "未知", ex + 35, ey + 50);
-
-        const tRarity = parseInt(rKey.split("_").pop() || "0");
-        for (let j = 0; j < tRarity; j++) {
-          ctx.drawImage(starImg, ex + 35 + j * 24, ey + 65, 22, 22);
-        }
-
-        // Tactical Item Effect
-        const effectStr = parseEffectString(
-          data?.activeEffect,
-          data?.activeEffectParams,
-        );
-        if (effectStr) {
-          ctx.fillStyle = "#666";
-          ctx.font = "22px NotoSansTCBold";
-          wrapText(
-            ctx,
-            effectStr,
-            ex + 35,
-            ey + 120,
-            colW2 - 50,
-            30,
-            itemH_R - 110,
-          );
-        }
-      } else {
-        ctx.fillStyle = "#111";
-        ctx.font = "bold 36px NotoSansTCBold";
-        const lvVal = data?.level?.value || "??";
-        ctx.fillText(`${lvVal}`, ex + 35, ey + 45);
-        const lvW = ctx.measureText(lvVal).width;
-        ctx.font = "16px NotoSans";
-        ctx.fillText("LEVEL", ex + 35 + lvW + 10, ey + 45);
-
-        // Stars
-        const aRarity = parseInt(rKey.split("_").pop() || "0");
-        for (let j = 0; j < aRarity; j++) {
-          ctx.drawImage(starImg, ex + 35 + j * 26, ey + 55, 24, 24);
-        }
-
-        // Suit Skill Description
-        let finalY = ey + 105;
-        const nameY = ey + itemH_R - 25;
-        if (data?.suit && data?.suit.skillDesc) {
-          const skillStr = parseEffectString(
-            data.suit.skillDesc,
-            data.suit.skillDescParams,
-          );
-          ctx.fillStyle = "#666";
-          ctx.font = "20px NotoSansTCBold";
-          wrapText(
-            ctx,
-            skillStr,
-            ex + 30,
-            finalY,
-            colW2 - 45,
-            22,
-            nameY - 10 - finalY,
-          );
-        }
-
-        // Properties and Suit Name at the bottom right, aligned with name
-        const props = data?.properties || [];
-        const suitName = data?.suit?.name;
-        let currentRightX = ex + colW2 - 30;
-
-        [...props]
-          .slice(0, 3)
-          .reverse()
-          .forEach((pKey: string) => {
-            const enumItem = enums.find((v: any) => v.key === pKey);
-            const labelText =
-              enumItem?.value || pKey.replace("equip_attr_", "");
-            if (!labelText) return;
-
-            ctx.font = "bold 20px NotoSansTCBold";
-            const textW = ctx.measureText(labelText).width;
-            const bgW = textW + 18;
-            const labelX = currentRightX - bgW;
-
-            ctx.fillStyle = "rgba(0,0,0,0.05)";
-            roundRect(ctx, labelX, nameY - 28, bgW, 35, 5, true);
-            ctx.fillStyle = "#555";
-            ctx.textAlign = "center";
-            ctx.fillText(labelText, labelX + bgW / 2, nameY - 4);
-            ctx.textAlign = "left";
-            currentRightX -= bgW + 10;
-          });
-
-        // Suit Name Pill
-        if (suitName) {
-          ctx.font = "bold 20px NotoSansTCBold";
-          const tw = ctx.measureText(suitName).width;
-          const bgW = tw + 24; // use consistent bgW
-          const labelX = currentRightX - bgW;
-
-          ctx.fillStyle = getRarityColor(rKey);
-          roundRect(ctx, labelX, nameY - 28, bgW, 35, 5, true);
-          ctx.fillStyle = "#fff";
-          ctx.textAlign = "center";
-          ctx.fillText(suitName, labelX + bgW / 2, nameY - 4);
-          ctx.textAlign = "left";
-          currentRightX -= bgW + 10;
-        }
-
-        // Name at the bottom, with dynamic max width to avoid overlap
-        ctx.fillStyle = "#111";
-        ctx.font = "bold 28px NotoSansTCBold";
-        const availableNameW = currentRightX - (ex + 35) - 15; // 15px gap
-        ctx.fillText(data?.name || "未知", ex + 35, nameY, availableNameW);
-      }
-
-      if (data?.iconUrl) {
-        try {
-          const eImg = await fetchImage(data.iconUrl);
-          ctx.drawImage(eImg, ex + colW2 - 150, ey + 10, 140, 140);
-        } catch (e) {}
-      }
-    } else {
-      drawPlaceholder(ex, ey, colW2, itemH_R);
-    }
+    await drawEquipCard(e, ex, ey, colW2, itemH_R, e.hideSkill);
   }
 
   return canvas.toBuffer("image/png");

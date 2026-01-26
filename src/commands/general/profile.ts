@@ -69,8 +69,10 @@ const command: Command = {
       const container = new ContainerBuilder();
       const textDisplay = new TextDisplayBuilder().setContent(
         targetUser?.id === interaction.user.id
-          ? "❌ **未找到綁定帳號**\n請先使用 `/set-cookie` 綁定您的終末地帳號。"
-          : `❌ **未找到該使用者的綁定帳號**\n使用者 <@${targetUser?.id}> 尚未綁定帳號。`,
+          ? tr("NoSetAccount")
+          : tr("AccountNotFoundUser", {
+              targetUser: `<@${targetUser?.id}>`,
+            }),
       );
       container.addTextDisplayComponents(textDisplay);
 
@@ -102,25 +104,25 @@ const command: Command = {
 
       const bindings = await getGamePlayerBinding(
         account.cookie,
-        interaction.locale,
+        tr.lang,
         account.cred,
       );
 
       if (!bindings) {
-        await interaction.editReply("❌ **無法獲取遊戲綁定資訊**");
+        await interaction.editReply(tr("FetchDataFailed"));
         return;
       }
 
       const endfieldApp = bindings.find((b) => b.appCode === "endfield");
       if (!endfieldApp || endfieldApp.bindingList.length === 0) {
-        await interaction.editReply("⚠️ **未找到任何終末地角色**");
+        await interaction.editReply(tr("BindingNotFound"));
         return;
       }
 
       const binding = endfieldApp.bindingList[0];
       const role = binding.roles[0];
       if (!role) {
-        await interaction.editReply("⚠️ **未找到任何角色角色**");
+        await interaction.editReply(tr("daily_RoleNotFound"));
         return;
       }
 
@@ -129,19 +131,19 @@ const command: Command = {
         role.roleId,
         role.serverId,
         account.info?.id || binding.uid,
-        interaction.locale,
+        tr.lang,
         account.cred,
       );
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-        await interaction.editReply("⚠️ **無法取得角色詳情**");
+        await interaction.editReply(tr("Error"));
         return;
       }
 
       const detail = cardRes.data.detail;
 
       // Generate Dashboard Canvas
-      const buffer = await drawDashboard(detail);
+      const buffer = await drawDashboard(detail, tr);
       const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
 
       // Create Select Menu for characters
@@ -150,7 +152,7 @@ const command: Command = {
 
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(customId)
-        .setPlaceholder("選擇想要展示詳細的幹員")
+        .setPlaceholder(tr("profile_SelectCharacter"))
         .addOptions(
           detail.chars.slice(0, 25).map((char) => ({
             label: char.charData.name,
@@ -187,17 +189,17 @@ const command: Command = {
           roleId,
           serverId,
           uid,
-          interaction.locale,
+          tr.lang,
           account.cred,
         );
 
         if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-          await interaction.editReply("⚠️ **無法取得角色詳情 (可能已過期)**");
+          await interaction.editReply(tr("UnknownError"));
           return;
         }
 
         const detail = cardRes.data.detail;
-        const buffer = await drawDashboard(detail);
+        const buffer = await drawDashboard(detail, tr);
         const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
 
         let selectMenu = StringSelectMenuBuilder.from(
@@ -205,13 +207,9 @@ const command: Command = {
         );
 
         // Returning to Home: Remove the Home option if it exists
-        // We can just rebuild the options cleanly from detail.chars
-        // But since we just want to remove the first option if it is "home":
         const options = selectMenu.options.filter(
           (o) => o.data.value !== "home",
         );
-        // If we sliced before, we might want to add back the 25th char if we can find it?
-        // Actually, easiest is to just rebuild options from detail data since we have it.
         selectMenu.setOptions(
           detail.chars.slice(0, 25).map((char) => ({
             label: char.charData.name,
@@ -241,12 +239,12 @@ const command: Command = {
         roleId,
         serverId,
         uid,
-        interaction.locale,
+        tr.lang,
         account.cred,
       );
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-        await interaction.editReply("⚠️ **無法取得角色詳情 (可能已過期)**");
+        await interaction.editReply(tr("UnknownError"));
         return;
       }
 
@@ -255,14 +253,14 @@ const command: Command = {
       const selectedChar = detail.chars[charIndex - 1];
 
       if (!selectedChar) {
-        await interaction.editReply("⚠️ 未找到該幹員資訊");
+        await interaction.editReply(tr("daily_RoleNotFound"));
         return;
       }
 
       const enumsData = await EnumService.getEnumsCached(
         db,
         account.cred,
-        interaction.locale,
+        tr.lang,
       );
       const equipEnums = [
         ...(enumsData?.equipProperties || []),
@@ -272,6 +270,7 @@ const command: Command = {
       try {
         const buffer = await drawCharacterDetail(
           selectedChar,
+          tr,
           equipEnums,
           charIndex,
         );
@@ -280,7 +279,6 @@ const command: Command = {
         });
 
         // We need to add "Home" option if it's not present
-        // Since we are in character view now.
         let selectMenu = StringSelectMenuBuilder.from(
           (interaction.message.components[0] as any).components[0] as any,
         );
@@ -289,8 +287,7 @@ const command: Command = {
         if (!hasHome) {
           selectMenu.setOptions([
             {
-              label: "🏠 主頁",
-              description: "回到主要卡片",
+              label: "🏠 " + tr("MainPage"),
               value: "home",
             },
             ...detail.chars.slice(0, 24).map((char) => ({
@@ -314,7 +311,7 @@ const command: Command = {
         });
       } catch (e) {
         console.error("Error generating character detail:", e);
-        await interaction.editReply("⚠️ 生成圖片失敗");
+        await interaction.editReply(tr("Error"));
       }
     }
   },

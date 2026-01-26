@@ -40,10 +40,10 @@ const command: Command = {
     // --- Search Mode ---
     if (query) {
       try {
-        const catalogData = await getWikiCatalog(interaction.locale);
+        const catalogData = await getWikiCatalog(tr.lang);
 
         if (!catalogData || catalogData.code !== 0 || !catalogData.data) {
-          return interaction.editReply({ content: "無法獲取 Wiki 目錄。" });
+          return interaction.editReply({ content: tr("FetchDataFailed") });
         }
 
         const mainCats = catalogData.data.catalog || [];
@@ -69,13 +69,13 @@ const command: Command = {
 
         if (matches.length === 0) {
           return interaction.editReply({
-            content: `找不到名為 "${query}" 的分類。請嘗試使用選單瀏覽。`,
+            content: tr("wiki_NotFound").replace("<query>", query),
           });
         }
 
         const container = new ContainerBuilder();
         container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`# 搜尋結果 (分類)`),
+          new TextDisplayBuilder().setContent(tr("wiki_SearchTitle")),
         );
         const list = matches
           .map((m) => `- ${m.parent ? `${m.parent} > ` : ""}${m.name}`)
@@ -84,9 +84,7 @@ const command: Command = {
           new TextDisplayBuilder().setContent(list),
         );
         container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `\n目前僅支援搜尋分類名稱。如需搜尋物品，請使用選單功能。`,
-          ),
+          new TextDisplayBuilder().setContent(tr("wiki_SearchNote")),
         );
 
         return interaction.editReply({
@@ -96,15 +94,15 @@ const command: Command = {
         });
       } catch (error) {
         console.error("Error in wiki search:", error);
-        return interaction.editReply({ content: "搜尋時發生錯誤。" });
+        return interaction.editReply({ content: tr("UnknownError") });
       }
     }
 
     // --- Browse Mode (Menu) ---
     try {
-      const catalogData = await getWikiCatalog(interaction.locale);
+      const catalogData = await getWikiCatalog(tr.lang);
       if (!catalogData || catalogData.code !== 0 || !catalogData.data) {
-        return interaction.editReply({ content: "無法獲取 Wiki 目錄。" });
+        return interaction.editReply({ content: tr("FetchDataFailed") });
       }
 
       const mainCats = catalogData.data.catalog || [];
@@ -124,7 +122,7 @@ const command: Command = {
 
         const menu = new StringSelectMenuBuilder()
           .setCustomId("wiki_main_select")
-          .setPlaceholder("選擇主分類")
+          .setPlaceholder(tr("wiki_MainSelect"))
           .addOptions(options);
 
         return [
@@ -134,10 +132,10 @@ const command: Command = {
 
       const container = new ContainerBuilder()
         .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent("# Endfield Wiki 目錄"),
+          new TextDisplayBuilder().setContent(tr("wiki_CatalogTitle")),
         )
         .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent("請選擇一個主分類開始瀏覽："),
+          new TextDisplayBuilder().setContent(tr("wiki_BrowseTip")),
         );
 
       const message = await interaction.editReply({
@@ -195,7 +193,7 @@ const command: Command = {
 
           const menu = new StringSelectMenuBuilder()
             .setCustomId("wiki_sub_select")
-            .setPlaceholder("選擇子分類")
+            .setPlaceholder(tr("wiki_SubSelect"))
             .addOptions(options);
 
           const row =
@@ -203,7 +201,7 @@ const command: Command = {
           const btnRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId("wiki_back")
-              .setLabel("返回")
+              .setLabel(tr("wiki_Back"))
               .setStyle(ButtonStyle.Secondary),
           );
 
@@ -231,12 +229,12 @@ const command: Command = {
 
           if (currentItems.length === 0) {
             newContainer.addTextDisplayComponents(
-              new TextDisplayBuilder().setContent("此分類暫無項目。"),
+              new TextDisplayBuilder().setContent(tr("wiki_EmptyCat")),
             );
             const btnRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
               new ButtonBuilder()
                 .setCustomId("wiki_back")
-                .setLabel("返回")
+                .setLabel(tr("wiki_Back"))
                 .setStyle(ButtonStyle.Secondary),
             );
             components.push(btnRow);
@@ -262,7 +260,12 @@ const command: Command = {
             const menu = new StringSelectMenuBuilder()
               .setCustomId("wiki_item_select")
               .setPlaceholder(
-                `選擇項目 (${start + 1}-${Math.min(end, currentItems.length)} / ${currentItems.length})`,
+                tr("wiki_ItemSelect")
+                  .replace(
+                    "<range>",
+                    `${start + 1}-${Math.min(end, currentItems.length)}`,
+                  )
+                  .replace("<total>", currentItems.length.toString()),
               )
               .addOptions(options);
 
@@ -277,7 +280,7 @@ const command: Command = {
             navRow.addComponents(
               new ButtonBuilder()
                 .setCustomId("wiki_back")
-                .setLabel("返回分類")
+                .setLabel(tr("wiki_Back"))
                 .setStyle(ButtonStyle.Secondary),
             );
 
@@ -285,7 +288,7 @@ const command: Command = {
               navRow.addComponents(
                 new ButtonBuilder()
                   .setCustomId("wiki_prev")
-                  .setLabel("上一頁")
+                  .setLabel(tr("wiki_PrevPage"))
                   .setStyle(ButtonStyle.Primary),
               );
             }
@@ -293,7 +296,7 @@ const command: Command = {
               navRow.addComponents(
                 new ButtonBuilder()
                   .setCustomId("wiki_next")
-                  .setLabel("下一頁")
+                  .setLabel(tr("wiki_NextPage"))
                   .setStyle(ButtonStyle.Primary),
               );
             }
@@ -324,7 +327,7 @@ const command: Command = {
             currentPage = 0;
             // Fetch items
             const res = await getWikiCatalog(
-              interaction.locale,
+              tr.lang,
               currentMainId!.toString(),
               currentSubId!.toString(),
             );
@@ -341,10 +344,7 @@ const command: Command = {
             await updateView(i);
           } else if (i.customId === "wiki_item_select") {
             const itemId = i.values[0];
-            const detailData = await getWikiItemDetail(
-              itemId,
-              interaction.locale,
-            );
+            const detailData = await getWikiItemDetail(itemId, tr.lang);
 
             if (detailData && detailData.code === 0) {
               const info = detailData.data;
@@ -389,7 +389,7 @@ const command: Command = {
               const link = `https://wiki.skport.com/endfield/detail?mainTypeId=${mainId}&subTypeId=${subId}&gameEntryId=${entryId}`;
               detailContainer.addTextDisplayComponents(
                 new TextDisplayBuilder().setContent(
-                  `[查看 Wiki 頁面](${link})`,
+                  `[${tr("wiki_ViewPage")}](${link})`,
                 ),
               );
 
@@ -411,28 +411,28 @@ const command: Command = {
 
               const menu = new StringSelectMenuBuilder()
                 .setCustomId("wiki_item_select")
-                .setPlaceholder("選擇項目")
+                .setPlaceholder(tr("wiki_MainSelect")) // Reuse select placeholder or similar
                 .addOptions(options);
 
               const navRow = new ActionRowBuilder<ButtonBuilder>();
               navRow.addComponents(
                 new ButtonBuilder()
                   .setCustomId("wiki_back")
-                  .setLabel("返回分類")
+                  .setLabel(tr("wiki_Back"))
                   .setStyle(ButtonStyle.Secondary),
               );
               if (currentPage > 0)
                 navRow.addComponents(
                   new ButtonBuilder()
                     .setCustomId("wiki_prev")
-                    .setLabel("上一頁")
+                    .setLabel(tr("wiki_PrevPage"))
                     .setStyle(ButtonStyle.Primary),
                 );
               if (end < currentItems.length)
                 navRow.addComponents(
                   new ButtonBuilder()
                     .setCustomId("wiki_next")
-                    .setLabel("下一頁")
+                    .setLabel(tr("wiki_NextPage"))
                     .setStyle(ButtonStyle.Primary),
                 );
 

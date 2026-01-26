@@ -11,6 +11,7 @@ import {
 } from "discord.js";
 import { Event } from "../interfaces/Event";
 import { Logger } from "../utils/Logger";
+import { createTranslator, toI18nLang } from "../utils/i18n";
 
 const webhook = process.env.CMDWEBHOOK
   ? new WebhookClient({ url: process.env.CMDWEBHOOK })
@@ -20,17 +21,17 @@ const logger = new Logger("Interaction");
 const event: Event = {
   name: Events.InteractionCreate,
   execute: async (client, interaction) => {
+    const userLang =
+      (await client.db.get(`${interaction.user.id}.locale`)) ||
+      toI18nLang(interaction.locale);
+    const tr = createTranslator(userLang);
+
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
       if (!command) return;
 
       try {
-        await command.execute(
-          client,
-          interaction,
-          (key: string) => key,
-          client.db,
-        );
+        await command.execute(client, interaction, tr, client.db);
 
         if (webhook) {
           webhook.send({
@@ -74,12 +75,12 @@ const event: Event = {
         logger.error(`Command execution error: ${error.message}`);
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp({
-            content: "There was an error while executing this command!",
+            content: tr("Error"),
             flags: MessageFlags.Ephemeral,
           });
         } else {
           await interaction.reply({
-            content: "There was an error while executing this command!",
+            content: tr("Error"),
             flags: MessageFlags.Ephemeral,
           });
         }
@@ -91,12 +92,7 @@ const event: Event = {
 
       if (command) {
         try {
-          await command.execute(
-            client,
-            interaction,
-            (key: string) => key,
-            client.db,
-          );
+          await command.execute(client, interaction, tr, client.db);
         } catch (error) {
           console.error("Error handling select menu interaction:", error);
         }
@@ -112,12 +108,7 @@ const event: Event = {
 
       if (command) {
         try {
-          await command.execute(
-            client,
-            interaction,
-            (key: string) => key,
-            client.db,
-          );
+          await command.execute(client, interaction, tr, client.db);
         } catch (error) {
           console.error("Error handling modal submit:", error);
         }
