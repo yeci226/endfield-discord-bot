@@ -37,7 +37,7 @@ const langs: Record<string, any> = {
   daily_Setup: "Auto-sign setup",
   daily_SetupDesc: "Configure auto-sign settings",
   daily_Time: "Time",
-  daily_TimeDesc: "Schedule time (1-24 UTC-8)",
+  daily_TimeDesc: "Schedule time (1-24 UTC+8)",
   daily_AutoBalance: "Auto Balance",
   daily_AutoBalanceDesc: "Automatically choose the best time",
   daily_Notify: "Notify",

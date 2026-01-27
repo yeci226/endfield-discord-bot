@@ -35,7 +35,7 @@ const langs: Record<string, any> = {
   daily_Setup: "自動簽到設定",
   daily_SetupDesc: "設定自動簽到",
   daily_Time: "簽到時間",
-  daily_TimeDesc: "簽到時間 1-24 UTC-8",
+  daily_TimeDesc: "簽到時間 1-24 UTC+8",
   daily_AutoBalance: "自動選擇時間",
   daily_AutoBalanceDesc: "自動選擇現有設定人數較少的時間簽到",
   daily_Notify: "通知",

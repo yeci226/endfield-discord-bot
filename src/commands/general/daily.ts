@@ -63,10 +63,10 @@ const command: Command = {
         .addIntegerOption((op) =>
           op
             .setName("time")
-            .setDescription("Schedule time (1-24 UTC-8)")
+            .setDescription("Schedule time (1-24 UTC+8)")
             .setNameLocalizations({ "zh-TW": "簽到時間" })
             .setDescriptionLocalizations({
-              "zh-TW": "簽到時間 1-24 UTC-8",
+              "zh-TW": "簽到時間 1-24 UTC+8",
             })
             .setRequired(false)
             .setMinValue(1)
