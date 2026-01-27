@@ -266,41 +266,46 @@ export class AutoDailyService {
           }
         }
 
-        if (config.notify_method === "dm") {
-          try {
-            const user = await this.client.users.fetch(userId);
-            if (user) {
-              await user.send({
-                content: "",
-                flags: MessageFlags.IsComponentsV2,
-                components: [container],
-              });
-            }
-          } catch (e) {
-            // Fallback to channel if DM fails
-            if (config.channelId) {
-              const channel = (await this.client.channels.fetch(
-                config.channelId,
-              )) as TextChannel;
-              if (channel)
-                await channel.send({
-                  content: "",
-                  flags: MessageFlags.IsComponentsV2,
-                  components: [container],
-                });
-            }
-          }
-        } else if (config.notify_method === "channel" && config.channelId) {
-          const channel = (await this.client.channels.fetch(
-            config.channelId,
-          )) as TextChannel;
-          if (channel)
-            await channel.send({
-              content: "",
-              flags: MessageFlags.IsComponentsV2,
-              components: [container],
-            });
-        }
+        const payload = {
+          content: "",
+          flags: MessageFlags.IsComponentsV2,
+          components: [container],
+        };
+
+        const notifyMethod = config.notify_method;
+        const channelId = config.channelId;
+
+        await this.client.cluster.broadcastEval(
+          async (c: any, context: any) => {
+            try {
+              if (context.notifyMethod === "dm") {
+                const user = c.users.cache.get(context.userId);
+                if (user) {
+                  await user.send(context.payload);
+                  return true;
+                }
+              } else if (
+                context.notifyMethod === "channel" &&
+                context.channelId
+              ) {
+                const channel = c.channels.cache.get(context.channelId);
+                if (channel) {
+                  await channel.send(context.payload);
+                  return true;
+                }
+              }
+            } catch (e) {}
+            return false;
+          },
+          {
+            context: {
+              userId,
+              payload,
+              notifyMethod,
+              channelId,
+            },
+          },
+        );
       }
     } catch (error) {
       console.error(

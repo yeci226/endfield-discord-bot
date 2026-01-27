@@ -4,8 +4,15 @@ import { Logger } from "../utils/Logger";
 
 const logger = new Logger("Ready");
 
-async function updatePresence(client: Client) {
-  const totalGuilds = client.guilds.cache.size;
+async function updatePresence(client: any) {
+  const results = await client.cluster.broadcastEval(
+    (c: any) => c.guilds.cache.size,
+  );
+  const totalGuilds = results.reduce(
+    (prev: number, val: number) => prev + val,
+    0,
+  );
+
   client.user?.setPresence({
     activities: [
       {

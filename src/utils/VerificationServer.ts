@@ -4,16 +4,20 @@ import path from "path";
 import { Logger } from "./Logger";
 import { EventEmitter } from "events";
 
+import { ExtendedClient } from "../structures/Client";
+
 export class VerificationServer {
   private server: http.Server | null = null;
   private logger = new Logger("VerifyServer");
   private host = process.env.VERIFY_HOST || "0.0.0.0";
   private port = Number(process.env.VERIFY_PORT) || 3838;
+  private client: ExtendedClient | null = null;
 
   private static events = new EventEmitter();
   private static results = new Map<string, any>();
 
-  constructor(port?: number) {
+  constructor(client?: ExtendedClient, port?: number) {
+    if (client) this.client = client;
     if (port) this.port = port;
   }
 
@@ -56,6 +60,27 @@ export class VerificationServer {
                 `result:${data.sessionId}`,
                 data.result,
               );
+
+              // Broadcast to other clusters
+              if (this.client) {
+                this.client.cluster.broadcastEval(
+                  (c: any, context: any) => {
+                    const {
+                      VerificationServer: VS,
+                    } = require("./utils/VerificationServer");
+                    VS.events.emit(
+                      `result:${context.sessionId}`,
+                      context.result,
+                    );
+                  },
+                  {
+                    context: {
+                      sessionId: data.sessionId,
+                      result: data.result,
+                    },
+                  },
+                );
+              }
 
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ success: true }));

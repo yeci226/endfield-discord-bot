@@ -123,7 +123,9 @@ const command: Command = {
       const action = interaction.options.getString("action") || "email";
 
       if (action === "email") {
-        const modal = new ModalBuilder().setTitle(tr("login_Title"));
+        const modal = new ModalBuilder()
+          .setCustomId("login:credentials")
+          .setTitle(tr("login_Title"));
 
         const emailInput = new TextInputBuilder()
           .setCustomId("email")
@@ -160,7 +162,9 @@ const command: Command = {
           return;
         }
 
-        const modal = new ModalBuilder().setTitle(tr("login_CookieSetTitle"));
+        const modal = new ModalBuilder()
+          .setCustomId("login:cookie")
+          .setTitle(tr("login_CookieSetTitle"));
 
         const cookieInput = new TextInputBuilder()
           .setCustomId("cookie-input")

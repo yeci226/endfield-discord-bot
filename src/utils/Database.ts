@@ -5,6 +5,7 @@ export class CustomDatabase {
 
   constructor(filePath: string) {
     this.db = new Database(filePath);
+    this.db.pragma("journal_mode = WAL");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS json (
         ID TEXT PRIMARY KEY,

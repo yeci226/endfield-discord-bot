@@ -10,14 +10,17 @@ import { VerificationServer } from "./utils/VerificationServer";
   client.newsService = new SkportNewsService(client);
   client.autoDailyService = new AutoDailyService(client);
 
-  const verifyServer = new VerificationServer();
-  verifyServer.start();
-
   await loadCommands(client);
   await loadEvents(client);
   client.start();
-  client.newsService.start();
-  client.autoDailyService.start();
+
+  // 只有在 Cluster 0 啟動全域服務
+  if (client.cluster.id === 0) {
+    const verifyServer = new VerificationServer(client);
+    verifyServer.start();
+    client.newsService.start();
+    client.autoDailyService.start();
+  }
 
   // Process Error Handling
   const { WebhookClient } = require("discord.js");

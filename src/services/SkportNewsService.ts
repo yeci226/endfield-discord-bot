@@ -18,7 +18,7 @@ import { Logger } from "../utils/Logger";
 import { formatAcceptLanguage, formatSkLanguage } from "../utils/skportApi";
 
 const SKPORT_API_URL =
-  "https://zonai.skport.com/web/v1/home/index?pageSize=3&sortType=2&gameId=3&cateId=1006";
+  "https://zonai.skport.com/web/v1/home/index?pageSize=10&sortType=2&gameId=3&cateId=1006";
 const POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 interface SkportNewsItem {
@@ -178,7 +178,6 @@ export class SkportNewsService {
     isUpdate: boolean,
     force: boolean = false,
   ) {
-    // Get Subscriptions
     const subscriptions =
       ((await this.client.db.get("news_subscriptions")) as Array<{
         guildId: string;
@@ -188,63 +187,96 @@ export class SkportNewsService {
 
     const payload = this.buildPayload(news, title);
 
-    for (const sub of subscriptions) {
-      // Check Dispatch Record
-      const dispatchKey = `news_dispatch.${news.item.id}.${sub.channelId}`;
-      const dispatchRecord = await this.client.db.get(dispatchKey);
+    // Prepare subscription data for broadcast
+    const subData = await Promise.all(
+      subscriptions.map(async (sub) => {
+        const dispatchKey = `news_dispatch.${news.item.id}.${sub.channelId}`;
+        const dispatchRecord = await this.client.db.get(dispatchKey);
+        const newsTime = parseInt(news.item.timestamp) * 1000;
+        const skip = !force && sub.boundAt && newsTime < sub.boundAt;
 
-      try {
-        const channel = (await this.client.channels.fetch(sub.channelId)) as
-          | TextChannel
-          | NewsChannel;
-        if (!channel) continue;
+        return {
+          ...sub,
+          dispatchRecord,
+          skip,
+        };
+      }),
+    );
 
-        const channelName = (channel as any).name || "DM";
+    const eligibleSubs = subData.filter((s) => !s.skip);
 
-        if (dispatchRecord && !force) {
-          // Already sent to this channel
-          if (isUpdate && dispatchRecord.hash !== currentHash) {
-            // Needs Edit
-            try {
-              const message = await channel.messages.fetch(
-                dispatchRecord.messageId,
-              );
-              if (message) {
-                await message.edit(payload);
-                this.logger.success(`Updated message in ${channelName}`);
-                await this.client.db.set(dispatchKey, {
-                  ...dispatchRecord,
-                  hash: currentHash,
-                });
+    // Broadcast ONCE to all clusters
+    const broadcastResults = await this.client.cluster.broadcastEval(
+      async (c: any, context: any) => {
+        const results: Array<{
+          channelId: string;
+          messageId: string;
+          isNew: boolean;
+        }> = [];
+
+        for (const sub of context.eligibleSubs) {
+          try {
+            // Check if this cluster owns the channel
+            const channel = c.channels.cache.get(sub.channelId);
+            if (!channel) continue;
+
+            if (sub.dispatchRecord && !context.force) {
+              if (
+                context.isUpdate &&
+                sub.dispatchRecord.hash !== context.currentHash
+              ) {
+                // Update existing
+                const message = await channel.messages.fetch(
+                  sub.dispatchRecord.messageId,
+                );
+                if (message) {
+                  await message.edit(context.payload);
+                  results.push({
+                    channelId: sub.channelId,
+                    messageId: sub.dispatchRecord.messageId,
+                    isNew: false,
+                  });
+                }
               }
-            } catch (e) {
-              this.logger.warn(
-                `Could not edit message in ${channelName}, maybe deleted?`,
-              );
+            } else {
+              // New send
+              const msg = await channel.send(context.payload);
+              results.push({
+                channelId: sub.channelId,
+                messageId: msg.id,
+                isNew: true,
+              });
             }
-          }
-        } else {
-          // New Dispatch (or Force Dispatch)
-          // Skip if news is older than binding time (to avoid spamming old news on new bind)
-          // Unless force is true.
-          const newsTime = parseInt(news.item.timestamp) * 1000;
-          if (!force && sub.boundAt && newsTime < sub.boundAt) continue;
-
-          const message = await channel.send(payload);
-          this.logger.success(
-            `${force ? "Force sent" : "Sent"} message to ${channelName}`,
-          );
-          await this.client.db.set(dispatchKey, {
-            newsId: news.item.id,
-            guildId: sub.guildId,
-            channelId: sub.channelId,
-            messageId: message.id,
-            hash: currentHash,
-          });
+          } catch (e) {}
         }
-      } catch (error) {
-        this.logger.error(`Failed to dispatch to ${sub.channelId}: ${error}`);
-      }
+        return results;
+      },
+      {
+        context: {
+          eligibleSubs,
+          payload,
+          isUpdate,
+          currentHash,
+          force,
+        },
+      },
+    );
+
+    // Flatten results and update DB
+    const allResults = broadcastResults.flat();
+    for (const res of allResults) {
+      const dispatchKey = `news_dispatch.${news.item.id}.${res.channelId}`;
+      const existing = (await this.client.db.get(dispatchKey)) || {};
+      await this.client.db.set(dispatchKey, {
+        newsId: news.item.id,
+        channelId: res.channelId,
+        messageId: res.messageId,
+        hash: currentHash,
+        ...existing, // Keep guildId etc if exists
+      });
+      this.logger.success(
+        `${res.isNew ? "Sent" : "Updated"} message to Channel(${res.channelId})`,
+      );
     }
   }
 
@@ -254,7 +286,12 @@ export class SkportNewsService {
     const author = news.user.nickname || "Official";
     const date = `<t:${Math.floor(parseInt(news.item.timestamp))}:f>`;
     const link = `https://www.skport.com/article?id=${news.item.id}`;
-    const headerContent = `### [${title}](${link})\n-# ${author} • ${date}`;
+
+    // Clean title: Remove leading/trailing brackets to avoid Markdown link issues
+    const cleanTitle = title.replace(/^\[|\]$/g, "").trim();
+
+    // Header: Using standard Markdown Header
+    const headerContent = `### [${cleanTitle}](${link})\n-# ${author} • ${date}`;
 
     const textDisplayHelper = new TextDisplayBuilder().setContent(
       headerContent,
@@ -277,32 +314,39 @@ export class SkportNewsService {
 
     // --- Body Content ---
     if (news.item.caption) {
-      let textBuffer = "";
-
-      const flushText = () => {
-        if (textBuffer.trim()) {
-          container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(textBuffer.trim()),
-          );
-          textBuffer = "";
-        }
-      };
+      let bodyBuffer = "";
 
       for (const block of news.item.caption) {
         if (block.kind === "text" && block.text) {
-          textBuffer += block.text.text;
+          let text = block.text.text;
+          if (!text) continue;
+
+          // Heuristic: Bold important categories
+          if (
+            /^([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])?\s*[\u4e00-\u9fa5\w]{2,10}(：|:)/.test(
+              text,
+            ) ||
+            /^【[\u4e00-\u9fa5\w]{2,10}】/.test(text)
+          ) {
+            text = `**${text}**`;
+          }
+
+          bodyBuffer += text;
         } else if (block.kind === "link" && block.link) {
           const linkText = block.link.text;
           const linkUrl = block.link.link;
+          const linkMarkdown =
+            linkText === linkUrl ? linkUrl : `[${linkText}](${linkUrl})`;
 
-          if (linkText === linkUrl) {
-            textBuffer += `${linkUrl}`;
-          } else {
-            textBuffer += `[${linkText}](${linkUrl})`;
-          }
+          bodyBuffer += linkMarkdown;
         }
       }
-      flushText();
+
+      if (bodyBuffer.trim()) {
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(bodyBuffer.trim()),
+        );
+      }
     }
 
     // --- Images ---

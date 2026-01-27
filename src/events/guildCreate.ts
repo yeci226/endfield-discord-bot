@@ -8,8 +8,14 @@ const webhook = process.env.JLWEBHOOK
 
 const event: Event = {
   name: Events.GuildCreate,
-  execute: async (client, guild) => {
-    const totalGuilds = client.guilds.cache.size;
+  execute: async (client: any, guild) => {
+    const results = await client.cluster.broadcastEval(
+      (c: any) => c.guilds.cache.size,
+    );
+    const totalGuilds = results.reduce(
+      (prev: number, val: number) => prev + val,
+      0,
+    );
 
     if (webhook) {
       webhook.send({

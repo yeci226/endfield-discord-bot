@@ -1,4 +1,9 @@
 import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
+import {
+  ClusterClient,
+  getInfo,
+  AutoResharderClusterClient,
+} from "discord-hybrid-sharding";
 import { CustomDatabase } from "../utils/Database";
 import { Command } from "../interfaces/Command";
 import path from "path";
@@ -13,6 +18,7 @@ export class ExtendedClient extends Client {
   public db: CustomDatabase;
   public newsService!: SkportNewsService;
   public autoDailyService!: AutoDailyService;
+  public cluster: ClusterClient<Client>;
 
   constructor() {
     super({
@@ -23,8 +29,12 @@ export class ExtendedClient extends Client {
         Partials.Message,
         Partials.User,
       ],
+      shards: getInfo().SHARD_LIST,
+      shardCount: getInfo().TOTAL_SHARDS,
     });
 
+    this.cluster = new ClusterClient(this);
+    new AutoResharderClusterClient(this.cluster);
     this.db = new CustomDatabase("json.sqlite");
   }
 
@@ -43,5 +53,8 @@ export class ExtendedClient extends Client {
       process.exit(1);
     }
     this.login(token);
+    console.log(
+      `[Cluster ${this.cluster.id}] Client logged in. Shards: ${getInfo().SHARD_LIST.join(", ")}`,
+    );
   }
 }
