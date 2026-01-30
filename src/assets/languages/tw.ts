@@ -23,9 +23,9 @@ const langs: Record<string, any> = {
 
   // Account
   AccountNotFound:
-    "❌ **未找到綁定帳號**\n請先使用 `/set-cookie` 綁定您的終末地帳號。",
+    "❌ **未找到綁定帳號**\n請先使用 `/login` 綁定您的終末地帳號。",
   AccountNotFoundUser: `❌ **未找到該使用者的綁定帳號**\n使用者 <targetUser> 尚未綁定帳號。`,
-  NoSetAccount: "請先使用 `/set-cookie` 綁定您的終末地帳號。",
+  NoSetAccount: "請先使用 `/login` 綁定您的終末地帳號。",
 
   // Daily Command
   daily_Check: "檢查狀態",

@@ -25,9 +25,9 @@ const langs: Record<string, any> = {
 
   // Account
   AccountNotFound:
-    "❌ **Account Not Found**\nPlease use `/set-cookie` to bind your Endfield account first.",
+    "❌ **Account Not Found**\nPlease use `/login` to bind your Endfield account first.",
   AccountNotFoundUser: `❌ **Account Not Found**\nUser <targetUser> has not set an account.`,
-  NoSetAccount: "Please use `/set-cookie` to bind your Endfield account first.",
+  NoSetAccount: "Please use `/login` to bind your Endfield account first.",
 
   // Daily Command
   daily_Check: "Check status",
