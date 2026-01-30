@@ -87,8 +87,13 @@ const command: Command = {
           ...replyData,
           flags: (1 << 15) | (1 << 6),
         });
+      } else if (interaction.isStringSelectMenu()) {
+        await interaction.update(replyData);
       } else {
-        await interaction.editReply(replyData);
+        await interaction.reply({
+          ...replyData,
+          flags: MessageFlags.Ephemeral,
+        });
       }
       return;
     }
@@ -168,6 +173,7 @@ const command: Command = {
       );
 
       await interaction.editReply({
+        content: "",
         files: [attachment],
         components: [row],
       });

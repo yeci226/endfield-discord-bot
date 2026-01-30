@@ -498,12 +498,21 @@ export async function verifyToken(cookie: string, locale?: string) {
   // The Gryphline API only needs the raw ACCOUNT_TOKEN value in the query param.
   const basicUrl = `https://as.gryphline.com/user/info/v1/basic?token=${encodeURIComponent(cleanToken)}`;
 
-  const basicResult = await makeRequest<any>("GET", basicUrl, {
-    locale,
-    headers: {
-      "sec-fetch-site": "cross-site",
-    },
-  });
+  const basicResult = await (async () => {
+    try {
+      const response = await axios.get(basicUrl, {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "sec-fetch-site": "cross-site",
+        },
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`Error requesting ${basicUrl}:`, error.message);
+      return null;
+    }
+  })();
 
   if (!basicResult || basicResult.status !== 0) {
     return basicResult; // Error or null
