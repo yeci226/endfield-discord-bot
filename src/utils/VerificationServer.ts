@@ -65,13 +65,25 @@ export class VerificationServer {
               if (this.client) {
                 this.client.cluster.broadcastEval(
                   (c: any, context: any) => {
-                    const {
-                      VerificationServer: VS,
-                    } = require("./utils/VerificationServer");
-                    VS.events.emit(
-                      `result:${context.sessionId}`,
-                      context.result,
-                    );
+                    const path = require("path");
+                    const root = process.cwd();
+                    let VS;
+                    try {
+                      VS = require(
+                        path.join(root, "dist/utils/VerificationServer"),
+                      ).VerificationServer;
+                    } catch (e) {
+                      VS = require(
+                        path.join(root, "src/utils/VerificationServer"),
+                      ).VerificationServer;
+                    }
+
+                    if (VS && VS.events) {
+                      VS.events.emit(
+                        `result:${context.sessionId}`,
+                        context.result,
+                      );
+                    }
                   },
                   {
                     context: {
