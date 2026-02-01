@@ -95,6 +95,22 @@ const event: Event = {
           await command.execute(client, interaction, tr, client.db);
         } catch (error) {
           console.error("Error handling select menu interaction:", error);
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({
+              content: tr("Error"),
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            // Try to find a way to reply if not already
+            try {
+              await interaction.reply({
+                content: tr("Error"),
+                flags: MessageFlags.Ephemeral,
+              });
+            } catch (e) {
+              // Ignore if reply failed (e.g. unknown interaction)
+            }
+          }
         }
       }
     } else if (interaction.isModalSubmit()) {

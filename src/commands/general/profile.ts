@@ -181,6 +181,7 @@ const command: Command = {
     }
 
     if (interaction.isStringSelectMenu()) {
+      await interaction.deferUpdate();
       const parts = interaction.customId.split(":");
       if (parts[1] !== "char_select") return;
 
@@ -188,8 +189,6 @@ const command: Command = {
       const charId = interaction.values[0];
 
       if (charId === "home") {
-        await interaction.deferUpdate();
-
         // Fetch Data again
         const cardRes: CardDetailResponse | null = await getCardDetail(
           roleId,
@@ -237,8 +236,6 @@ const command: Command = {
         });
         return;
       }
-
-      await interaction.deferUpdate();
 
       // Fetch Data again
       const cardRes: CardDetailResponse | null = await getCardDetail(
