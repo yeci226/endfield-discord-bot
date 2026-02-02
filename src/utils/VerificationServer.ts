@@ -11,18 +11,64 @@ export class VerificationServer {
   private logger = new Logger("VerifyServer");
   private host = process.env.VERIFY_HOST || "0.0.0.0";
   private port = Number(process.env.VERIFY_PORT) || 3838;
-  private client: ExtendedClient | null = null;
+  private clientInstance: ExtendedClient | null = null;
+  private static client: ExtendedClient | null = null;
 
   private static events = new EventEmitter();
   private static results = new Map<string, any>();
+  private static pendingSessions = new Set<string>();
 
   constructor(client?: ExtendedClient, port?: number) {
-    if (client) this.client = client;
+    if (client) {
+      this.clientInstance = client;
+      VerificationServer.client = client;
+    }
     if (port) this.port = port;
   }
 
   public static onResult(sessionId: string, callback: (result: any) => void) {
+    this.registerSession(sessionId);
     this.events.once(`result:${sessionId}`, callback);
+  }
+
+  public static registerSession(sessionId: string) {
+    if (this.pendingSessions.has(sessionId)) return;
+
+    this.pendingSessions.add(sessionId);
+
+    // Timeout to prevent leaks (15 minutes)
+    setTimeout(
+      () => {
+        this.pendingSessions.delete(sessionId);
+        this.results.delete(sessionId);
+      },
+      15 * 60 * 1000,
+    );
+
+    // Broadcast registration to all clusters (so Cluster 0 knows)
+    if (this.client) {
+      this.client.cluster.broadcastEval(
+        (c: any, context: any) => {
+          const VS = (global as any).VerificationServerClass;
+          if (VS) VS.innerRegister(context.sessionId);
+        },
+        { context: { sessionId } },
+      );
+    }
+  }
+
+  /**
+   * Internal method for broadcastEval to add without re-broadcasting
+   */
+  private static innerRegister(sessionId: string) {
+    this.pendingSessions.add(sessionId);
+    setTimeout(
+      () => {
+        this.pendingSessions.delete(sessionId);
+        this.results.delete(sessionId);
+      },
+      15 * 60 * 1000,
+    );
   }
 
   public static getResult(sessionId: string): any {
@@ -55,34 +101,26 @@ export class VerificationServer {
           try {
             const data = JSON.parse(body);
             if (data.sessionId && data.result) {
+              if (!VerificationServer.pendingSessions.has(data.sessionId)) {
+                res.writeHead(404);
+                res.end("Invalid Session");
+                return;
+              }
+
               VerificationServer.results.set(data.sessionId, data.result);
               VerificationServer.events.emit(
                 `result:${data.sessionId}`,
                 data.result,
               );
+              VerificationServer.pendingSessions.delete(data.sessionId);
 
               // Broadcast to other clusters
-              if (this.client) {
-                this.client.cluster.broadcastEval(
+              if (this.clientInstance) {
+                this.clientInstance.cluster.broadcastEval(
                   (c: any, context: any) => {
-                    const path = require("path");
-                    const root = process.cwd();
-                    let VS;
-                    try {
-                      VS = require(
-                        path.join(root, "dist/utils/VerificationServer"),
-                      ).VerificationServer;
-                    } catch (e) {
-                      VS = require(
-                        path.join(root, "src/utils/VerificationServer"),
-                      ).VerificationServer;
-                    }
-
-                    if (VS && VS.events) {
-                      VS.events.emit(
-                        `result:${context.sessionId}`,
-                        context.result,
-                      );
+                    const VS = (global as any).VerificationServerClass;
+                    if (VS) {
+                      VS.innerReceive(context.sessionId, context.result);
                     }
                   },
                   {
@@ -96,8 +134,9 @@ export class VerificationServer {
 
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ success: true }));
-              this.logger.info(
-                `Received captcha result for session: ${data.sessionId}`,
+              // Use debug or success only for valid sessions
+              this.logger.success(
+                `Successfully processed captcha for session: ${data.sessionId}`,
               );
             } else {
               res.writeHead(400);
@@ -126,4 +165,15 @@ export class VerificationServer {
       this.server.close();
     }
   }
+
+  /**
+   * Internal method for broadcastEval to receive result
+   */
+  private static innerReceive(sessionId: string, result: any) {
+    this.results.set(sessionId, result);
+    this.events.emit(`result:${sessionId}`, result);
+    this.pendingSessions.delete(sessionId);
+  }
 }
+
+(global as any).VerificationServerClass = VerificationServer;

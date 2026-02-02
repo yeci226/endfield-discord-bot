@@ -254,11 +254,14 @@
                 loadingSpinner.style.display = "none";
                 captchaObj.appendTo("#captcha");
 
+                let hasSubmitted = false;
                 captchaObj.onSuccess(() => {
+                    if (hasSubmitted) return;
                     const result = captchaObj.getValidate();
                     const finalResult = { ...result, challenge: challenge };
                     
                     if (sessionId) {
+                        hasSubmitted = true;
                         statusText.textContent = "正在同步結果...";
                         statusText.style.display = "block";
                         
