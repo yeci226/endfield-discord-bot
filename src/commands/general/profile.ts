@@ -17,10 +17,12 @@ import {
   getGamePlayerBinding,
   getCardDetail,
   CardDetailResponse,
+  verifyToken,
 } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
 import { EnumService } from "../../services/EnumService";
+import { extractAccountToken } from "../account/login";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -107,37 +109,69 @@ const command: Command = {
     if (interaction.isChatInputCommand()) {
       await interaction.deferReply({ flags: 1 << 15 });
 
-      const bindings = await getGamePlayerBinding(
-        account.cookie,
-        tr.lang,
-        account.cred,
-      );
+      // AUTO-MIGRATION: If salt or roles are missing, try to restore them
+      if (!account.salt || !account.roles || account.roles.length === 0) {
+        const token = extractAccountToken(account.cookie);
+        if (token) {
+          const verifyRes = await verifyToken(
+            `ACCOUNT_TOKEN=${token}`,
+            tr.lang,
+          );
+          if (
+            verifyRes &&
+            verifyRes.status === 0 &&
+            verifyRes.cred &&
+            verifyRes.token
+          ) {
+            account.cred = verifyRes.cred;
+            account.salt = verifyRes.token;
+            const bindings = await getGamePlayerBinding(
+              account.cookie,
+              tr.lang,
+              account.cred,
+              account.salt,
+            );
+            account.roles =
+              bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
+              [];
 
-      if (!bindings) {
-        await interaction.editReply(tr("FetchDataFailed"));
-        return;
+            // Save back to DB
+            const allAccounts = (await db.get(`${userId}.accounts`)) as any[];
+            const idx = allAccounts.findIndex(
+              (acc) => acc.info.id === account.info.id,
+            );
+            if (idx !== -1) {
+              allAccounts[idx] = account;
+              await db.set(`${userId}.accounts`, allAccounts);
+            }
+          }
+        }
       }
 
-      const endfieldApp = bindings.find((b) => b.appCode === "endfield");
-      if (!endfieldApp || endfieldApp.bindingList.length === 0) {
+      // Use stored roles
+      const roles = account.roles;
+
+      if (!roles || roles.length === 0) {
         await interaction.editReply(tr("BindingNotFound"));
         return;
       }
 
-      const binding = endfieldApp.bindingList[0];
-      const role = binding.roles[0];
+      const role = roles[0]?.roles?.[0];
       if (!role) {
         await interaction.editReply(tr("daily_RoleNotFound"));
         return;
       }
 
+      const uid = roles[0].uid || account.info?.id;
+
       // Fetch Card Detail
       const cardRes: CardDetailResponse | null = await getCardDetail(
         role.roleId,
         role.serverId,
-        account.info?.id || binding.uid,
+        account.info?.id || uid,
         tr.lang,
         account.cred,
+        account.salt,
       );
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
@@ -153,7 +187,7 @@ const command: Command = {
 
       // Create Select Menu for characters
       // customId format: profile:char_select:roleId:serverId:uid
-      const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || binding.uid}`;
+      const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}`;
 
       const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(customId)
@@ -196,6 +230,7 @@ const command: Command = {
           uid,
           tr.lang,
           account.cred,
+          account.salt,
         );
 
         if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
@@ -244,6 +279,7 @@ const command: Command = {
         uid,
         tr.lang,
         account.cred,
+        account.salt,
       );
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
@@ -264,6 +300,7 @@ const command: Command = {
         db,
         account.cred,
         tr.lang,
+        account.salt,
       );
       const equipEnums = [
         ...(enumsData?.equipProperties || []),

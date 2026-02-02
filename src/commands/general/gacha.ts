@@ -28,9 +28,13 @@ const command: Command = {
     await interaction.deferReply();
 
     try {
+      const userId = interaction.user.id;
+      const accounts = (await db.get(`${userId}.accounts`)) as any[];
+      const account = accounts?.[0] || {}; // Use first account for salt if exists
+
       const [charPoolData, weaponPoolData] = await Promise.all([
-        getCharacterPool(interaction.locale),
-        getWeaponPool(interaction.locale),
+        getCharacterPool(interaction.locale, account.cred, account.salt),
+        getWeaponPool(interaction.locale, account.cred, account.salt),
       ]);
 
       const container = new ContainerBuilder();

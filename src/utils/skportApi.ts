@@ -1,4 +1,5 @@
 import axios, { AxiosRequestConfig } from "axios";
+import crypto from "crypto";
 import { UserInfoResponse } from "./UserInfoInterfaces";
 
 export async function getCardDetail(
@@ -7,42 +8,19 @@ export async function getCardDetail(
   userId: string,
   locale?: string,
   cred?: string,
+  salt?: string,
 ): Promise<CardDetailResponse | null> {
   const url = "https://zonai.skport.com/api/v1/game/endfield/card/detail";
-  // Fallback to the user's provided default if no specific cred is given
-  const finalCred = cred || "OtHFZudKb9Fb9c2iEw9tXgURL5EooP1x";
-
-  try {
-    const params = {
+  return makeRequest<CardDetailResponse>("GET", url, {
+    params: {
       roleId,
       serverId,
       userId,
-    };
-    const headers = {
-      cred: finalCred,
-      "sk-language": formatSkLanguage(locale),
-    };
-
-    const response = await axios.get(url, {
-      params,
-      headers,
-    });
-    return response.data;
-  } catch (error: any) {
-    console.error(`Error requesting ${url}:`, error.message);
-    if (error.response) {
-      console.error("Error Response Status:", error.response.status);
-      console.error(
-        "Error Response Data:",
-        JSON.stringify(error.response.data),
-      );
-      console.error(
-        "Error Response Headers:",
-        JSON.stringify(error.response.headers),
-      );
-    }
-    return null;
-  }
+    },
+    cred,
+    locale,
+    salt,
+  });
 }
 
 /**
@@ -330,11 +308,13 @@ export interface CardDetailResponse {
 export async function getUserInfo(
   cred: string,
   locale?: string,
+  salt?: string,
 ): Promise<UserInfoResponse | null> {
   const url = "https://zonai.skport.com/web/v2/user";
   return makeRequest<UserInfoResponse>("GET", url, {
     cred,
     locale,
+    salt,
   });
 }
 
@@ -357,7 +337,7 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "content-type": "application/json",
     cred: cred,
     platform: "3",
-    priority: "u=1, i",
+    priority: "u=3, i",
     "sec-ch-ua":
       '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
     "sec-ch-ua-mobile": "?0",
@@ -366,15 +346,60 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
     "sk-language": formatSkLanguage(locale),
+    origin: "https://game.skport.com",
+    referer: "https://game.skport.com/",
     "x-language": locale?.toLowerCase().startsWith("zh") ? "zh-tw" : "en-us",
     vname: "1.0.0",
     "user-agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 SKPort/0.7.1(701014)",
     timestamp: Math.floor(Date.now() / 1000).toString(),
   };
 }
 
-async function makeRequest<T>(
+/**
+ * Generates the mandatory signature for Skport API requests
+ */
+export function generateSign(
+  path: string,
+  query: string,
+  timestamp: string,
+): string {
+  const salt = process.env.SKPORT_SALT || "";
+  const s = `${path}${query}${timestamp}${salt}`;
+  return crypto.createHash("md5").update(s).digest("hex");
+}
+
+export function generateSignV2(
+  path: string,
+  query: string,
+  timestamp: string,
+  platform: string,
+  vName: string,
+  providedSalt?: string,
+): string {
+  // V2 Salt: Use provided salt (token from generate_cred_by_code) or fallback
+  const salt =
+    providedSalt ||
+    process.env.SKPORT_SALT_V2 ||
+    "89774c2619f0c1aade349212824391c1";
+  const dId = process.env.SKPORT_DID || ""; // Device ID is empty in signature usually
+
+  // Construct JSON header string (mimicking Python minified JSON without spaces)
+  // Order: platform, timestamp, dId, vName
+  const headerObj = {
+    platform: platform,
+    timestamp: timestamp,
+    dId: dId,
+    vName: vName,
+  };
+  const headerJson = JSON.stringify(headerObj);
+
+  const s = `${path}${query}${timestamp}${headerJson}`;
+  const hmac = crypto.createHmac("sha256", salt).update(s).digest("hex");
+  return crypto.createHash("md5").update(hmac).digest("hex");
+}
+
+export async function makeRequest<T>(
   method: "GET" | "POST",
   url: string,
   options: {
@@ -383,10 +408,47 @@ async function makeRequest<T>(
     params?: any;
     data?: any;
     cred?: string;
+    salt?: string;
   } = {},
 ): Promise<T | null> {
   const commonHeaders = getCommonHeaders(options.cred, options.locale);
-  const headers = { ...commonHeaders, ...options.headers };
+  const headers: any = { ...commonHeaders, ...options.headers };
+
+  // Generate signature
+  const urlObj = new URL(url);
+  const pathname = urlObj.pathname;
+  let searchParams = new URLSearchParams(urlObj.search);
+
+  if (options.params) {
+    Object.entries(options.params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null) {
+        searchParams.append(key, String(val));
+      }
+    });
+  }
+
+  const queryString = searchParams.toString();
+
+  // Use V2 (HMAC) for binding and critical endpoints
+  const useV2 =
+    pathname.includes("/binding") ||
+    pathname.includes("/card/detail") ||
+    pathname.includes("/wiki/") ||
+    pathname.includes("/enums") ||
+    pathname.includes("/v2/");
+
+  const sign = useV2
+    ? generateSignV2(
+        pathname,
+        queryString,
+        headers.timestamp,
+        headers.platform,
+        headers.vname,
+        options.salt,
+      )
+    : generateSign(pathname, queryString, headers.timestamp);
+
+  headers.sign = sign;
 
   try {
     const config: AxiosRequestConfig = {
@@ -402,6 +464,12 @@ async function makeRequest<T>(
     if (error.response?.status !== 404) {
       // Avoid excessive logging for expected 404s
       console.error(`Error requesting ${url}:`, error.message);
+      if (error.response?.status === 401) {
+        console.error(
+          "401 Unauthorized details:",
+          JSON.stringify(error.response.data),
+        );
+      }
     }
     return null;
   }
@@ -529,6 +597,7 @@ export async function verifyToken(cookie: string, locale?: string) {
       return {
         ...basicResult,
         cred: credResult.data.cred, // Attach the user-specific cred
+        token: credResult.data.token, // Attach the salt/token
       };
     }
   }
@@ -538,10 +607,14 @@ export async function verifyToken(cookie: string, locale?: string) {
 
 export async function getCharacterPool(
   locale?: string,
+  cred?: string,
+  salt?: string,
 ): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/char-pool";
   return makeRequest("GET", url, {
     locale,
+    cred,
+    salt,
     headers: {
       authority: "zonai.skport.com",
       origin: "https://www.skport.com",
@@ -552,10 +625,14 @@ export async function getCharacterPool(
 
 export async function getWeaponPool(
   locale?: string,
+  cred?: string,
+  salt?: string,
 ): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/weapon-pool";
   return makeRequest("GET", url, {
     locale,
+    cred,
+    salt,
     headers: {
       authority: "zonai.skport.com",
       origin: "https://www.skport.com",
@@ -639,11 +716,12 @@ export async function getWikiItemDetail(
 }
 
 export async function getGamePlayerBinding(
-  cookie: string | undefined, // Make optional
+  cookie: string | undefined,
   locale?: string,
   cred?: string,
+  salt?: string,
 ): Promise<GameBinding[] | null> {
-  const url = "https://zonai.skport.com/api/v1/game/player/binding?";
+  const url = "https://zonai.skport.com/api/v1/game/player/binding";
   const headers: any = {
     referrer: "https://game.skport.com/",
   };
@@ -655,6 +733,7 @@ export async function getGamePlayerBinding(
   }>("GET", url, {
     locale,
     cred,
+    salt,
     headers,
   });
   if (res && res.code === 0) {
@@ -668,6 +747,7 @@ export async function getAttendanceList(
   cookie: string | undefined,
   locale?: string,
   cred?: string,
+  salt?: string,
 ): Promise<AttendanceResponse | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
@@ -682,6 +762,7 @@ export async function getAttendanceList(
     {
       locale,
       cred,
+      salt,
       headers,
     },
   );
@@ -693,9 +774,10 @@ export async function getAttendanceList(
 
 export async function getAttendanceRecords(
   gameRole: string,
-  cookie: string | undefined, // Make optional
+  cookie: string | undefined,
   locale?: string,
   cred?: string,
+  salt?: string,
 ) {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance/record";
   const headers: any = {
@@ -707,6 +789,7 @@ export async function getAttendanceRecords(
   const res = await makeRequest<{ code: number; data: any }>("GET", url, {
     locale,
     cred,
+    salt,
     headers,
   });
   if (res && res.code === 0) {
@@ -717,9 +800,10 @@ export async function getAttendanceRecords(
 
 export async function executeAttendance(
   gameRole: string,
-  cookie: string | undefined, // Make optional
+  cookie: string | undefined,
   locale?: string,
   cred?: string,
+  salt?: string,
 ) {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
@@ -731,6 +815,7 @@ export async function executeAttendance(
   const res = await makeRequest<any>("POST", url, {
     locale,
     cred,
+    salt,
     headers,
   });
   return res || { code: -1, message: "Request failed" };
@@ -739,11 +824,13 @@ export async function executeAttendance(
 export async function getEnums(
   cred?: string,
   locale?: string,
+  salt?: string,
 ): Promise<SkEnumsResponse | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/enums";
   return makeRequest("GET", url, {
     locale,
     cred,
+    salt,
     headers: {
       referrer: "https://game.skport.com/",
     },

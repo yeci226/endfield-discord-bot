@@ -23,13 +23,14 @@ import {
   loginByEmailPassword,
   verifyToken,
   getUserInfo,
+  getGamePlayerBinding,
 } from "../../utils/skportApi";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { VerificationServer } from "../../utils/VerificationServer";
 
 // Helper to get/migrate accounts
-const getAccounts = async (
+export const getAccounts = async (
   db: CustomDatabase,
   userId: string,
 ): Promise<any[]> => {
@@ -48,7 +49,8 @@ const getAccounts = async (
   return accounts;
 };
 
-const extractAccountToken = (input: string): string => {
+export const extractAccountToken = (input: string): string => {
+  if (!input) return "";
   // 1. If it's a full cookie string, find ACCOUNT_TOKEN
   const tokenMatch = input.match(/ACCOUNT_TOKEN=([^;\s]+)/);
   if (tokenMatch) return tokenMatch[1];
@@ -490,6 +492,7 @@ const command: Command = {
           status: number;
           msg?: string;
           cred?: string;
+          token?: string; // Add this for salt support
           data?: {
             nickName: string;
             hgId: string;
@@ -505,7 +508,11 @@ const command: Command = {
           const cred = result.cred;
 
           // Fetch Skport User Info
-          const userResponse = await getUserInfo(cred, interaction.locale);
+          const userResponse = await getUserInfo(
+            cred,
+            interaction.locale,
+            result.token,
+          );
 
           let nickName = "Unknown";
           let hgId = "";
@@ -531,8 +538,21 @@ const command: Command = {
             (acc) => acc.info.id === hgId || acc.info.nickname === nickName,
           );
 
+          // Fetch Game Roles
+          const bindings = await getGamePlayerBinding(
+            cookie,
+            interaction.locale,
+            cred,
+            result.token,
+          );
+          const roles =
+            bindings?.find((b) => b.appCode === "endfield")?.bindingList || [];
+
           const accountData = {
+            cookie: cookie,
             cred: cred,
+            salt: result.token, // Store the dynamic salt (token)
+            roles: roles, // Store roles to avoid redundant getGamePlayerBinding calls
             info: {
               id: hgId,
               nickname: nickName,
@@ -716,7 +736,11 @@ async function handleLoginSuccess(
 
   if (result && (result as any).status === 0 && (result as any).cred) {
     const cred = (result as any).cred;
-    const userResponse = await getUserInfo(cred, interaction.locale);
+    const userResponse = await getUserInfo(
+      cred,
+      interaction.locale,
+      (result as any).token,
+    );
 
     let nickName = "Unknown";
     let hgId = "";
@@ -736,8 +760,21 @@ async function handleLoginSuccess(
     let accounts = (await db.get(`${userId}.accounts`)) || [];
     const exists = accounts.find((acc: any) => acc.info.id === hgId);
 
+    // Fetch Game Roles
+    const bindings = await getGamePlayerBinding(
+      cookie,
+      interaction.locale,
+      cred,
+      (result as any).token,
+    );
+    const roles =
+      bindings?.find((b) => b.appCode === "endfield")?.bindingList || [];
+
     const accountData = {
+      cookie: cookie,
       cred: cred,
+      salt: (result as any).token,
+      roles: roles,
       info: { id: hgId, nickname: nickName, avatar: avatar },
     };
 

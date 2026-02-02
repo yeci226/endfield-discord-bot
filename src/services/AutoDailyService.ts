@@ -4,7 +4,9 @@ import {
   executeAttendance,
   formatSkGameRole,
   getAttendanceList,
+  verifyToken,
 } from "../utils/skportApi";
+import { extractAccountToken } from "../commands/account/login";
 import {
   EmbedBuilder,
   TextChannel,
@@ -130,24 +132,48 @@ export class AutoDailyService {
       const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
 
-      for (const account of accounts) {
-        const bindings = await getGamePlayerBinding(
-          account.cookie,
-          tr.lang,
-          account.cred,
-        );
-        if (!bindings) {
-          failCount++;
-          continue;
+      for (let i = 0; i < accounts.length; i++) {
+        const account = accounts[i];
+        // AUTO-MIGRATION: If salt or roles are missing, try to restore them
+        if (!account.salt || !account.roles || account.roles.length === 0) {
+          const token = extractAccountToken(account.cookie);
+          if (token) {
+            const verifyRes = await verifyToken(
+              `ACCOUNT_TOKEN=${token}`,
+              tr.lang,
+            );
+            if (
+              verifyRes &&
+              verifyRes.status === 0 &&
+              verifyRes.cred &&
+              verifyRes.token
+            ) {
+              account.cred = verifyRes.cred;
+              account.salt = verifyRes.token;
+              const bindings = await getGamePlayerBinding(
+                account.cookie,
+                tr.lang,
+                account.cred,
+                account.salt,
+              );
+              account.roles =
+                bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
+                [];
+
+              // Save back to DB
+              await this.client.db.set(`${userId}.accounts`, accounts);
+            }
+          }
         }
 
-        const endfieldApp = bindings.find((b) => b.appCode === "endfield");
-        if (!endfieldApp) continue;
+        // Use stored roles
+        const roles = account.roles;
+        if (!roles || roles.length === 0) continue;
 
-        for (const binding of endfieldApp.bindingList) {
+        for (const binding of roles) {
           for (const role of binding.roles) {
             const gameRole = formatSkGameRole(
-              binding.gameId,
+              binding.gameId || 1,
               role.roleId,
               role.serverId,
             );
@@ -160,6 +186,7 @@ export class AutoDailyService {
               account.cookie,
               tr.lang,
               account.cred,
+              account.salt,
             );
             if (status) {
               let signedNow = false;
@@ -169,6 +196,7 @@ export class AutoDailyService {
                   account.cookie,
                   tr.lang,
                   account.cred,
+                  account.salt,
                 );
                 if (result && result.code === 0) {
                   signedNow = true;
@@ -187,6 +215,7 @@ export class AutoDailyService {
                     account.cookie,
                     tr.lang,
                     account.cred,
+                    account.salt,
                   )
                 : status;
               const totalDays =

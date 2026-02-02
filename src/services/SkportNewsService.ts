@@ -15,7 +15,11 @@ import {
 } from "discord.js";
 import { Logger } from "../utils/Logger";
 
-import { formatAcceptLanguage, formatSkLanguage } from "../utils/skportApi";
+import {
+  formatAcceptLanguage,
+  formatSkLanguage,
+  makeRequest,
+} from "../utils/skportApi";
 
 const SKPORT_API_URL =
   "https://zonai.skport.com/web/v1/home/index?pageSize=10&sortType=2&gameId=3&cateId=1006";
@@ -72,29 +76,30 @@ export class SkportNewsService {
         `${force ? "Force checking" : "Checking"} for new Skport news...`,
       );
 
-      const response = await axios.get(SKPORT_API_URL, {
+      const response = await makeRequest<any>("GET", SKPORT_API_URL, {
         headers: {
           authority: "zonai.skport.com",
-          accept: "*/*",
-          "accept-language": formatAcceptLanguage("zh-TW"),
-          origin: "https://www.skport.com",
-          platform: "3",
-          referer: "https://www.skport.com/",
-          "sk-language": formatSkLanguage("zh-TW"),
-          vname: "1.0.0",
-          "user-agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+          referer: "https://www.skport.com/", // News index uses www.skport.com still usually
         },
       });
 
-      if (response.data.code !== 0 || !response.data.data.list) {
+      let newsList: SkportNewsItem[] = [];
+      if (response && Array.isArray(response.list)) {
+        newsList = response.list;
+      } else if (
+        response &&
+        response.data &&
+        Array.isArray(response.data.list)
+      ) {
+        newsList = response.data.list;
+      }
+
+      if (newsList.length === 0) {
         this.logger.error(
-          `Failed to fetch Skport news: ${response.data.message}`,
+          `Failed to fetch Skport news: ${response?.message || "Invalid response structure or no news found"}`,
         );
         return;
       }
-
-      const newsList: SkportNewsItem[] = response.data.data.list;
 
       if (force) {
         // Only process the single absolute latest item if forcing

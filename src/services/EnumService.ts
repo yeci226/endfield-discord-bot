@@ -9,6 +9,7 @@ export class EnumService {
     db: CustomDatabase,
     cred?: string,
     locale?: string,
+    salt?: string,
   ): Promise<SkEnumsData | null> {
     const cacheKey = `${this.CACHE_KEY}_${locale || "tw"}`;
     const cached = await db.get<{ data: SkEnumsData; timestamp: number }>(
@@ -22,7 +23,7 @@ export class EnumService {
 
     // Refresh cache
     try {
-      const res = await getEnums(cred, locale);
+      const res = await getEnums(cred, locale, salt);
       if (res && res.code === 0 && res.data) {
         await db.set(cacheKey, {
           data: res.data,

@@ -21,8 +21,10 @@ import {
   getAttendanceList,
   executeAttendance,
   formatSkGameRole,
+  verifyToken,
 } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
+import { extractAccountToken } from "../account/login";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -156,29 +158,47 @@ const command: Command = {
 
     const processedRoles = new Set<string>();
 
-    for (const account of accounts) {
-      const bindings = await getGamePlayerBinding(
-        account.cookie,
-        t.lang,
-        account.cred,
-      );
+    for (let i = 0; i < accounts.length; i++) {
+      const account = accounts[i];
+      // AUTO-MIGRATION: If salt or roles are missing, try to restore them
+      if (!account.salt || !account.roles || account.roles.length === 0) {
+        // We need the ACCOUNT_TOKEN from the cookie
+        const token = extractAccountToken(account.cookie);
+        if (token) {
+          const verifyRes = await verifyToken(`ACCOUNT_TOKEN=${token}`, t.lang);
+          if (
+            verifyRes &&
+            verifyRes.status === 0 &&
+            verifyRes.cred &&
+            verifyRes.token
+          ) {
+            account.cred = verifyRes.cred;
+            account.salt = verifyRes.token;
+            // Fetch roles too
+            const bindings = await getGamePlayerBinding(
+              account.cookie,
+              t.lang,
+              account.cred,
+              account.salt,
+            );
+            account.roles =
+              bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
+              [];
 
-      if (!bindings) {
-        container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `⚠️ **${t("FetchDataFailed")}**: ${account.info.nickname}`,
-          ),
-        );
-        continue;
+            // Save back to DB
+            await db.set(`${userId}.accounts`, accounts);
+          }
+        }
       }
 
-      const endfieldApp = bindings.find((b) => b.appCode === "endfield");
-      if (!endfieldApp) continue;
+      // Use stored roles
+      let roles = account.roles;
+      if (!roles || roles.length === 0) continue;
 
-      for (const binding of endfieldApp.bindingList) {
+      for (const binding of roles) {
         for (const role of binding.roles) {
           const gameRoleStr = formatSkGameRole(
-            binding.gameId,
+            binding.gameId || 1, // Fallback to 1 (Endfield)
             role.roleId,
             role.serverId,
           );
@@ -193,6 +213,7 @@ const command: Command = {
             account.cookie,
             t.lang,
             account.cred,
+            account.salt,
           );
           let claimResult = null;
           let claimedNow = false;
@@ -203,6 +224,7 @@ const command: Command = {
               account.cookie,
               t.lang,
               account.cred,
+              account.salt,
             );
             if (claimResult && claimResult.code === 0) {
               claimedNow = true;
@@ -212,6 +234,7 @@ const command: Command = {
                 account.cookie,
                 t.lang,
                 account.cred,
+                account.salt,
               );
             }
           }
