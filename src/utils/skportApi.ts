@@ -432,6 +432,7 @@ export async function makeRequest<T>(
     pathname.includes("/card/detail") ||
     pathname.includes("/wiki/") ||
     pathname.includes("/enums") ||
+    pathname.includes("/attendance") ||
     pathname.includes("/v2/");
 
   const sign = useV2
@@ -453,7 +454,7 @@ export async function makeRequest<T>(
       url,
       headers,
       params: options.params,
-      data: options.data,
+      data: options.data || (method === "POST" ? {} : undefined),
     };
     const response = await axios(config);
     return response.data;
@@ -636,48 +637,6 @@ export async function getWeaponPool(
       referer: "https://wiki.skport.com/",
     },
   });
-}
-
-// Wiki Interfaces
-export interface SkWikiItem {
-  id: string;
-  itemId: string;
-  name: string;
-  brief?: { description?: string; cover?: string };
-  intro?: string;
-  desc?: string;
-  caption?: Array<{ kind: "text"; text?: { text: string } }>;
-  pic?: string;
-  image?: string;
-  icon?: string;
-  typeMainId?: string;
-  typeSubId?: string;
-}
-
-export interface SkWikiSubCategory {
-  id: string;
-  name: string;
-  items?: SkWikiItem[];
-}
-
-export interface SkWikiCategory {
-  id: string;
-  name: string;
-  typeSub?: SkWikiSubCategory[];
-}
-
-export interface SkWikiCatalogResponse {
-  code: number;
-  message: string;
-  data: {
-    catalog: SkWikiCategory[];
-  };
-}
-
-export interface SkWikiItemDetailResponse {
-  code: number;
-  message: string;
-  data: SkWikiItem;
 }
 
 export async function getGamePlayerBinding(
