@@ -16,6 +16,7 @@ import {
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
+import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
 import {
   getGamePlayerBinding,
   getAttendanceList,
@@ -129,7 +130,7 @@ const command: Command = {
     await interaction.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
 
     const userId = interaction.user.id;
-    const accounts = (await db.get(`${userId}.accounts`)) as any[];
+    const accounts = await getAccounts(db, userId);
 
     if (!accounts || accounts.length === 0) {
       const container = new ContainerBuilder();
@@ -160,36 +161,8 @@ const command: Command = {
 
     for (let i = 0; i < accounts.length; i++) {
       const account = accounts[i];
-      // AUTO-MIGRATION: If salt or roles are missing, try to restore them
-      if (!account.salt || !account.roles || account.roles.length === 0) {
-        // We need the ACCOUNT_TOKEN from the cookie
-        const token = extractAccountToken(account.cookie);
-        if (token) {
-          const verifyRes = await verifyToken(`ACCOUNT_TOKEN=${token}`, t.lang);
-          if (
-            verifyRes &&
-            verifyRes.status === 0 &&
-            verifyRes.cred &&
-            verifyRes.token
-          ) {
-            account.cred = verifyRes.cred;
-            account.salt = verifyRes.token;
-            // Fetch roles too
-            const bindings = await getGamePlayerBinding(
-              account.cookie,
-              t.lang,
-              account.cred,
-              account.salt,
-            );
-            account.roles =
-              bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
-              [];
-
-            // Save back to DB
-            await db.set(`${userId}.accounts`, accounts);
-          }
-        }
-      }
+      // AUTO-MIGRATION & REBIND LOGIC
+      await ensureAccountBinding(account, userId, db, t.lang);
 
       // Use stored roles
       let roles = account.roles;
@@ -266,12 +239,11 @@ const command: Command = {
             let targetFirst = status.first.find((f) => f.available);
 
             // If nothing is explicitly available now (maybe because we just signed in),
-            // and we have signed today, then the "first" reward for this level corresponds to our current count.
-            if (!targetFirst && (status.hasToday || claimedNow)) {
-              if (signedCount >= 1 && signedCount <= 3) {
-                targetFirst = status.first[signedCount - 1];
-              }
-            }
+            // we should NOT fallback to signedCount because signedCount is MONTHLY,
+            // while "first" rewards are ONE-TIME (lifetime). using signedCount causes
+            // "Newcomer Reward" to appear on day 1-3 of EVERY month, which is wrong.
+            // We rely solely on `available` field from API or if we want to confirm claiming,
+            // we'd need better data. For now, strict check is better than wrong info.
 
             if (targetFirst && (targetFirst.available || targetFirst.done)) {
               const fRes = status.resourceInfoMap[targetFirst.awardId];

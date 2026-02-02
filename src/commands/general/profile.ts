@@ -23,6 +23,7 @@ import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
 import { EnumService } from "../../services/EnumService";
 import { extractAccountToken } from "../account/login";
+import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -65,7 +66,7 @@ const command: Command = {
         : interaction.user;
 
     const userId = targetUser!.id;
-    const accounts = (await db.get(`${userId}.accounts`)) as any[];
+    const accounts = await getAccounts(db, userId);
 
     if (!accounts || accounts.length === 0) {
       const container = new ContainerBuilder();
@@ -109,44 +110,9 @@ const command: Command = {
     if (interaction.isChatInputCommand()) {
       await interaction.deferReply({ flags: 1 << 15 });
 
-      // AUTO-MIGRATION: If salt or roles are missing, try to restore them
-      if (!account.salt || !account.roles || account.roles.length === 0) {
-        const token = extractAccountToken(account.cookie);
-        if (token) {
-          const verifyRes = await verifyToken(
-            `ACCOUNT_TOKEN=${token}`,
-            tr.lang,
-          );
-          if (
-            verifyRes &&
-            verifyRes.status === 0 &&
-            verifyRes.cred &&
-            verifyRes.token
-          ) {
-            account.cred = verifyRes.cred;
-            account.salt = verifyRes.token;
-            const bindings = await getGamePlayerBinding(
-              account.cookie,
-              tr.lang,
-              account.cred,
-              account.salt,
-            );
-            account.roles =
-              bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
-              [];
-
-            // Save back to DB
-            const allAccounts = (await db.get(`${userId}.accounts`)) as any[];
-            const idx = allAccounts.findIndex(
-              (acc) => acc.info.id === account.info.id,
-            );
-            if (idx !== -1) {
-              allAccounts[idx] = account;
-              await db.set(`${userId}.accounts`, allAccounts);
-            }
-          }
-        }
-      }
+      // AUTO-MIGRATION & REBIND LOGIC
+      // Use shared utility to ensure roles and credentials are valid
+      await ensureAccountBinding(account, userId, db, tr.lang);
 
       // Use stored roles
       const roles = account.roles;
@@ -363,7 +329,7 @@ const command: Command = {
   ) => {
     const targetUser = interaction.options.get("user")?.value as string;
     const userId = targetUser || interaction.user.id;
-    const accounts = (await db.get(`${userId}.accounts`)) as any[];
+    const accounts = await getAccounts(db, userId);
 
     if (!accounts || accounts.length === 0) {
       return interaction.respond([]);
@@ -371,11 +337,11 @@ const command: Command = {
 
     const focusedValue = interaction.options.getFocused();
     const filtered = accounts
-      .map((acc, index) => ({
+      .map((acc: any, index: number) => ({
         name: `${acc.info.nickname} (${acc.info.id})`,
         value: index.toString(),
       }))
-      .filter((choice) => choice.name.includes(focusedValue));
+      .filter((choice: any) => choice.name.includes(focusedValue));
 
     await interaction.respond(filtered.slice(0, 25));
   },

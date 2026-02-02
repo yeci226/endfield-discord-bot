@@ -119,21 +119,6 @@ const langs: Record<string, any> = {
   gacha_WeaponEmpty: "## 武器池\n目前沒有開啟的武器池。",
   gacha_NoData: "暫時沒有可用的卡池資訊。",
 
-  // Wiki
-  wiki_SearchTitle: "# 搜尋結果 (分類)",
-  wiki_SearchNote: "\n目前僅支援搜尋分類名稱。如需搜尋物品，請使用選單功能。",
-  wiki_NotFound: '找不到名為 "<query>" 的分類。請嘗試使用選單瀏覽。',
-  wiki_CatalogTitle: "# Endfield Wiki 目錄",
-  wiki_BrowseTip: "請選擇一個主分類開始瀏覽：",
-  wiki_MainSelect: "選擇主分類",
-  wiki_SubSelect: "選擇子分類",
-  wiki_ItemSelect: "選擇項目 (<range> / <total>)",
-  wiki_EmptyCat: "此分類暫無項目。",
-  wiki_Back: "返回",
-  wiki_NextPage: "下一頁",
-  wiki_PrevPage: "上一頁",
-  wiki_ViewPage: "查看 Wiki 頁面",
-
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",
   news_BindPlaceholder: "目前已綁定 <count> 個頻道",

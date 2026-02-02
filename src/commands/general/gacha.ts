@@ -10,6 +10,7 @@ import {
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { getCharacterPool, getWeaponPool } from "../../utils/skportApi";
+import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -29,8 +30,12 @@ const command: Command = {
 
     try {
       const userId = interaction.user.id;
-      const accounts = (await db.get(`${userId}.accounts`)) as any[];
+      const accounts = await getAccounts(db, userId);
       const account = accounts?.[0] || {}; // Use first account for salt if exists
+
+      if (account.cookie) {
+        await ensureAccountBinding(account, userId, db, tr.lang);
+      }
 
       const [charPoolData, weaponPoolData] = await Promise.all([
         getCharacterPool(interaction.locale, account.cred, account.salt),

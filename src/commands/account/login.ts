@@ -28,26 +28,11 @@ import {
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { VerificationServer } from "../../utils/VerificationServer";
+import { getAccounts, saveAccounts } from "../../utils/accountUtils";
+import { decryptAccount } from "../../utils/cryptoUtils";
 
 // Helper to get/migrate accounts
-export const getAccounts = async (
-  db: CustomDatabase,
-  userId: string,
-): Promise<any[]> => {
-  let accounts = (await db.get(`${userId}.accounts`)) as any[];
-  if (!accounts) {
-    // Migration check
-    const oldCookie = await db.get(`${userId}.cookie`);
-    const oldInfo = await db.get(`${userId}.info`);
-    if (oldCookie && oldInfo) {
-      accounts = [{ cookie: oldCookie, info: oldInfo }];
-      await db.set(`${userId}.accounts`, accounts);
-    } else {
-      accounts = [];
-    }
-  }
-  return accounts;
-};
+// getAccounts is now imported from accountUtils to ensure consistent encryption handling.
 
 export const extractAccountToken = (input: string): string => {
   if (!input) return "";
@@ -303,7 +288,7 @@ const command: Command = {
         }
 
         const removed = accounts.splice(index, 1)[0];
-        await db.set(`${userId}.accounts`, accounts);
+        await saveAccounts(db, userId, accounts);
 
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
@@ -581,7 +566,8 @@ const command: Command = {
             accounts.push(accountData);
           }
 
-          await db.set(`${userId}.accounts`, accounts);
+          // accountData fields are plaintext here, saveAccounts will handle encryption
+          await saveAccounts(db, userId, accounts);
 
           // Construct Container
           const container = new ContainerBuilder();
@@ -631,18 +617,7 @@ const command: Command = {
     db: CustomDatabase,
   ) => {
     const userId = interaction.user.id;
-    let accounts = (await db.get(`${userId}.accounts`)) as any[];
-
-    // Migration / Fallback same as execute
-    if (!accounts) {
-      const oldCookie = await db.get(`${userId}.cookie`);
-      const oldInfo = await db.get(`${userId}.info`);
-      if (oldCookie && oldInfo) {
-        accounts = [{ cookie: oldCookie, info: oldInfo }];
-      } else {
-        accounts = [];
-      }
-    }
+    let accounts = await getAccounts(db, userId);
 
     if (!accounts || accounts.length === 0) {
       // Autocomplete expects respond to always be called, even with empty
@@ -652,11 +627,11 @@ const command: Command = {
 
     const focusedValue = interaction.options.getFocused();
     const filtered = accounts
-      .map((acc, index) => ({
+      .map((acc: any, index: number) => ({
         name: `${acc.info.nickname} (${acc.info.id})`,
         value: index.toString(),
       }))
-      .filter((choice) => choice.name.includes(focusedValue));
+      .filter((choice: any) => choice.name.includes(focusedValue));
 
     await interaction.respond(filtered.slice(0, 25));
   },
@@ -757,7 +732,7 @@ async function handleLoginSuccess(
       avatar = basicUser.avatar || "";
     }
 
-    let accounts = (await db.get(`${userId}.accounts`)) || [];
+    let accounts = await getAccounts(db, userId);
     const exists = accounts.find((acc: any) => acc.info.id === hgId);
 
     // Fetch Game Roles
@@ -797,7 +772,7 @@ async function handleLoginSuccess(
       accounts.push(accountData);
     }
 
-    await db.set(`${userId}.accounts`, accounts);
+    await saveAccounts(db, userId, accounts);
 
     const container = new ContainerBuilder();
     const textDisplay = new TextDisplayBuilder().setContent(

@@ -7,6 +7,7 @@ import {
   verifyToken,
 } from "../utils/skportApi";
 import { extractAccountToken } from "../commands/account/login";
+import { ensureAccountBinding, getAccounts } from "../utils/accountUtils";
 import {
   EmbedBuilder,
   TextChannel,
@@ -108,9 +109,7 @@ export class AutoDailyService {
 
   public async processUser(userId: string, config: AutoDailyConfig) {
     try {
-      const accounts = (await this.client.db.get(
-        `${userId}.accounts`,
-      )) as any[];
+      const accounts = await getAccounts(this.client.db, userId);
       if (!accounts || accounts.length === 0) return;
 
       let successCount = 0;
@@ -134,37 +133,8 @@ export class AutoDailyService {
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
-        // AUTO-MIGRATION: If salt or roles are missing, try to restore them
-        if (!account.salt || !account.roles || account.roles.length === 0) {
-          const token = extractAccountToken(account.cookie);
-          if (token) {
-            const verifyRes = await verifyToken(
-              `ACCOUNT_TOKEN=${token}`,
-              tr.lang,
-            );
-            if (
-              verifyRes &&
-              verifyRes.status === 0 &&
-              verifyRes.cred &&
-              verifyRes.token
-            ) {
-              account.cred = verifyRes.cred;
-              account.salt = verifyRes.token;
-              const bindings = await getGamePlayerBinding(
-                account.cookie,
-                tr.lang,
-                account.cred,
-                account.salt,
-              );
-              account.roles =
-                bindings?.find((b) => b.appCode === "endfield")?.bindingList ||
-                [];
-
-              // Save back to DB
-              await this.client.db.set(`${userId}.accounts`, accounts);
-            }
-          }
-        }
+        // AUTO-MIGRATION & REBIND LOGIC
+        await ensureAccountBinding(account, userId, this.client.db, tr.lang);
 
         // Use stored roles
         const roles = account.roles;
@@ -241,14 +211,29 @@ export class AutoDailyService {
               let firstRewardIcon = "";
 
               if (finalStatus?.first) {
-                if (totalDays >= 1 && totalDays <= 3) {
-                  const fReward = finalStatus.first[totalDays - 1];
-                  if (fReward && (fReward.done || fReward.available)) {
-                    const res = finalStatus.resourceInfoMap[fReward.awardId];
-                    if (res) {
-                      firstRewardName = `${res.name} x${res.count}`;
-                      if (!rewardIcon) firstRewardIcon = res.icon;
-                    }
+                // Strict check: Only show if explicitly available or done (and we just signed?)
+                // Actually, for auto-daily, we just want to show if it's relevant.
+                // Avoid the "1-3 days monthly" trap.
+                const availableFirst = finalStatus.first.find(
+                  (f) => f.available || f.done,
+                );
+                // Note: f.done might be true for old rewards if we just iterate all.
+                // But usually 'first' array filters down or we only care if we just claimed it.
+                // If we just claimed it, it should satisfy 'done'.
+                // However, if we look at `daily.ts`, we used strict find.
+
+                const targetFirst = finalStatus.first.find((f) => f.available);
+                // If we auto-claimed, it might be marked done now.
+                // We can try to match the awardId if we really wanted, but for now let's just use the strict availability
+                // or if we signed successfully, maybe we check if any 'first' reward matches the day?
+                // SAFEST FIX: Only show if we find one that is AVAILABLE (before claim) or maybe we can't easily track "just claimed newcomer" without extra logic.
+                // But definitely REMOVE the `totalDays >= 1 && totalDays <= 3` check which causes the bug.
+
+                if (targetFirst) {
+                  const res = finalStatus.resourceInfoMap[targetFirst.awardId];
+                  if (res) {
+                    firstRewardName = `${res.name} x${res.count}`;
+                    if (!rewardIcon) firstRewardIcon = res.icon;
                   }
                 }
               }

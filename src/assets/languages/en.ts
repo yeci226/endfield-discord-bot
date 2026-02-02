@@ -122,22 +122,6 @@ const langs: Record<string, any> = {
   gacha_WeaponEmpty: "## Weapon Pool\nNo active weapon pools currently.",
   gacha_NoData: "No gacha information available currently.",
 
-  // Wiki
-  wiki_SearchTitle: "# Search Results (Category)",
-  wiki_SearchNote:
-    "\nCurrently only category search is supported. Use the menu to browse items.",
-  wiki_NotFound: 'No category named "<query>" found. Try browsing via menu.',
-  wiki_CatalogTitle: "# Endfield Wiki Catalog",
-  wiki_BrowseTip: "Please select a main category to start browsing:",
-  wiki_MainSelect: "Select Main Category",
-  wiki_SubSelect: "Select Sub Category",
-  wiki_ItemSelect: "Select Item (<range> / <total>)",
-  wiki_EmptyCat: "No items in this category.",
-  wiki_Back: "Back",
-  wiki_NextPage: "Next",
-  wiki_PrevPage: "Prev",
-  wiki_ViewPage: "View Wiki Page",
-
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",
   news_BindPlaceholder: "<count> channels bound currently",

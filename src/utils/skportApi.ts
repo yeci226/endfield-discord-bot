@@ -378,10 +378,7 @@ export function generateSignV2(
   providedSalt?: string,
 ): string {
   // V2 Salt: Use provided salt (token from generate_cred_by_code) or fallback
-  const salt =
-    providedSalt ||
-    process.env.SKPORT_SALT_V2 ||
-    "89774c2619f0c1aade349212824391c1";
+  const salt = providedSalt || process.env.SKPORT_SALT_V2 || "";
   const dId = process.env.SKPORT_DID || ""; // Device ID is empty in signature usually
 
   // Construct JSON header string (mimicking Python minified JSON without spaces)
@@ -681,38 +678,6 @@ export interface SkWikiItemDetailResponse {
   code: number;
   message: string;
   data: SkWikiItem;
-}
-
-export async function getWikiCatalog(
-  locale?: string,
-  typeMainId: string = "",
-  typeSubId: string = "",
-): Promise<SkWikiCatalogResponse | null> {
-  const url = "https://zonai.skport.com/web/v1/wiki/item/catalog";
-  return makeRequest("GET", url, {
-    locale,
-    headers: {
-      Referer: "https://wiki.skport.com/",
-    },
-    params: {
-      typeMainId,
-      typeSubId,
-    },
-  });
-}
-
-export async function getWikiItemDetail(
-  id: number | string,
-  locale?: string,
-): Promise<SkWikiItemDetailResponse | null> {
-  const url = "https://zonai.skport.com/web/v1/wiki/item/info";
-  return makeRequest("GET", url, {
-    locale,
-    headers: {
-      Referer: "https://wiki.skport.com/",
-    },
-    params: { id },
-  });
 }
 
 export async function getGamePlayerBinding(
