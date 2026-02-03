@@ -363,16 +363,15 @@ export function generateSign(
 
 export function generateSignV2(
   path: string,
-  content: string, // Changed from query to content (can be query or body)
+  content: string,
   timestamp: string,
   platform: string,
   vName: string,
+  dId: string = "",
   providedSalt?: string,
 ): string {
   // V2 Salt: Use provided salt (token from generate_cred_by_code or refresh) or fallback
   const salt = providedSalt || process.env.SKPORT_SALT_V2 || "";
-  const dId = ""; // Device ID is usually empty in signature for these endpoints
-
   // Construct JSON header string (mimicking specific order and no spaces)
   const headerJson = `{"platform":"${platform}","timestamp":"${timestamp}","dId":"${dId}","vName":"${vName}"}`;
 
@@ -428,6 +427,11 @@ export async function makeRequest<T>(
   const commonHeaders = getCommonHeaders(options.cred, options.locale);
   const headers: any = { ...commonHeaders, ...options.headers };
 
+  // Clean up undefined headers
+  Object.keys(headers).forEach((key) => {
+    if (headers[key] === undefined) delete headers[key];
+  });
+
   if (method === "POST" && options.data !== undefined) {
     headers["Content-Type"] = "application/json";
   }
@@ -469,7 +473,8 @@ export async function makeRequest<T>(
         signContent,
         headers.timestamp,
         headers.platform,
-        headers.vName,
+        headers.vName || headers.vname || "1.0.0",
+        headers.dId || headers.did || "",
         options.salt,
       )
     : generateSign(pathname, queryString, headers.timestamp);
@@ -655,24 +660,6 @@ export async function getCharacterPool(
   });
 }
 
-export async function getWeaponPool(
-  locale?: string,
-  cred?: string,
-  salt?: string,
-): Promise<SkPoolResponse | null> {
-  const url = "https://zonai.skport.com/web/v1/wiki/weapon-pool";
-  return makeRequest("GET", url, {
-    locale,
-    cred,
-    salt,
-    headers: {
-      authority: "zonai.skport.com",
-      origin: "https://www.skport.com",
-      referer: "https://wiki.skport.com/",
-    },
-  });
-}
-
 export async function getGamePlayerBinding(
   cookie: string | undefined,
   locale?: string,
@@ -682,6 +669,10 @@ export async function getGamePlayerBinding(
   const url = "https://zonai.skport.com/api/v1/game/player/binding";
   const headers: any = {
     Referer: "https://game.skport.com/",
+    Origin: "https://game.skport.com",
+    vname: "1.0.0",
+    platform: "3",
+    "Content-Type": "application/json",
   };
   if (cookie) headers.Cookie = cookie;
 
@@ -698,6 +689,24 @@ export async function getGamePlayerBinding(
     return res.data.list;
   }
   return null;
+}
+
+export async function getWeaponPool(
+  locale?: string,
+  cred?: string,
+  salt?: string,
+): Promise<SkPoolResponse | null> {
+  const url = "https://zonai.skport.com/web/v1/wiki/weapon-pool";
+  return makeRequest("GET", url, {
+    locale,
+    cred,
+    salt,
+    headers: {
+      authority: "zonai.skport.com",
+      origin: "https://www.skport.com",
+      referer: "https://wiki.skport.com/",
+    },
+  });
 }
 
 export async function getAttendanceList(

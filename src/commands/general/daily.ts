@@ -6,26 +6,17 @@ import {
   SectionBuilder,
   TextDisplayBuilder,
   ThumbnailBuilder,
-  MediaGalleryBuilder,
-  MediaGalleryItemBuilder,
-  ButtonBuilder,
-  ActionRowBuilder,
-  ButtonStyle,
-  EmbedBuilder,
   ModalSubmitInteraction,
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
 import {
-  getGamePlayerBinding,
   getAttendanceList,
   executeAttendance,
   formatSkGameRole,
-  verifyToken,
 } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
-import { extractAccountToken } from "../account/login";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -171,7 +162,7 @@ const command: Command = {
       for (const binding of roles) {
         for (const role of binding.roles) {
           const gameRoleStr = formatSkGameRole(
-            binding.gameId || 1, // Fallback to 1 (Endfield)
+            binding.gameId || 3, // Fallback to 3 (Endfield)
             role.roleId,
             role.serverId,
           );

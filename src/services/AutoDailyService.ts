@@ -1,16 +1,11 @@
 import { ExtendedClient } from "../structures/Client";
 import {
-  getGamePlayerBinding,
   executeAttendance,
   formatSkGameRole,
   getAttendanceList,
-  verifyToken,
 } from "../utils/skportApi";
-import { extractAccountToken } from "../commands/account/login";
 import { ensureAccountBinding, getAccounts } from "../utils/accountUtils";
 import {
-  EmbedBuilder,
-  TextChannel,
   ContainerBuilder,
   SectionBuilder,
   TextDisplayBuilder,
@@ -131,125 +126,53 @@ export class AutoDailyService {
       const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
 
+      const { processRoleAttendance } = require("../utils/attendanceUtils");
+
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
-        // AUTO-MIGRATION & REBIND LOGIC
         await ensureAccountBinding(account, userId, this.client.db, tr.lang);
 
-        // Use stored roles
         const roles = account.roles;
         if (!roles || roles.length === 0) continue;
 
         for (const binding of roles) {
           for (const role of binding.roles) {
-            const gameRole = formatSkGameRole(
-              binding.gameId || 1,
+            const gameId = binding.gameId || 3;
+            const gameRoleStr = formatSkGameRole(
+              gameId,
               role.roleId,
               role.serverId,
             );
 
-            if (processedRoles.has(gameRole)) continue;
-            processedRoles.add(gameRole);
+            if (processedRoles.has(gameRoleStr)) continue;
+            processedRoles.add(gameRoleStr);
 
-            const status = await getAttendanceList(
-              gameRole,
+            const res = await processRoleAttendance(
+              role,
+              gameId,
               account.cookie,
               tr.lang,
               account.cred,
               account.salt,
+              true, // Always claim in AutoDaily
+              tr,
             );
-            if (status) {
-              let signedNow = false;
-              if (!status.hasToday) {
-                const result = await executeAttendance(
-                  gameRole,
-                  account.cookie,
-                  tr.lang,
-                  account.cred,
-                  account.salt,
-                );
-                if (result && result.code === 0) {
-                  signedNow = true;
-                  successCount++;
-                } else {
-                  failCount++;
-                }
-              } else {
-                alreadySignedCount++;
-              }
 
-              // Re-fetch or update status to get correct 'done' days if signed
-              const finalStatus = signedNow
-                ? await getAttendanceList(
-                    gameRole,
-                    account.cookie,
-                    tr.lang,
-                    account.cred,
-                    account.salt,
-                  )
-                : status;
-              const totalDays =
-                finalStatus?.calendar.filter((d) => d.done).length || 0;
-              const todayReward =
-                finalStatus?.calendar.find((d) => d.available) ||
-                [...(finalStatus?.calendar || [])]
-                  .reverse()
-                  .find((d) => d.done); // Pick the latest 'done' item if none are available
-
-              let rewardName = tr("None");
-              let rewardIcon = "";
-              if (todayReward) {
-                const res = finalStatus?.resourceInfoMap[todayReward.awardId];
-                if (res) {
-                  rewardName = `${res.name} x${res.count}`;
-                  rewardIcon = res.icon;
-                }
-              }
-
-              // First Reward Logic
-              let firstRewardName = "";
-              let firstRewardIcon = "";
-
-              if (finalStatus?.first) {
-                // Strict check: Only show if explicitly available or done (and we just signed?)
-                // Actually, for auto-daily, we just want to show if it's relevant.
-                // Avoid the "1-3 days monthly" trap.
-                const availableFirst = finalStatus.first.find(
-                  (f) => f.available || f.done,
-                );
-                // Note: f.done might be true for old rewards if we just iterate all.
-                // But usually 'first' array filters down or we only care if we just claimed it.
-                // If we just claimed it, it should satisfy 'done'.
-                // However, if we look at `daily.ts`, we used strict find.
-
-                const targetFirst = finalStatus.first.find((f) => f.available);
-                // If we auto-claimed, it might be marked done now.
-                // We can try to match the awardId if we really wanted, but for now let's just use the strict availability
-                // or if we signed successfully, maybe we check if any 'first' reward matches the day?
-                // SAFEST FIX: Only show if we find one that is AVAILABLE (before claim) or maybe we can't easily track "just claimed newcomer" without extra logic.
-                // But definitely REMOVE the `totalDays >= 1 && totalDays <= 3` check which causes the bug.
-
-                if (targetFirst) {
-                  const res = finalStatus.resourceInfoMap[targetFirst.awardId];
-                  if (res) {
-                    firstRewardName = `${res.name} x${res.count}`;
-                    if (!rewardIcon) firstRewardIcon = res.icon;
-                  }
-                }
-              }
+            if (res) {
+              if (res.signedNow) successCount++;
+              else if (res.hasToday) alreadySignedCount++;
+              else if (res.error) failCount++;
 
               results.push({
-                roleName: `${role.nickname} (Lv.${role.level})`,
-                rewardName,
-                rewardIcon,
-                firstRewardName,
-                totalDays,
-                status: signedNow
+                roleName: `${res.nickname} (Lv.${res.level})`,
+                rewardName: res.rewardName,
+                rewardIcon: res.rewardIcon,
+                firstRewardName: res.firstRewardName,
+                totalDays: res.totalDays,
+                status: res.signedNow
                   ? tr("daily_Success")
                   : tr("daily_StatusAlready"),
               });
-            } else {
-              failCount++;
             }
           }
         }

@@ -530,8 +530,8 @@ const command: Command = {
             cred,
             result.token,
           );
-          const roles =
-            bindings?.find((b) => b.appCode === "endfield")?.bindingList || [];
+          const endfield = bindings?.find((b) => b.appCode === "endfield");
+          const roles = endfield ? endfield.bindingList : [];
 
           const accountData = {
             cookie: cookie,
@@ -742,8 +742,8 @@ async function handleLoginSuccess(
       cred,
       (result as any).token,
     );
-    const roles =
-      bindings?.find((b) => b.appCode === "endfield")?.bindingList || [];
+    const endfield = bindings?.find((b) => b.appCode === "endfield");
+    const roles = endfield ? endfield.bindingList : [];
 
     const accountData = {
       cookie: cookie,
