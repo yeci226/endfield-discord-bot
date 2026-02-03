@@ -13,16 +13,10 @@ import {
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
-import {
-  getGamePlayerBinding,
-  getCardDetail,
-  CardDetailResponse,
-  verifyToken,
-} from "../../utils/skportApi";
+import { getCardDetail, CardDetailResponse } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
 import { EnumService } from "../../services/EnumService";
-import { extractAccountToken } from "../account/login";
 import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
 
 const command: Command = {

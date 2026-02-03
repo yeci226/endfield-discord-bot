@@ -161,11 +161,11 @@ const command: Command = {
 
     for (let i = 0; i < accounts.length; i++) {
       const account = accounts[i];
-      // AUTO-MIGRATION & REBIND LOGIC
+      // AUTO-MIGRATION & REBIND LOGIC - ensures account.roles is updated if possible
       await ensureAccountBinding(account, userId, db, t.lang);
 
-      // Use stored roles
-      let roles = account.roles;
+      // Use potentially updated roles
+      const roles = account.roles;
       if (!roles || roles.length === 0) continue;
 
       for (const binding of roles) {

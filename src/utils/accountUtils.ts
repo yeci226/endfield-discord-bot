@@ -110,7 +110,29 @@ export async function ensureAccountBinding(
     }
   }
 
-  // Step 2: Full Re-verification if Step 1 failed or no creds
+  // Step 2: Try Refreshing with Cred if Step 1 failed
+  if (!rolesRestored && account.cred) {
+    const { refreshSkToken } = require("./skportApi");
+    const newToken = await refreshSkToken(account.cred);
+    if (newToken) {
+      newSalt = newToken;
+      try {
+        const bindings = await getGamePlayerBinding(
+          account.cookie,
+          lang,
+          account.cred,
+          newSalt,
+        );
+        const endfield = bindings?.find((b) => b.appCode === "endfield");
+        if (endfield && endfield.bindingList) {
+          bindingList = endfield.bindingList;
+          rolesRestored = true;
+        }
+      } catch (e) {}
+    }
+  }
+
+  // Step 3: Full Re-verification if Step 1 & 2 failed or no creds
   if (!rolesRestored) {
     const token = extractAccountToken(account.cookie);
     if (token) {
