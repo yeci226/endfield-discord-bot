@@ -89,16 +89,28 @@ export class AutoDailyService {
         >) || {};
 
       const userIds = Object.keys(dailyData);
-      const eligibleUsers = userIds.filter((userId) => {
+      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
+
+      const eligibleUsers = [];
+      for (const userId of userIds) {
         const config = dailyData[userId];
-        // If auto_balance is true, we need to dynamically determine if this is their slot.
-        // BUT, the plan said "Save/Update ... to autoDaily".
-        // If auto_balance is ON, we should probably have pre-calculated their assigned slot or calculate it now.
-        // For simplicity and stability, let's assume 'time' is the definitive source of truth,
-        // and 'auto_balance' logic happens during 'setup' command execution to set that 'time'.
-        // So here we valid check 'time'.
-        return config.time === currentHour;
-      });
+        if (config.time !== currentHour) continue;
+
+        // Skip if already processed today
+        const lastProcessed = await this.client.db.get(
+          `${userId}.lastAutoDaily`,
+        );
+        if (lastProcessed === today) {
+          console.log(
+            colors.gray(
+              `[AutoDaily] Skipping user ${userId} (already done today)`,
+            ),
+          );
+          continue;
+        }
+
+        eligibleUsers.push(userId);
+      }
 
       console.log(
         colors.cyan(
@@ -191,6 +203,10 @@ export class AutoDailyService {
           }
         }
       }
+
+      // Mark as processed for today
+      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
+      await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
       if (config.notify && (successCount > 0 || alreadySignedCount > 0)) {
         const container = new ContainerBuilder();

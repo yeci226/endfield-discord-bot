@@ -373,6 +373,7 @@ export function generateSignV2(
   // V2 Salt: Use provided salt (token from generate_cred_by_code or refresh) or fallback
   const salt = providedSalt || process.env.SKPORT_SALT_V2 || "";
   // Construct JSON header string (mimicking specific order and no spaces)
+  // Standard Skland V2 signature expects platform, timestamp, dId, vName in this order
   const headerJson = `{"platform":"${platform}","timestamp":"${timestamp}","dId":"${dId}","vName":"${vName}"}`;
 
   const s = `${path}${content}${timestamp}${headerJson}`;
@@ -466,6 +467,12 @@ export async function makeRequest<T>(
     pathname.includes("/v2/");
 
   const signContent = method === "POST" ? bodyString : queryString;
+  const dId = headers.dId || headers.did || "";
+
+  // Ensure dId is in headers if we are using it for signature
+  if (!headers.dId && !headers.did) {
+    headers.dId = dId;
+  }
 
   const sign = useV2
     ? generateSignV2(
@@ -474,7 +481,7 @@ export async function makeRequest<T>(
         headers.timestamp,
         headers.platform,
         headers.vName || headers.vname || "1.0.0",
-        headers.dId || headers.did || "",
+        dId,
         options.salt,
       )
     : generateSign(pathname, queryString, headers.timestamp);

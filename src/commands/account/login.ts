@@ -36,16 +36,28 @@ import { decryptAccount } from "../../utils/cryptoUtils";
 
 export const extractAccountToken = (input: string): string => {
   if (!input) return "";
+  let target = input.trim();
+
+  // 0. Handle JSON if the user pasted the whole account object or info
+  if (target.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(target);
+      if (parsed.token) return String(parsed.token);
+      if (parsed.ACCOUNT_TOKEN) return String(parsed.ACCOUNT_TOKEN);
+      if (parsed.cookie) return extractAccountToken(String(parsed.cookie));
+      // If it's just an info object without token, we can't do much, but let's see if there's anything else
+    } catch (e) {}
+  }
+
   // 1. If it's a full cookie string, find ACCOUNT_TOKEN
-  const tokenMatch = input.match(/ACCOUNT_TOKEN=([^;\s]+)/);
+  const tokenMatch = target.match(/ACCOUNT_TOKEN=([^;\s]+)/);
   if (tokenMatch) return tokenMatch[1];
 
-  // 2. If it's just the value or something else, handle it
-  // If it contains other keys but not ACCOUNT_TOKEN, it might be the value itself if it's long
-  if (!input.includes("=") && input.length > 20) return input;
+  // 2. If it contains other keys but not ACCOUNT_TOKEN, it might be the value itself if it's long
+  if (!target.includes("=") && target.length > 20) return target;
 
-  // Fallback
-  return input;
+  // Fallback (might be a raw token)
+  return target;
 };
 
 const command: Command = {

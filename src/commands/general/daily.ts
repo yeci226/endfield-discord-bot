@@ -345,15 +345,19 @@ async function handleSetup(
     toI18nLang(interaction.locale);
   const t = createTranslator(userLang);
 
+  let setupContent =
+    `### ${t("daily_SetupSuccess")}\n` +
+    `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
+    `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
+    `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\``;
+
+  if (userConfig.notify_method !== "dm") {
+    setupContent += `\n**${t("daily_SetupChannel")}**: <#${userConfig.channelId}>`;
+  }
+
   const container = new ContainerBuilder();
   container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      `### ${t("daily_SetupSuccess")}\n` +
-        `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
-        `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
-        `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\`\n` +
-        `**${t("daily_SetupChannel")}**: <#${userConfig.channelId}>`,
-    ),
+    new TextDisplayBuilder().setContent(setupContent),
   );
 
   await interaction.reply({
