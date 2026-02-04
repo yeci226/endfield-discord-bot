@@ -21,6 +21,8 @@ export class ExtendedClient extends Client {
   public cluster: ClusterClient<Client>;
 
   constructor() {
+    const isSharded = process.env.CLUSTER !== undefined;
+
     super({
       intents: [GatewayIntentBits.Guilds],
       partials: [
@@ -29,12 +31,20 @@ export class ExtendedClient extends Client {
         Partials.Message,
         Partials.User,
       ],
-      shards: getInfo().SHARD_LIST,
-      shardCount: getInfo().TOTAL_SHARDS,
+      shards: isSharded ? getInfo().SHARD_LIST : [0],
+      shardCount: isSharded ? getInfo().TOTAL_SHARDS : 1,
     });
 
-    this.cluster = new ClusterClient(this);
-    new AutoResharderClusterClient(this.cluster);
+    if (isSharded) {
+      this.cluster = new ClusterClient(this);
+      new AutoResharderClusterClient(this.cluster);
+    } else {
+      // Standalone mode: Provide a mock for sharding properties
+      this.cluster = {
+        id: 0,
+        broadcastEval: async () => [],
+      } as any;
+    }
     this.db = new CustomDatabase("json.sqlite");
   }
 

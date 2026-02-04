@@ -56,12 +56,26 @@ export class AutoDailyService {
     }, msUtilNextHour + 1000);
   }
 
-  private async runHourlyCheck() {
-    if (this.isRunning) return;
-    this.isRunning = true;
+  public async manualRunRange(startHour: number, endHour: number) {
+    console.log(
+      colors.yellow(
+        `[AutoDaily] Manually running range: ${startHour}:00 to ${endHour}:00 (Asia/Taipei)`,
+      ),
+    );
+    for (let h = startHour; h <= endHour; h++) {
+      await this.runHourlyCheck(h);
+    }
+  }
+
+  private async runHourlyCheck(targetHour?: number) {
+    if (this.isRunning && targetHour === undefined) return;
+    if (targetHour === undefined) this.isRunning = true;
 
     try {
-      const currentHour = parseInt(moment().tz("Asia/Taipei").format("H"));
+      const currentHour =
+        targetHour !== undefined
+          ? targetHour
+          : parseInt(moment().tz("Asia/Taipei").format("H"));
       console.log(
         colors.blue(
           `[AutoDaily] Running checks for hour ${currentHour}:00 (Asia/Taipei)`,
@@ -212,37 +226,44 @@ export class AutoDailyService {
         const notifyMethod = config.notify_method;
         const channelId = config.channelId;
 
-        await this.client.cluster.broadcastEval(
-          async (c: any, context: any) => {
-            try {
-              if (context.notifyMethod === "dm") {
-                const user = c.users.cache.get(context.userId);
-                if (user) {
-                  await user.send(context.payload);
-                  return true;
+        try {
+          await this.client.cluster.broadcastEval(
+            async (c: any, context: any) => {
+              try {
+                if (context.notifyMethod === "dm") {
+                  const user = c.users.cache.get(context.userId);
+                  if (user) {
+                    await user.send(context.payload);
+                    return true;
+                  }
+                } else if (
+                  context.notifyMethod === "channel" &&
+                  context.channelId
+                ) {
+                  const channel = c.channels.cache.get(context.channelId);
+                  if (channel) {
+                    await channel.send(context.payload);
+                    return true;
+                  }
                 }
-              } else if (
-                context.notifyMethod === "channel" &&
-                context.channelId
-              ) {
-                const channel = c.channels.cache.get(context.channelId);
-                if (channel) {
-                  await channel.send(context.payload);
-                  return true;
-                }
-              }
-            } catch (e) {}
-            return false;
-          },
-          {
-            context: {
-              userId,
-              payload,
-              notifyMethod,
-              channelId,
+              } catch (e) {}
+              return false;
             },
-          },
-        );
+            {
+              context: {
+                userId,
+                payload,
+                notifyMethod,
+                channelId,
+              },
+            },
+          );
+        } catch (e) {
+          console.error(
+            colors.red("[AutoDaily] Failed to broadcast notification:"),
+            e instanceof Error ? e.message : e,
+          );
+        }
       }
     } catch (error) {
       console.error(
