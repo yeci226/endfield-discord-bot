@@ -20,7 +20,8 @@
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.3",
     "moment": "^2.30.1",
-    "moment-timezone": "^0.6.0"
+    "moment-timezone": "^0.6.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -364,47 +364,51 @@ const command: Command = {
           const { geetestId, riskType, challenge } = result.data.captcha;
           const sessionId = Math.random().toString(36).substring(2, 12);
           const baseUrl =
-            process.env.VERIFY_PUBLIC_URL || "http://localhost:3838";
+            process.env.VERIFY_HUB_PUBLIC_URL || "http://localhost:5500";
           const verifyUrl = `${baseUrl}/verify?captchaId=${geetestId}&riskType=${encodeURIComponent(riskType)}&challenge=${challenge}&session=${sessionId}`;
 
           VerificationServer.onResult(sessionId, async (captchaResult: any) => {
-            const loginRes = await loginByEmailPassword(
-              { email, password },
-              captchaResult,
-            );
-            if (loginRes && loginRes.status === 0 && loginRes.data?.token) {
-              await handleLoginSuccess(
-                interaction,
-                loginRes.data.token,
-                db,
-                tr,
-                true,
+            try {
+              const loginRes = await loginByEmailPassword(
+                { email, password },
+                captchaResult,
               );
-            } else {
-              const errContainer =
-                new ContainerBuilder().addTextDisplayComponents(
-                  new TextDisplayBuilder().setContent(
-                    `❌ **驗證後自動登入失敗**\n${loginRes?.msg || "代碼已過期"}`,
-                  ),
+              if (loginRes && loginRes.status === 0 && loginRes.data?.token) {
+                await handleLoginSuccess(
+                  interaction,
+                  loginRes.data.token,
+                  db,
+                  tr,
+                  true,
                 );
-              await interaction.followUp({
-                content: "",
-                flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-                components: [errContainer],
-              });
+              } else {
+                const errContainer =
+                  new ContainerBuilder().addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(
+                      `❌ **驗證後自動登入失敗**\n${loginRes?.msg || "代碼已過期"}`,
+                    ),
+                  );
+                await interaction.followUp({
+                  content: "",
+                  flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+                  components: [errContainer],
+                });
+              }
+            } catch (e: any) {
+              console.error("[Login] Captcha auto-retry failed:", e);
             }
           });
 
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              tr("login_CaptchaRequired").replace("<url>", verifyUrl),
+              "為了保護您的帳號安全，請點擊下方按鈕在瀏覽器中完成 Geetest 驗證。驗證完成後，機器人將會自動繼續登入流程。",
             ),
           );
 
           const verifyBtn = new ButtonBuilder()
-            .setCustomId(`login:verify:${email}:${password}:${sessionId}`)
-            .setLabel(tr("login_ManualVerify"))
-            .setStyle(ButtonStyle.Secondary);
+            .setLabel("進行驗證 (Verify)")
+            .setURL(verifyUrl)
+            .setStyle(ButtonStyle.Link);
 
           const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
             verifyBtn,
@@ -647,66 +651,6 @@ const command: Command = {
 
     await interaction.respond(filtered.slice(0, 25));
   },
-};
-
-// Handle Button and subsequent result check
-export const handleLoginButton = async (
-  interaction: any,
-  client: ExtendedClient,
-  db: CustomDatabase,
-) => {
-  const { createTranslator, toI18nLang } = require("../../utils/i18n");
-  const userLang =
-    (await db.get(`${interaction.user.id}.locale`)) ||
-    toI18nLang(interaction.locale);
-  const tr = createTranslator(userLang);
-
-  if (interaction.customId.startsWith("login:verify:")) {
-    const [, , email, password, sessionId] = interaction.customId.split(":");
-
-    // Check if server already has the result
-    const serverResult = VerificationServer.getResult(sessionId);
-
-    if (serverResult) {
-      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const loginRes = await loginByEmailPassword(
-        { email, password },
-        serverResult,
-      );
-      if (loginRes && loginRes.status === 0 && loginRes.data?.token) {
-        return handleLoginSuccess(interaction, loginRes.data.token, db, tr);
-      } else {
-        const container = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `❌ ${tr("AuthError")}\n${loginRes?.msg || tr("UnknownError")}`,
-          ),
-        );
-        await interaction.editReply({
-          content: "",
-          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-          components: [container],
-        });
-      }
-      return;
-    }
-
-    // Fallback to Modal if not found automatically
-    const modal = new ModalBuilder()
-      .setCustomId(`login:captcha:${email}:${password}`)
-      .setTitle(tr("login_ManualVerify"));
-
-    const resultInput = new TextInputBuilder()
-      .setCustomId("captcha_result")
-      .setLabel("驗證 JSON 代碼 (請貼上網頁提供的 JSON)")
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder('{"captcha_id": "...", "lot_number": "...", ...}')
-      .setRequired(true);
-
-    modal.addComponents(
-      new ActionRowBuilder<TextInputBuilder>().addComponents(resultInput),
-    );
-    await interaction.showModal(modal);
-  }
 };
 
 async function handleLoginSuccess(

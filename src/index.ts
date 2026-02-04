@@ -16,10 +16,10 @@ import { VerificationServer } from "./utils/VerificationServer";
 
   // Initialize VerifyServer on all clusters for session registration
   const verifyServer = new VerificationServer(client);
+  verifyServer.start();
 
   // 只有在 Cluster 0 啟動全域服務
   if (client.cluster.id === 0) {
-    verifyServer.start();
     client.newsService.start();
     client.autoDailyService.start();
   }
