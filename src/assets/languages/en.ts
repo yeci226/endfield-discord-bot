@@ -64,6 +64,48 @@ const langs: Record<string, any> = {
 
   // Profile Command
   profile_SelectCharacter: "Select an operator to show details",
+  profile_Config: "Custom Profile Configuration",
+  profile_Config_Template: "Apply Template UUID",
+  profile_Config_Background: "Change Background (URL)",
+  profile_Config_Toggle: "Toggle Visibility",
+  profile_Config_Share: "Share Current Layout",
+  profile_Config_Reset: "Reset to Default",
+  profile_Config_Success: "Configuration Updated!",
+  profile_Config_InvalidUUID: "Invalid UUID",
+  profile_Config_ShareSuccess: "Your layout UUID is: `{uuid}`",
+  profile_Editor_Title: "🎨 Profile Editor",
+  profile_Editor_Desc:
+    "Use the components below to adjust your layout. The preview image will update in real-time.",
+  profile_Editor_TogglePlaceholder: "Toggle elements...",
+  profile_Editor_ChangeBG: "Change BG",
+  profile_Editor_Share: "Share UUID",
+  profile_Editor_Reset: "Reset",
+  profile_Editor_Finish: "Finish & Save",
+  profile_Editor_LayoutEdit: "Layout Edit",
+  profile_Editor_LayoutModal_Title: "Adjust: {element}",
+  profile_Editor_Prop_X: "X Coordinate",
+  profile_Editor_Prop_Y: "Y Coordinate",
+  profile_Editor_Prop_Width: "Width",
+  profile_Editor_Prop_Height: "Height",
+  profile_Editor_Prop_FontSize: "Font Size",
+  profile_Editor_SelectToEdit: "Select element to adjust",
+  profile_Editor_WebLinkDesc:
+    "## Please open the link below to open the web editor:\n{url}\n*(Valid for 15 minutes)* ",
+  profile_Editor_BGModal_Title: "Change Background",
+  profile_Editor_BGModal_URL: "Image URL",
+  profile_Config_Elements: {
+    avatar: "Avatar",
+    name: "Nickname",
+    badge: "UID/Server Info",
+    statsGrid: "Statistics",
+    missionBox: "Main Mission",
+    authLevelBox: "Auth Level",
+    realtimeTitle: "Real-time Data Title",
+    staminaBox: "Stamina Info",
+    activityBpBox: "Activity & BP",
+    operatorsTitle: "Operators List Title",
+    operatorsGrid: "Operators List",
+  },
 
   // Canvas UI Labels
   canvas_ExploreLevel: "Explore Lv.",
@@ -108,7 +150,7 @@ const langs: Record<string, any> = {
   login_CookieSetTitle: "Set Endfield Cookie",
   login_CookiePlaceholder: "ACCOUNT_TOKEN=...",
   login_CookieSuccess:
-    "✅ **Verification Successful**\nWelcome Admin, **<name>**!\nAccount added and credentials synchronized.",
+    "✅ **Verification Successful**\nWelcome Admin, **<name>**!\nAccount added.",
   login_CaptchaRequired:
     "🛡️ **Captcha Required by Gryphline**\nPlease click the URL below to open in your browser:\n**[👉 Click here to verify](<url>)**\n\n1. The captcha will load automatically.\n2. After completing, the result will be sent back.\n3. **The bot will finish login automatically upon detection.**",
   login_ManualVerify: "Check Status Manually",
@@ -117,10 +159,12 @@ const langs: Record<string, any> = {
   gacha_Title: "# Current Gacha Pools",
   gacha_CharPool: "Character: <name>",
   gacha_WeaponPool: "Weapon: <name>",
-  gacha_Time: "-# Duration: <start> - <end>",
   gacha_CharEmpty: "## Character Pool\nNo active character pools currently.",
   gacha_WeaponEmpty: "## Weapon Pool\nNo active weapon pools currently.",
   gacha_NoData: "No gacha information available currently.",
+  gacha_Global_End:
+    "Americas/Europe: Will end at <globalEndTs> (<globalEndTsRelative>)",
+  gacha_Asia_End: "Asia: Will end at <asiaEndTs> (<asiaEndTsRelative>)",
 
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",

@@ -27,7 +27,7 @@ import {
 } from "../../utils/skportApi";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
-import { VerificationServer } from "../../utils/VerificationServer";
+import { VerificationClient } from "../../web/VerificationClient";
 import { getAccounts, saveAccounts } from "../../utils/accountUtils";
 import { decryptAccount } from "../../utils/cryptoUtils";
 
@@ -359,15 +359,48 @@ const command: Command = {
 
         if (
           result.msg === "Human-machine verification required." &&
-          result.data?.captcha
+          (result.data?.captcha || result.aigisHeader)
         ) {
-          const { geetestId, riskType, challenge } = result.data.captcha;
+          let captchaData = result.data?.captcha;
+          let aigisData: any = {};
+
+          if (result.aigisHeader) {
+            aigisData = JSON.parse(result.aigisHeader);
+            if (typeof aigisData.data === "string") {
+              captchaData = JSON.parse(aigisData.data);
+            } else {
+              captchaData = aigisData.data;
+            }
+          }
+
+          const geetestId = captchaData?.gt || result.data?.captcha?.geetestId;
+          const riskType =
+            aigisData?.mmt_type || result.data?.captcha?.riskType;
+          const challenge =
+            captchaData?.challenge || result.data?.captcha?.challenge;
+          const success = captchaData?.success;
+          const new_captcha = captchaData?.new_captcha;
+          const aigisSessionId = aigisData?.session_id;
+
           const sessionId = Math.random().toString(36).substring(2, 12);
           const baseUrl =
-            process.env.VERIFY_HUB_PUBLIC_URL || "http://localhost:5500";
-          const verifyUrl = `${baseUrl}/verify?captchaId=${geetestId}&riskType=${encodeURIComponent(riskType)}&challenge=${challenge}&session=${sessionId}`;
+            process.env.VERIFY_PUBLIC_URL || "http://localhost:3000/endfield";
 
-          VerificationServer.onResult(sessionId, async (captchaResult: any) => {
+          const params = new URLSearchParams({
+            captchaId: geetestId,
+            challenge: challenge,
+            session: sessionId,
+          });
+          if (riskType) params.append("riskType", riskType.toString());
+          if (success !== undefined)
+            params.append("success", success.toString());
+          if (new_captcha !== undefined)
+            params.append("new_captcha", new_captcha.toString());
+          if (aigisSessionId) params.append("aigisSessionId", aigisSessionId);
+
+          const verifyUrl = `${baseUrl}/verify?${params.toString()}`;
+
+          VerificationClient.onResult(sessionId, async (captchaResult: any) => {
             try {
               const loginRes = await loginByEmailPassword(
                 { email, password },

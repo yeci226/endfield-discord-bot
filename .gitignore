@@ -3,3 +3,7 @@
 /node_modules
 /src/assets/remote_cache/*
 /json.sqlite*
+/wiki_debug.log
+/src/assets/illustrators/*
+/src/web/WebManager.ts
+/src/web/VerificationClient.ts

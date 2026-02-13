@@ -3,25 +3,33 @@ import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
 import { SkportNewsService } from "./services/SkportNewsService";
 import { AutoDailyService } from "./services/AutoDailyService";
-import { VerificationServer } from "./utils/VerificationServer";
+import { VerificationClient } from "./web/VerificationClient";
+import { CharacterWikiService } from "./services/CharacterWikiService";
+import { WebManager } from "./web/WebManager";
 
 (async () => {
   const client = new ExtendedClient();
   client.newsService = new SkportNewsService(client);
   client.autoDailyService = new AutoDailyService(client);
+  client.wikiService = new CharacterWikiService(client);
 
   await loadCommands(client);
   await loadEvents(client);
   client.start();
 
-  // Initialize VerifyServer on all clusters for session registration
-  const verifyServer = new VerificationServer(client);
-  verifyServer.start();
+  // Initialize WebManager
+  const webManager = new WebManager(client);
+  webManager.start();
+
+  // Initialize VerificationClient on all clusters for session registration
+  const verifyClient = new VerificationClient(client);
+  verifyClient.start();
 
   // 只有在 Cluster 0 啟動全域服務
   if (client.cluster.id === 0) {
     client.newsService.start();
     client.autoDailyService.start();
+    // client.wikiService.start();
   }
 
   // Process Error Handling

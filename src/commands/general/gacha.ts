@@ -58,12 +58,17 @@ const command: Command = {
         charPoolData.data.list.length > 0
       ) {
         for (const charPool of charPoolData.data.list) {
+          const nowTs = Math.floor(Date.now() / 1000);
+
+          // Asia (UTC+8) - base timestamp from API
+          const asiaEndTs = Number(charPool.poolEndAtTs);
+          // Americas/Europe - roughly 13 hours after Asia if local time is same
+          const globalEndTs = asiaEndTs + 13 * 3600;
+
           const charPoolHeader =
-            tr("gacha_CharPool").replace("<name>", charPool.name) +
-            "\n" +
-            tr("gacha_Time")
-              .replace("<start>", `<t:${charPool.poolStartAtTs}:f>`)
-              .replace("<end>", `<t:${charPool.poolEndAtTs}:f>`);
+            `## ${charPool.name}\n` +
+            `${tr("gacha_Global_End", { globalEndTs: `<t:${globalEndTs}:f>`, globalEndTsRelative: `<t:${globalEndTs}:R>` })}\n` +
+            `${tr("gacha_Asia_End", { asiaEndTs: `<t:${asiaEndTs}:f>`, asiaEndTsRelative: `<t:${asiaEndTs}:R>` })}`;
 
           container.addSeparatorComponents(
             new SeparatorBuilder().setDivider(true).setSpacing(2),
@@ -92,55 +97,7 @@ const command: Command = {
         hasData = true; // Still show the message
       }
 
-      // --- Weapon Pools ---
-      if (
-        weaponPoolData &&
-        weaponPoolData.code === 0 &&
-        weaponPoolData.data.list.length > 0
-      ) {
-        for (const weaponPool of weaponPoolData.data.list) {
-          const weaponPoolHeader =
-            tr("gacha_WeaponPool").replace("<name>", weaponPool.name) +
-            "\n" +
-            tr("gacha_Time")
-              .replace("<start>", `<t:${weaponPool.poolStartAtTs}:f>`)
-              .replace("<end>", `<t:${weaponPool.poolEndAtTs}:f>`);
-
-          container.addSeparatorComponents(
-            new SeparatorBuilder().setDivider(true).setSpacing(2),
-          );
-          container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(weaponPoolHeader),
-          );
-
-          const weaponGallery = new MediaGalleryBuilder();
-          weaponPool.weapons.forEach((w: any) => {
-            if (w.pic) {
-              weaponGallery.addItems(
-                new MediaGalleryItemBuilder({ media: { url: w.pic } }),
-              );
-            }
-          });
-          if (weaponGallery.items.length > 0) {
-            container.addMediaGalleryComponents(weaponGallery);
-          }
-          hasData = true;
-        }
-      } else {
-        container.addSeparatorComponents(
-          new SeparatorBuilder().setDivider(true).setSpacing(2),
-        );
-        container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(tr("gacha_WeaponEmpty")),
-        );
-        hasData = true;
-      }
-
-      if (!hasData) {
-        return interaction.editReply({
-          content: tr("gacha_NoData"),
-        });
-      }
+      // No weapon pool display as requested, but we keep the API call for potential future use or consistency
 
       await interaction.editReply({
         content: "",

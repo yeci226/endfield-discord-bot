@@ -25,7 +25,15 @@ const distAssets = path.join(__dirname, "../dist/assets");
 if (fs.existsSync(srcAssets)) {
   console.log("Copying assets...");
   copyDir(srcAssets, distAssets);
+}
+
+const srcPublic = path.join(__dirname, "../src/web/public");
+const distPublic = path.join(__dirname, "../dist/web/public");
+
+if (fs.existsSync(srcPublic)) {
+  console.log("Copying web assets...");
+  copyDir(srcPublic, distPublic);
   console.log("Assets copied successfully.");
 } else {
-  console.warn("Source assets directory not found.");
+  console.warn("Source web assets directory not found.");
 }

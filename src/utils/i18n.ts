@@ -16,6 +16,7 @@ export function createTranslator(lang: string) {
     if (options && typeof options === "object") {
       for (const [key, value] of Object.entries(options)) {
         str = str.replace(new RegExp(`<${key}>`, "g"), String(value));
+        str = str.replace(new RegExp(`{${key}}`, "g"), String(value));
       }
     }
 

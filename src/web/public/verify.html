@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://static.geetest.com/static/tools/gt.js"></script>
     <script src="https://static.geetest.com/v4/gt4.js"></script>
     <style>
         :root {
@@ -185,6 +186,21 @@
             overflow: auto;
             margin-top: 1rem;
         }
+        .retry-btn {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #f4b400;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-family: inherit;
+            transition: background-color 0.2s;
+        }
+        .retry-btn:hover {
+            background-color: #d89f00;
+        }
     </style>
 </head>
 <body>
@@ -234,6 +250,20 @@
         const riskType = params.get("riskType");
         const challenge = params.get("challenge");
         const sessionId = params.get("session");
+        const successParam = params.get("success");
+        const newCaptchaParam = params.get("new_captcha");
+        const aigisSessionId = params.get("aigisSessionId");
+
+        console.log("[Verification] Params:", {
+            captchaId,
+            riskType,
+            challenge,
+            sessionId,
+            successParam,
+            newCaptchaParam,
+            aigisSessionId
+        });
+        
 
         if (!captchaId || !riskType || !challenge) {
             statusText.textContent = "❌ 參數缺失，請重新從 Discord 發起指令";
@@ -244,52 +274,118 @@
         }
 
         function initVerification() {
-            window.initGeetest4({
-                captchaId: captchaId,
-                riskType: riskType,
-                challenge: challenge,
-                language: "zho",
-                product: "float"
-            }, function (captchaObj) {
-                loadingSpinner.style.display = "none";
-                captchaObj.appendTo("#captcha");
+            // Decision logic for Geetest version based on Aigis riskType (mmt_type)
+            // 1 = Geetest v3, 2 = Geetest v4
+            let version = 4; // Default to v4
+            if (riskType === "1") {
+                version = 3;
+            } else if (riskType === "2") {
+                version = 4;
+            } else if (challenge && challenge.length === 32) {
+                // Fallback for legacy URLs or missing riskType
+                version = 3;
+            }
 
-                let hasSubmitted = false;
-                captchaObj.onSuccess(() => {
-                    if (hasSubmitted) return;
-                    const result = captchaObj.getValidate();
-                    const finalResult = { ...result, challenge: challenge };
-                    
-                    if (sessionId) {
-                        hasSubmitted = true;
-                        statusText.textContent = "正在同步結果...";
-                        statusText.style.display = "block";
-                        
-                        fetch("/callback", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ sessionId: sessionId, result: finalResult })
-                        })
-                        .then(res => res.json())
-                        .then(data => {
-                            if (data.success) {
-                                showSuccess();
-                            } else {
-                                showError(finalResult);
-                            }
-                        })
-                        .catch(err => showError(finalResult));
-                    } else {
-                        showError(finalResult, "找不到 Session ID，請複製代碼");
-                    }
-                });
+            console.log(`[Verification] Detected Version: v${version} (riskType: ${riskType}, challenge length: ${challenge ? challenge.length : 0})`);
 
-                captchaObj.onError((err) => {
-                    statusText.textContent = "❌ 驗證碼載入失敗";
-                    statusText.style.display = "block";
+            if (version === 4) {
+                console.log("[Verification] Using Geetest v4");
+                window.initGeetest4({
+                    captchaId: captchaId,
+                    language: "zho",
+                    product: "float"
+                }, function (captchaObj) {
                     loadingSpinner.style.display = "none";
+                    captchaObj.appendTo("#captcha");
+                    captchaObj.onSuccess(() => {
+                        const result = captchaObj.getValidate();
+                        handleCallback(result);
+                    });
+                    captchaObj.onError((err) => {
+                        console.error("[Geetest v4] Error:", err);
+                        statusText.textContent = `❌ Geetest v4 載入失敗: ${err.msg || "網路錯誤"}`;
+                        statusText.style.display = "block";
+                        loadingSpinner.style.display = "none";
+                    });
                 });
+            } else {
+                const isOversea = aigisSessionId && (aigisSessionId.endsWith("_SG") || aigisSessionId.endsWith("_oversea"));
+                const apiServer = isOversea ? "api-na.geetest.com" : "api.geetest.com";
+                console.log(`[Verification] v3 Region Setup: ${isOversea ? "Oversea" : "CN"}, API Server: ${apiServer}`);
+
+                window.initGeetest({
+                    gt: captchaId,
+                    challenge: challenge,
+                    offline: false,
+                    new_captcha: newCaptchaParam === "1" || newCaptchaParam === "true",
+                    product: "popup",
+                    width: "100%",
+                    language: "zh-tw",
+                    success: successParam === "1" ? 1 : undefined,
+                    api_server: apiServer
+                }, function (captchaObj) {
+                    loadingSpinner.style.display = "none";
+                    captchaObj.appendTo("#captcha");
+
+                    captchaObj.onSuccess(() => {
+                        const validate = captchaObj.getValidate();
+                        const result = {
+                            geetest_challenge: validate.geetest_challenge,
+                            geetest_validate: validate.geetest_validate,
+                            geetest_seccode: validate.geetest_seccode,
+                            session_id: aigisSessionId
+                        };
+                        handleCallback(result);
+                    });
+                    captchaObj.onReady(() => {
+                        loadingSpinner.style.display = "none";
+                        console.log("[Geetest v3] Ready");
+                    });
+                    captchaObj.onError((err) => {
+                        console.error("[Geetest v3] Error detail:", err);
+                        statusText.textContent = `❌ Geetest v3 載入失敗: ${err.msg || "未知錯誤"}`;
+                        statusText.style.display = "block";
+                        loadingSpinner.style.display = "none";
+
+                        if (err.msg === "not proof") {
+                            statusText.innerHTML = `❌ Geetest v3 發生 not proof 錯誤 <br> <button onclick="window.initGeetest4({captchaId:'${captchaId}',language:'zho',product:'float'}, g4Fallback)" class="retry-btn">嘗試使用 v4 強制加載</button>`;
+                        }
+                    });
+                });
+            }
+        }
+
+        function g4Fallback(captchaObj) {
+            const captchaContainer = document.querySelector("#captcha");
+            captchaContainer.innerHTML = ""; // Clear v3
+            captchaObj.appendTo("#captcha");
+            captchaObj.onSuccess(() => {
+                handleCallback(captchaObj.getValidate());
             });
+        }
+
+        function handleCallback(result) {
+            if (sessionId) {
+                statusText.textContent = "正在同步結果...";
+                statusText.style.display = "block";
+                
+                fetch("/callback", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ sessionId: sessionId, result: result })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        showSuccess();
+                    } else {
+                        showError(result);
+                    }
+                })
+                .catch(err => showError(result));
+            } else {
+                showError(result, "找不到 Session ID，請複製代碼");
+            }
         }
 
         function showSuccess() {

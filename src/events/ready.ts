@@ -1,4 +1,4 @@
-import { Events, REST, Routes, Client, ActivityType } from "discord.js";
+import { Events, REST, Routes, ActivityType } from "discord.js";
 import { Event } from "../interfaces/Event";
 import { Logger } from "../utils/Logger";
 

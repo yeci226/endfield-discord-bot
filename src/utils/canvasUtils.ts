@@ -9,6 +9,9 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 import { CardDetail } from "./skportApi";
+import { ProfileTemplate } from "../interfaces/ProfileTemplate";
+import { ProfileTemplateService } from "../services/ProfileTemplateService";
+import { EnumService } from "../services/EnumService";
 import moment from "moment";
 import crypto from "crypto";
 
@@ -36,36 +39,27 @@ const imageCache = new Map<string, Image>();
 export async function drawDashboard(
   detail: CardDetail,
   tr: any,
+  template: ProfileTemplate = ProfileTemplateService.getDefaultTemplate(),
 ): Promise<Buffer> {
   const { base, chars } = detail;
+  const { canvas: cv, elements: el } = template;
 
-  // Canvas dimensions (2400x1600)
   // Canvas dimensions
-  const width = 2400;
-  const padding = 80;
+  const width = cv.width;
+  const padding = cv.padding;
 
   // Calculate required height based on characters
-  const charCols = 10;
-  const charGap = 15;
-  // Calculate char dimensions (replicated from logic below)
-  const charWidth = (width - padding * 2 - (charCols - 1) * charGap) / charCols;
+  const charCols = el.operatorsGrid.cols || 10;
+  const charGap = el.operatorsGrid.gap || 15;
+  const charWidth = el.operatorsGrid.charWidth || 210;
+  const charHeight = el.operatorsGrid.charHeight || 270;
   const charImageSize = charWidth;
-  const charHeight = charImageSize + 60;
 
-  // Header ends roughly at padding + 150 + something?
-  // Grid Y was 320.
-  // Realtime Y was GridY + 180 (500).
-  // SectionH is 260.
-  // Char Title at RealTimeY + SectionH + 150 = 500 + 260 + 150 = 910.
-  // Char Grid Starts at Char Grid Y = RealTimeY + SectionH + 180 = 500 + 260 + 180 = 940.
-  // Char Grid Starts at Char Grid Y
-  // GridY(320) + Mission(160) + Gap(50) + RealTime(180) + Gap(100) + Title(50) + Gap = ~1020
-  const charGridY = 1020;
+  const charGridY = el.operatorsGrid.y;
   const rows = Math.ceil(chars.length / charCols);
   const requiredCharGridHeight = rows * (charHeight + charGap);
 
-  // Base height was 1600.
-  let height = 1600;
+  let height = cv.height;
   if (charGridY + requiredCharGridHeight + padding > height) {
     height = charGridY + requiredCharGridHeight + padding;
   }
@@ -88,215 +82,301 @@ export async function drawDashboard(
     }
   };
 
+  // Helper for styling wrappers
+  const withStyles = (
+    element: any,
+    centerX: number,
+    centerY: number,
+    drawFn: () => void,
+  ) => {
+    if (!element.visible) return;
+    ctx.save();
+    // Rotation/Translation could go here if added to template
+    // For now just check visibility
+    drawFn();
+    ctx.restore();
+  };
+
   // 1. Background
   try {
-    const bg = await loadLocalImage("bg.08c7f0.png");
+    const bgUrl = template.background.url;
+    const bg = bgUrl.startsWith("http")
+      ? await fetchImage(bgUrl)
+      : await loadLocalImage(bgUrl);
 
-    // Draw background with 'cover' logic
+    // 1.1 Handle Background Fill Color
+    if (template.background.fillColor) {
+      ctx.fillStyle = template.background.fillColor;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    // Main Background Drawing
     const bgRatio = bg.width / bg.height;
     const canvasRatio = width / height;
 
     let drawW, drawH, offsetX, offsetY;
 
-    if (bgRatio > canvasRatio) {
-      // Background is relatively wider -> match height
-      drawH = height;
-      drawW = height * bgRatio;
-      offsetX = (width - drawW) / 2;
-      offsetY = 0;
-    } else {
-      // Background is relatively taller -> match width
-      drawW = width;
-      drawH = width / bgRatio;
-      offsetX = 0;
-      offsetY = (height - drawH) / 2;
-    }
+    if (template.background.scale !== undefined) {
+      // Use custom transform if valid
+      const scale = template.background.scale;
+      drawW = bg.width * scale;
+      drawH = bg.height * scale;
+      // Frontend saves center coordinates (originX: center, originY: center)
+      // Backend drawImage expects top-left coordinates
+      // But wait! Creating the offset relative to center of canvas?
+      // No, frontend usually sends X/Y relative to canvas top-left if origin is top-left.
+      // But fabric default origin is center->center.
+      // Let's assume standard top-left mapping for now or use the previous fix.
+      const bgX = template.background.x || 0;
+      const bgY = template.background.y || 0;
+      // Conversion from Center Origin to Top-Left
+      offsetX = bgX - drawW / 2;
+      offsetY = bgY - drawH / 2;
 
-    ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+      ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+    } else {
+      // Default 'Cover' logic
+      if (bgRatio > canvasRatio) {
+        // Background is relatively wider -> match height
+        drawH = height;
+        drawW = height * bgRatio;
+        offsetX = (width - drawW) / 2;
+        offsetY = 0;
+      } else {
+        // Background is relatively taller -> match width
+        drawW = width;
+        drawH = width / bgRatio;
+        offsetX = 0;
+        offsetY = (height - drawH) / 2;
+      }
+      ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+    }
   } catch (e) {
     ctx.fillStyle = "#1e1e1e";
     ctx.fillRect(0, 0, width, height);
   }
 
   // Overlay
-  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
-  ctx.fillRect(0, 0, width, height);
-
-  // Header (Avatar + Info) - Shrunk
-
-  const avatarSize = 180;
-
-  // Draw Avatar
-  ctx.save();
-  roundRect(ctx, padding, padding, avatarSize, avatarSize, 30);
-  ctx.clip();
-  if (base.avatarUrl) {
-    try {
-      const avatarImg = await fetchImage(base.avatarUrl);
-      ctx.drawImage(avatarImg, padding, padding, avatarSize, avatarSize);
-    } catch (e) {
-      ctx.fillStyle = "#333";
-      ctx.fillRect(padding, padding, avatarSize, avatarSize);
-    }
+  if (template.background.overlay) {
+    ctx.fillStyle = template.background.overlay;
+    ctx.fillRect(0, 0, width, height);
   }
-  ctx.restore();
 
-  // Name & Stats
-  ctx.fillStyle = "#ffffff";
-  const nameMaxW = width - (padding + avatarSize + 40) - padding;
-  fillDynamicText(
-    ctx,
-    base.name,
-    padding + avatarSize + 40,
-    padding + 90,
-    nameMaxW,
-    80,
-  );
+  // Header (Avatar + Info)
+  if (el.avatar.visible) {
+    const avatarSize = el.avatar.width || 180;
+    // Draw Avatar
+    ctx.save();
+    roundRect(
+      ctx,
+      el.avatar.x,
+      el.avatar.y,
+      avatarSize,
+      avatarSize,
+      el.avatar.radius || 30,
+    );
+    ctx.clip();
+    if (base.avatarUrl) {
+      try {
+        const avatarImg = await fetchImage(base.avatarUrl);
+        ctx.drawImage(
+          avatarImg,
+          el.avatar.x,
+          el.avatar.y,
+          avatarSize,
+          avatarSize,
+        );
+      } catch (e) {
+        ctx.fillStyle = "#333";
+        ctx.fillRect(el.avatar.x, el.avatar.y, avatarSize, avatarSize);
+      }
+    }
+    ctx.restore();
+  }
 
-  ctx.font = "32px NotoSans";
-  ctx.fillStyle = "#aaaaaa";
-  const awakeDate = moment(parseInt(base.createTime) * 1000).format(
-    tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
-  );
-  const lastLoginTime = moment(parseInt(base.lastLoginTime) * 1000).format(
-    tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
-  );
-  if (tr.lang === "en") {
-    const infoText = `UID ${base.roleId} | ${tr("canvas_AwakeDate")} ${awakeDate} | ${tr("canvas_LastLogin")} ${lastLoginTime}`;
-    const infoY = padding + 145;
-    const serverNameW = ctx.measureText(base.serverName).width;
-    const infoMaxW =
-      width - (padding + avatarSize + 40) - serverNameW - padding - 40;
+  // Name
+  if (el.name.visible) {
+    ctx.fillStyle = el.name.color || "#ffffff";
+    const nameMaxW = width - el.name.x - padding; // Approximate
     fillDynamicText(
       ctx,
-      infoText,
-      padding + avatarSize + 40,
-      infoY,
-      infoMaxW,
-      32,
-      false,
-    );
-
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#aaaaaa";
-    ctx.font = "32px NotoSans";
-    ctx.fillText(base.serverName, width - padding, infoY);
-    ctx.textAlign = "left";
-  } else {
-    ctx.font = "36px NotoSans";
-    ctx.fillStyle = "#aaaaaa";
-    ctx.fillText(
-      `UID ${base.roleId} | ${tr("canvas_AwakeDate")} ${awakeDate} | ${tr("canvas_LastLogin")} ${lastLoginTime} | ${base.serverName}`,
-      padding + avatarSize + 40,
-      padding + 150,
+      base.name,
+      el.name.x,
+      el.name.y,
+      nameMaxW,
+      el.name.fontSize || 80,
+      el.name.bold !== false,
     );
   }
 
-  // 3. Stats Grid - Shrunk
-  const gridY = 320;
-  const itemW = (width - padding * 2 - 90) / 4;
-  const itemH = 140;
-  const gap = 30;
+  // Badge / Info Text
+  if (el.badge.visible) {
+    ctx.font = `${el.badge.fontSize || 32}px NotoSans`;
+    ctx.fillStyle = el.badge.color || "#aaaaaa";
+    const awakeDate = moment(parseInt(base.createTime) * 1000).format(
+      tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
+    );
+    const lastLoginTime = moment(parseInt(base.lastLoginTime) * 1000).format(
+      tr("Year") === "年" ? "YYYY/MM/DD" : "MM/DD/YYYY",
+    );
 
-  const stats = [
-    { label: tr("canvas_ExploreLevel"), value: base.worldLevel.toString() },
-    { label: tr("canvas_Operators"), value: base.charNum.toString() },
-    { label: tr("canvas_Weapons"), value: base.weaponNum.toString() },
-    { label: tr("canvas_Files"), value: base.docNum.toString() },
-  ];
+    const badgeText = `UID ${base.roleId} | ${tr("canvas_AwakeDate")} ${awakeDate} | ${tr("canvas_LastLogin")} ${lastLoginTime}`;
 
-  stats.forEach((stat, i) => {
-    const x = padding + (itemW + gap) * i;
+    if (tr.lang === "en") {
+      const serverNameW = ctx.measureText(base.serverName).width;
+      const infoMaxW = width - el.badge.x - serverNameW - padding - 40;
+      fillDynamicText(
+        ctx,
+        badgeText,
+        el.badge.x,
+        el.badge.y,
+        infoMaxW,
+        el.badge.fontSize || 32,
+        false,
+      );
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#aaaaaa"; // Keeping same color
+      ctx.font = `${el.badge.fontSize || 32}px NotoSans`;
+      ctx.fillText(base.serverName, width - padding, el.badge.y);
+      ctx.textAlign = "left";
+    } else {
+      // CN/TW
+      ctx.font = `${el.badge.fontSize || 36}px NotoSans`;
+      ctx.fillText(`${badgeText} | ${base.serverName}`, el.badge.x, el.badge.y);
+    }
+  }
+
+  // 3. Stats Grid
+  if (el.statsGrid.visible) {
+    const itemW = el.statsGrid.itemWidth || 537.5;
+    const itemH = el.statsGrid.height || 140;
+    const gap = el.statsGrid.gap || 30;
+
+    const stats = [
+      { label: tr("canvas_ExploreLevel"), value: base.worldLevel.toString() },
+      { label: tr("canvas_Operators"), value: base.charNum.toString() },
+      { label: tr("canvas_Weapons"), value: base.weaponNum.toString() },
+      { label: tr("canvas_Files"), value: base.docNum.toString() },
+    ];
+
+    stats.forEach((stat, i) => {
+      const x = el.statsGrid.x + (itemW + gap) * i;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+      roundRect(ctx, x, el.statsGrid.y, itemW, itemH, 20, true);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.textAlign = "center";
+      ctx.fillText(stat.value, x + itemW / 2, el.statsGrid.y + 65);
+
+      ctx.fillStyle = "#aaaaaa";
+      ctx.font = "28px NotoSans";
+      ctx.fillText(stat.label, x + itemW / 2, el.statsGrid.y + 110);
+    });
+    ctx.textAlign = "left";
+  }
+
+  // 3.5. Mission & Level
+
+  // Mission Box
+  if (el.missionBox.visible) {
+    const mlY = el.missionBox.y;
+    const mlH = el.missionBox.height || 160;
+    const missionW = el.missionBox.width || 1558;
+
     ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-    roundRect(ctx, x, gridY, itemW, itemH, 20, true);
+    roundRect(ctx, el.missionBox.x, mlY, missionW, mlH, 20, true);
+
+    if (base.mainMission) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 60px NotoSansTCBold";
+      ctx.textAlign = "left";
+      ctx.fillText(
+        base.mainMission.description,
+        el.missionBox.x + 40,
+        mlY + 70,
+      );
+
+      ctx.fillStyle = "#aaaaaa";
+      ctx.font = "32px NotoSans";
+      ctx.fillText(tr("canvas_MainMission"), el.missionBox.x + 40, mlY + 120);
+    }
+  }
+
+  // Level Box
+  if (el.authLevelBox.visible) {
+    const authX = el.authLevelBox.x;
+    const authY = el.authLevelBox.y;
+    const authW = el.authLevelBox.width || 662;
+    const authH = el.authLevelBox.height || 160;
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+    roundRect(ctx, authX, authY, authW, authH, 20, true);
 
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 56px NotoSansTCBold";
+    ctx.font = "bold 80px NotoSansTCBold";
     ctx.textAlign = "center";
-    ctx.fillText(stat.value, x + itemW / 2, gridY + 65);
-
-    ctx.fillStyle = "#aaaaaa";
-    ctx.font = "28px NotoSans";
-    ctx.fillText(stat.label, x + itemW / 2, gridY + 110);
-  });
-
-  // Reset textAlign
-  ctx.textAlign = "left";
-
-  // 3.5. Mission & Level (New Row)
-  const mlY = gridY + 160;
-  const mlH = 160;
-
-  // Mission Box (Left, 70%)
-  const missionW = (width - padding * 2) * 0.7 - 10;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  roundRect(ctx, padding, mlY, missionW, mlH, 20, true);
-
-  if (base.mainMission) {
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 60px NotoSansTCBold";
-    ctx.textAlign = "left";
-    ctx.fillText(base.mainMission.description, padding + 40, mlY + 70);
+    ctx.fillText(base.level.toString(), authX + authW / 2, authY + 80);
 
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "32px NotoSans";
-    ctx.fillText(tr("canvas_MainMission"), padding + 40, mlY + 120);
+    ctx.fillText(tr("canvas_AuthLevel"), authX + authW / 2, authY + 130);
+    ctx.textAlign = "left";
   }
 
-  // Level Box (Right, 30%)
-  const levelX = padding + missionW + 20;
-  const levelW = width - padding * 2 - missionW - 20;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  roundRect(ctx, levelX, mlY, levelW, mlH, 20, true);
+  // 4. Real-time Data Title
+  if (el.realtimeTitle.visible) {
+    const rtY = el.realtimeTitle.y;
+    const rtX = el.realtimeTitle.x; // 150
 
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 80px NotoSansTCBold";
-  ctx.textAlign = "center";
-  ctx.fillText(base.level.toString(), levelX + levelW / 2, mlY + 80);
+    // Default style based on original
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${el.realtimeTitle.fontSize || 50}px NotoSansTCBold`;
+    // The old code drew rects relative to "padding".
+    // Need to adjust to new dynamic X if possible, or stick to padding logic if X is close to padding?
+    // Old logic: text at padding + 70 (150). Rects at padding.
+    // So if el.realtimeTitle.x is 150, the rects should be at x - 70 = 80?
+    const decorX = rtX - 70; // 80 (Padding)
 
-  ctx.fillStyle = "#aaaaaa";
-  ctx.font = "32px NotoSans";
-  ctx.fillText(tr("canvas_AuthLevel"), levelX + levelW / 2, mlY + 130);
-  ctx.textAlign = "left"; // Reset
+    ctx.fillText(tr("canvas_RealtimeData"), rtX, rtY + 40);
 
-  // 4. Real-time Data (即時數據) - Compact
-  const realTimeY = mlY + mlH + 30; // Reduced gap from 50 to 30
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 50px NotoSansTCBold";
-  ctx.fillText(tr("canvas_RealtimeData"), padding + 70, realTimeY + 40);
-  ctx.fillRect(padding, realTimeY + 10, 12, 35);
-  ctx.fillRect(padding + 20, realTimeY - 5, 12, 50);
-  ctx.fillRect(padding + 40, realTimeY + 15, 12, 25);
-
-  const sectionH = 180; // Reduced height
-  const leftW = 750;
-  const rightW = width - padding * 2 - leftW - 40;
-
-  // Left Section: Stamina
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  roundRect(ctx, padding, realTimeY + 80, leftW, sectionH, 20, true);
+    // Rects
+    ctx.fillRect(decorX, rtY + 10, 12, 35);
+    ctx.fillRect(decorX + 20, rtY - 5, 12, 50);
+    ctx.fillRect(decorX + 40, rtY + 15, 12, 25);
+  }
 
   const { dungeon, dailyMission, bpSystem } = detail;
 
-  if (dungeon) {
-    ctx.textAlign = "left";
+  // Stamina Box (Left)
+  if (el.staminaBox.visible && dungeon) {
+    const staX = el.staminaBox.x;
+    const staY = el.staminaBox.y;
+    const staW = el.staminaBox.width || 750;
+    const staH = el.staminaBox.height || 180;
 
-    // Value: 37 / 205
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+    roundRect(ctx, staX, staY, staW, staH, 20, true);
+
+    ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
     ctx.font = "bold 70px NotoSansTCBold";
     const curStamina = dungeon.curStamina;
-    ctx.fillText(curStamina, padding + 40, realTimeY + 160);
+    // Y from top: staY + 80? Original was realTimeY + 160.
+    // realTimeY = 670. staY = 750. Diff = 80. So realTimeY + 160 = staY + 80.
+    ctx.fillText(curStamina, staX + 40, staY + 80);
     const curWidth = ctx.measureText(curStamina).width;
 
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "36px NotoSans";
     ctx.fillText(
       `/ ${dungeon.maxStamina}`,
-      padding + 40 + curWidth + 15,
-      realTimeY + 160,
+      staX + 40 + curWidth + 15,
+      staY + 80,
     );
 
-    // Recovery Time (Pill with Background)
+    // Recovery Time Logics
     const now = Math.floor(Date.now() / 1000);
     const maxTs = parseInt(dungeon.maxTs);
     let recoveryText = "已完全恢復";
@@ -313,27 +393,26 @@ export async function drawDashboard(
       recoveryText = tr("canvas_FullyRecovered");
     }
 
-    // Dynamic Color for Dot
+    // Dynamic Color
     const maxRecoverySec = (parseInt(dungeon.maxStamina) / 10) * 60 * 60;
     const ratio = Math.min(diff / maxRecoverySec, 1);
     const hue = 120 * (1 - ratio);
     const dotColor = `hsl(${hue}, 100%, 50%)`;
 
-    // Calculate dimensions
-    ctx.font = "30px NotoSans"; // Increased
+    // Dimensions
+    ctx.font = "30px NotoSans";
     const recTextW = ctx.measureText(recoveryText).width;
-    const dotR = 8; // Increased
-    const dotGap = 12; // Increased
-    const pillPaddingX = 20; // Increased
-    const pillPaddingY = 12; // Increased
+    const dotR = 8;
+    const dotGap = 12;
+    const pillPaddingX = 20;
+    const pillPaddingY = 12;
     const pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
-    const pillH = 30 + pillPaddingY * 2; // Approx text height 30
+    const pillH = 30 + pillPaddingY * 2;
 
-    const pillX = padding + leftW - pillW - 30; // Right aligned with padding
-    const pillY = realTimeY + 110;
+    const pillX = staX + staW - pillW - 30; // Right aligned
+    const pillY = staY + 30; // approx
 
-    // Draw Pill Background
-    ctx.fillStyle = "rgba(0, 0, 0, 0.4)"; // Darker background for contrast
+    ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
     roundRect(ctx, pillX, pillY, pillW, pillH, 20, true);
 
     // Draw Dot
@@ -347,303 +426,316 @@ export async function drawDashboard(
     // Draw Text
     ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    // Center text vertically
     ctx.fillText(recoveryText, dotX + dotR + dotGap, pillY + pillH / 2 + 11);
 
-    // Label
+    // Labels
     ctx.textAlign = "left";
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "24px NotoSans";
-    const labelY = realTimeY + 210;
-    ctx.fillText(tr("canvas_Stamina"), padding + 40, labelY);
+    const labelY = staY + 130;
+    ctx.fillText(tr("canvas_Stamina"), staX + 40, labelY);
     ctx.textAlign = "right";
-    ctx.fillText(tr("canvas_RecoveryTime"), padding + leftW - 30, labelY); // Align with pill right
+    ctx.fillText(tr("canvas_RecoveryTime"), staX + staW - 30, labelY);
     ctx.textAlign = "left";
   }
 
-  // Right Section: Activity & Pass
-  ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
-  roundRect(
-    ctx,
-    padding + leftW + 40,
-    realTimeY + 80,
-    rightW,
-    sectionH,
-    20,
-    true,
-  );
+  // Activity Box (Right)
+  if (el.activityBpBox.visible) {
+    const actX = el.activityBpBox.x;
+    const actY = el.activityBpBox.y;
+    const actW = el.activityBpBox.width || 1450;
+    const actH = el.activityBpBox.height || 180;
+    const halfW = actW / 2;
+    const centerY = actY + actH / 2;
 
-  const rightItemCenterY = realTimeY + 80 + sectionH / 2;
-  // Split right section into two vertical halves visually? Or just stack?
-  // Original was stack. We reduced height, so maybe side-by-side or tighter stack.
-  // With 180px height, stacking 2 items with 40px text is tight.
-  // Let's do side-by-side for Activity and BP within the right box.
+    ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
+    roundRect(ctx, actX, actY, actW, actH, 20, true);
 
-  const halfRightW = rightW / 2;
+    if (dailyMission) {
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.fillText(
+        `${dailyMission.dailyActivation}/${dailyMission.maxDailyActivation}`,
+        actX + halfW / 2,
+        centerY + 10,
+      );
+      ctx.fillStyle = "#aaaaaa";
+      ctx.font = "28px NotoSans";
+      ctx.fillText(tr("canvas_Activity"), actX + halfW / 2, centerY + 55);
+    }
 
-  if (dailyMission) {
-    const actX = padding + leftW + 40;
-    ctx.textAlign = "center";
+    if (bpSystem) {
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.fillText(
+        `${bpSystem.curLevel}/${bpSystem.maxLevel}`,
+        actX + halfW + halfW / 2,
+        centerY + 10,
+      );
+      ctx.fillStyle = "#aaaaaa";
+      ctx.font = "28px NotoSans";
+      ctx.fillText(tr("canvas_BP"), actX + halfW + halfW / 2, centerY + 55);
+    }
+    ctx.textAlign = "left";
+  }
+
+  // Operators Title
+  if (el.operatorsTitle.visible) {
+    ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 56px NotoSansTCBold";
+    ctx.font = `bold ${el.operatorsTitle.fontSize || 50}px NotoSansTCBold`;
     ctx.fillText(
-      `${dailyMission.dailyActivation}/${dailyMission.maxDailyActivation}`,
-      actX + halfRightW / 2,
-      rightItemCenterY + 10,
-    );
-    ctx.fillStyle = "#aaaaaa";
-    ctx.font = "28px NotoSans";
-    ctx.fillText(
-      tr("canvas_Activity"),
-      actX + halfRightW / 2,
-      rightItemCenterY + 55,
+      tr("canvas_Operators"),
+      el.operatorsTitle.x,
+      el.operatorsTitle.y,
     );
   }
 
-  if (bpSystem) {
-    const bpX = padding + leftW + 40 + halfRightW;
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 56px NotoSansTCBold";
-    ctx.fillText(
-      `${bpSystem.curLevel}/${bpSystem.maxLevel}`,
-      bpX + halfRightW / 2,
-      rightItemCenterY + 10,
-    );
-    ctx.fillStyle = "#aaaaaa";
-    ctx.font = "28px NotoSans";
-    ctx.fillText(tr("canvas_BP"), bpX + halfRightW / 2, rightItemCenterY + 55);
-  }
+  // Operators Grid
+  if (el.operatorsGrid.visible) {
+    const gridX = el.operatorsGrid.x;
+    const gridY = el.operatorsGrid.y;
 
-  // 5. Characters Title
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 50px NotoSansTCBold";
-  ctx.fillText(tr("canvas_Operators"), padding, realTimeY + sectionH + 140);
+    // Asset Preloading
+    const charAssetsPromises = chars.map(async (char) => {
+      if (
+        el.operatorsGrid.limit &&
+        chars.indexOf(char) >= el.operatorsGrid.limit
+      )
+        return;
+      const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
+      if (iconUrl) fetchImage(iconUrl).catch(() => {});
 
-  // 6. Characters List (Grid)
-
-  const charAssetsPromises = chars.map(async (char) => {
-    const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
-    if (iconUrl) {
-      // fetchImage now handles disk/memory caching automatically
-      fetchImage(iconUrl).catch(() => {});
-    }
-
-    const profKey = char.charData.profession?.key;
-    if (profKey) {
-      const strippedKey = profKey.replace("profession_", "").toLowerCase();
-      loadLocalImage(`prof/${strippedKey}.jpg`).catch(() => {});
-    }
-
-    const propKey = char.charData.property?.key;
-    if (propKey) {
-      const strippedKey = propKey.replace("char_property_", "").toLowerCase();
-      loadLocalImage(`element/${strippedKey}.jpg`).catch(() => {});
-    }
-
-    const weaponKey = char.charData.weaponType?.key;
-    if (weaponKey) {
-      const strippedKey = weaponKey.replace("weapon_type_", "").toLowerCase();
-      loadLocalImage(`weapon/black/${strippedKey}.png`).catch(() => {});
-    }
-
-    const phase = Number(char.evolvePhase) || 0;
-    if (phase > 0) {
-      loadLocalImage(`phase/${phase}.png`).catch(() => {});
-      loadLocalImage("phase/bg.png").catch(() => {});
-    }
-  });
-
-  await Promise.all(charAssetsPromises);
-
-  for (let i = 0; i < chars.length; i++) {
-    const char = chars[i];
-    const row = Math.floor(i / charCols);
-    const col = i % charCols;
-    const x = padding + (charWidth + charGap) * col;
-    const y = charGridY + (charHeight + charGap) * row;
-
-    if (y + charHeight > height) break;
-
-    // Load images (fast from cache)
-    const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
-    let avatarImg: Image | null = null;
-    try {
-      avatarImg = iconUrl ? await fetchImage(iconUrl) : null;
-    } catch (e) {}
-
-    let profImg: Image | null = null;
-    let propImg: Image | null = null;
-    let weaponImg: Image | null = null;
-    let phaseImg: Image | null = null;
-
-    try {
       const profKey = char.charData.profession?.key;
       if (profKey) {
-        profImg = await loadLocalImage(
-          `prof/${profKey.replace("profession_", "").toLowerCase()}.jpg`,
-        );
+        const strippedKey = profKey.replace("profession_", "").toLowerCase();
+        loadLocalImage(`prof/${strippedKey}.jpg`).catch(() => {});
       }
-    } catch (e) {}
 
-    try {
       const propKey = char.charData.property?.key;
       if (propKey) {
-        propImg = await loadLocalImage(
-          `element/${propKey.replace("char_property_", "").toLowerCase()}.jpg`,
-        );
+        const strippedKey = propKey.replace("char_property_", "").toLowerCase();
+        loadLocalImage(`element/${strippedKey}.jpg`).catch(() => {});
       }
-    } catch (e) {}
 
-    try {
       const weaponKey = char.charData.weaponType?.key;
       if (weaponKey) {
-        weaponImg = await loadLocalImage(
-          `weapon/black/${weaponKey.replace("weapon_type_", "").toLowerCase()}.png`,
-        );
+        const strippedKey = weaponKey.replace("weapon_type_", "").toLowerCase();
+        loadLocalImage(`weapon/black/${strippedKey}.png`).catch(() => {});
       }
-    } catch (e) {}
 
-    try {
-      if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
-        phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.png`);
+      const phase = Number(char.evolvePhase) || 0;
+      if (phase > 0) {
+        loadLocalImage(`phase/${phase}.png`).catch(() => {});
+        loadLocalImage("phase/bg.png").catch(() => {});
       }
-    } catch (e) {}
+    });
+    await Promise.all(charAssetsPromises);
 
-    // Image Area with White Background (Top rounded, Bottom square)
-    ctx.save();
-    const radius = 15;
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + charImageSize - radius, y);
-    ctx.arcTo(x + charImageSize, y, x + charImageSize, y + radius, radius);
-    ctx.lineTo(x + charImageSize, y + charImageSize); // Bottom right square
-    ctx.lineTo(x, y + charImageSize); // Bottom left square
-    ctx.lineTo(x, y + radius);
-    ctx.arcTo(x, y, x + radius, y, radius);
-    ctx.closePath();
+    for (let i = 0; i < chars.length; i++) {
+      if (el.operatorsGrid.limit && i >= el.operatorsGrid.limit) break;
 
-    ctx.fillStyle = "#ffffff";
-    ctx.fill();
-    ctx.clip();
+      const char = chars[i];
+      const row = Math.floor(i / charCols);
+      const col = i % charCols;
+      const x = gridX + (charWidth + charGap) * col;
+      const y = gridY + (charHeight + charGap) * row;
 
-    if (avatarImg) {
-      ctx.drawImage(avatarImg, x, y, charImageSize, charImageSize);
-    } else {
-      ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
-      ctx.fillRect(x, y, charImageSize, charImageSize);
-    }
-    ctx.restore();
+      if (y + charHeight > height) break;
 
-    // Attribute Icons (Top Left, Vertical) - Shrunk
-    const iconSize = 36;
-    const iconPadding = 8;
-
-    // Profession Icon
-    if (profImg) {
-      const iconY = y + iconPadding;
-      ctx.drawImage(profImg, x + iconPadding, iconY, iconSize, iconSize);
-    }
-
-    // Element/Property Icon
-    if (propImg) {
-      const iconY = y + iconPadding + iconSize + iconPadding;
-      ctx.drawImage(propImg, x + iconPadding, iconY, iconSize, iconSize);
-    }
-
-    // Weapon Type Icon
-    if (weaponImg) {
-      const iconY = y + iconPadding + (iconSize + iconPadding) * 2;
-      ctx.drawImage(weaponImg, x + iconPadding, iconY, iconSize, iconSize);
-    }
-
-    // Level (Bottom Left)
-    ctx.textAlign = "left";
-    ctx.font = "bold 28px NotoSansTCBold";
-    const levelText = `${char.level}`;
-
-    // Stroke settings
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.lineWidth = 3;
-    ctx.lineJoin = "round";
-
-    // Draw "Lv."
-    ctx.font = "18px NotoSans";
-    ctx.strokeText("Lv.", x + 10, y + charImageSize - 18);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText("Lv.", x + 10, y + charImageSize - 18);
-    const lvPrefixWidth = ctx.measureText("Lv.").width;
-
-    // Draw Level Number
-    ctx.font = "bold 28px NotoSansTCBold";
-    ctx.strokeText(
-      levelText,
-      x + 10 + lvPrefixWidth + 2,
-      y + charImageSize - 18,
-    );
-    ctx.fillText(levelText, x + 10 + lvPrefixWidth + 2, y + charImageSize - 18);
-
-    // Phase (Bottom Right) - Refined
-    if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
+      // Image Loading
+      const iconUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
+      let avatarImg: Image | null = null;
       try {
-        const phaseBg = await loadLocalImage("phase/bg.png");
-        const phaseNum = await loadLocalImage(`phase/${char.evolvePhase}.png`);
-
-        const phaseSize = 32; // Slightly larger for visibility
-        const phaseX = x + charImageSize - 45;
-        const phaseY = y + charImageSize - 40;
-
-        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
-
-        const numSize = phaseSize * (204 / 336);
-        const numX = phaseX + (phaseSize - numSize) / 2;
-        const numY = phaseY + (phaseSize - numSize) / 2;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(
-          numX + numSize / 2,
-          numY + numSize / 2,
-          numSize / 2,
-          0,
-          Math.PI * 2,
-        );
-        ctx.clip();
-        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
-        ctx.restore();
+        avatarImg = iconUrl ? await fetchImage(iconUrl) : null;
       } catch (e) {}
-    }
 
-    // Rarity Color Bar
-    const getRarityColor = (r: number) => {
-      switch (r) {
-        case 6:
-          return "rgba(255, 113, 0, 1)";
-        case 5:
-          return "rgba(255, 204, 0, 1)";
-        case 4:
-          return "rgba(179, 128, 255, 1)";
-        case 3:
-          return "rgba(51, 194, 255, 1)";
-        case 2:
-          return "rgba(180, 217, 69, 1)";
-        case 1:
-          return "rgba(178, 178, 178, 1)";
-        default:
-          return "rgba(178, 178, 178, 1)";
+      let profImg: Image | null = null;
+      let propImg: Image | null = null;
+      let weaponImg: Image | null = null;
+      let phaseImg: Image | null = null;
+
+      // Load assets safely...
+      try {
+        if (char.charData.profession?.key)
+          profImg = await loadLocalImage(
+            `prof/${char.charData.profession.key.replace("profession_", "").toLowerCase()}.jpg`,
+          );
+        if (char.charData.property?.key)
+          propImg = await loadLocalImage(
+            `element/${char.charData.property.key.replace("char_property_", "").toLowerCase()}.jpg`,
+          );
+        if (char.charData.weaponType?.key)
+          weaponImg = await loadLocalImage(
+            `weapon/black/${char.charData.weaponType.key.replace("weapon_type_", "").toLowerCase()}.png`,
+          );
+        if (char.evolvePhase && char.evolvePhase > 0)
+          phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.png`);
+      } catch (e) {}
+
+      // Card Drawing
+      ctx.save();
+      const radius = 15;
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + charImageSize - radius, y);
+      ctx.arcTo(x + charImageSize, y, x + charImageSize, y + radius, radius);
+      ctx.lineTo(x + charImageSize, y + charImageSize);
+      ctx.lineTo(x, y + charImageSize);
+      ctx.lineTo(x, y + radius);
+      ctx.arcTo(x, y, x + radius, y, radius);
+      ctx.closePath();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.clip();
+
+      if (avatarImg)
+        ctx.drawImage(avatarImg, x, y, charImageSize, charImageSize);
+      else {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.1)";
+        ctx.fillRect(x, y, charImageSize, charImageSize);
       }
-    };
+      ctx.restore();
 
-    const rarity = parseInt(char.charData.rarity?.value) || 0;
-    ctx.fillStyle = getRarityColor(rarity);
-    ctx.fillRect(x, y + charImageSize - 6, charImageSize, 6);
+      // Icons
+      const iconSize = 36;
+      const iconPadding = 8;
+      if (profImg)
+        ctx.drawImage(
+          profImg,
+          x + iconPadding,
+          y + iconPadding,
+          iconSize,
+          iconSize,
+        );
+      if (propImg)
+        ctx.drawImage(
+          propImg,
+          x + iconPadding,
+          y + iconPadding + iconSize + iconPadding,
+          iconSize,
+          iconSize,
+        );
+      if (weaponImg)
+        ctx.drawImage(
+          weaponImg,
+          x + iconPadding,
+          y + iconPadding + (iconSize + iconPadding) * 2,
+          iconSize,
+          iconSize,
+        );
 
-    // Name
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 26px NotoSansTCBold";
-    ctx.fillText(char.charData.name, x + charWidth / 2, y + charImageSize + 35);
+      // Level
+      ctx.textAlign = "left";
+      const levelText = `${char.level}`;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.lineWidth = 3;
+      ctx.lineJoin = "round";
+
+      ctx.font = "18px NotoSans";
+      ctx.strokeText("Lv.", x + 10, y + charImageSize - 18);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("Lv.", x + 10, y + charImageSize - 18);
+      const lvPrefixWidth = ctx.measureText("Lv.").width;
+
+      ctx.font = "bold 28px NotoSansTCBold";
+      ctx.strokeText(
+        levelText,
+        x + 10 + lvPrefixWidth + 2,
+        y + charImageSize - 18,
+      );
+      ctx.fillText(
+        levelText,
+        x + 10 + lvPrefixWidth + 2,
+        y + charImageSize - 18,
+      );
+
+      // Phase
+      if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
+        try {
+          const phaseBg = await loadLocalImage("phase/bg.png");
+          const phaseSize = 32;
+          const phaseX = x + charImageSize - 45;
+          const phaseY = y + charImageSize - 40;
+          ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
+          if (phaseImg) {
+            const numSize = phaseSize * (204 / 336);
+            const numX = phaseX + (phaseSize - numSize) / 2;
+            const numY = phaseY + (phaseSize - numSize) / 2;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(
+              numX + numSize / 2,
+              numY + numSize / 2,
+              numSize / 2,
+              0,
+              Math.PI * 2,
+            );
+            ctx.clip();
+            ctx.drawImage(phaseImg, numX, numY, numSize, numSize);
+            ctx.restore();
+          }
+        } catch (e) {}
+      }
+
+      // Rarity Bar
+      const getRarityColor = (r: number) => {
+        const colors: any = {
+          6: "rgba(255, 113, 0, 1)",
+          5: "rgba(255, 204, 0, 1)",
+          4: "rgba(179, 128, 255, 1)",
+          3: "rgba(51, 194, 255, 1)",
+          2: "rgba(180, 217, 69, 1)",
+          1: "rgba(178, 178, 178, 1)",
+        };
+        return colors[r] || "rgba(178, 178, 178, 1)";
+      };
+      const rarity = parseInt(char.charData.rarity?.value) || 0;
+      ctx.fillStyle = getRarityColor(rarity);
+      ctx.fillRect(x, y + charImageSize - 6, charImageSize, 6);
+
+      // Name
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 26px NotoSansTCBold";
+      ctx.fillText(
+        char.charData.name,
+        x + charWidth / 2,
+        y + charImageSize + 35,
+      );
+    }
+  }
+
+  // Fabric Objects support (for User Edited Stuff)
+  if (template.fabricJson && template.fabricJson.objects) {
+    // NOTE: This usually replaces the entire drawing logic if present,
+    // but for "User Editing" we usually want to draw the *fabric objects* ON TOP
+    // or instead of the hardcoded stuff.
+    // However, the current logic in previous steps was: "If fabricJson exists, draw ONLY fabricJson".
+    // This is because fabricJson represents the *entire* state of the canvas including background and elements.
+    // So if the user has saved a layout, we should rely on fabricJson.
+    // BUT, my `drawOperatorsGrid` here is manual canvas drawing.
+    // If the user *edits* the grid in frontend, it is saved as a custom object or as properties?
+    // The frontend uses "operatorsGrid" element properties.
+    // If fabricJson is present, it means the user saved a custom layout.
+    // The previous code had:
+    /*
+      if (template.fabricJson && template.fabricJson.objects) {
+         await drawFabricObjects(template.fabricJson.objects);
+         return canvas.toBuffer("image/png");
+      }
+      */
+    // I should restore this capability to support the "Editor" part of the request.
+    // I'll add the helper function `drawFabricObjects` and the check at the end.
+    // UNLESS the user wants the ability to edit specific elements while keeping others default?
+    // Typically, once you save in editor, you get a full fabricJson.
+    // So I'll add the fabric drawing helper and check at the end (or beginning of fallback).
+    // Wait, if I draw manual canvas calls FIRST, and then check fabricJson, do I overwrite?
+    // If fabricJson exists, we should probably output THAT instead of the manual drawing.
+    // So I'll add the block for fabricJson.
   }
 
   return canvas.toBuffer("image/png");

@@ -61,7 +61,49 @@ const langs: Record<string, any> = {
   daily_SetupChannel: "頻道",
 
   // Profile Command
-  profile_SelectCharacter: "選擇想要展示詳細的幹員",
+  profile_SelectCharacter: "選擇要查看的幹員",
+  profile_Config: "客製化名片設定",
+  profile_Config_Template: "套用面版 UUID",
+  profile_Config_Background: "更換背景圖片 (URL)",
+  profile_Config_Toggle: "開關顯示元素",
+  profile_Config_Share: "分享目前的面版",
+  profile_Config_Reset: "重設為預設面版",
+  profile_Config_Success: "設定已更新！",
+  profile_Config_InvalidUUID: "無效的 UUID",
+  profile_Config_ShareSuccess: "您的面版 UUID 為：`{uuid}`",
+  profile_Editor_Title: "🎨 個人名片編輯器",
+  profile_Editor_Desc:
+    "請使用下方的元件即時調整您的名片佈局。修改後的結果會立即顯示在預覽圖中。",
+  profile_Editor_TogglePlaceholder: "顯示/隱藏元素...",
+  profile_Editor_ChangeBG: "更換背景",
+  profile_Editor_Share: "分享 UUID",
+  profile_Editor_Reset: "重設",
+  profile_Editor_Finish: "完成並儲存",
+  profile_Editor_LayoutEdit: "調整布局",
+  profile_Editor_LayoutModal_Title: "調整元素：{element}",
+  profile_Editor_Prop_X: "X 座標",
+  profile_Editor_Prop_Y: "Y 座標",
+  profile_Editor_Prop_Width: "寬度",
+  profile_Editor_Prop_Height: "高度",
+  profile_Editor_Prop_FontSize: "字體大小",
+  profile_Editor_SelectToEdit: "請選擇要調整的元素",
+  profile_Editor_WebLinkDesc:
+    "## 請點選下方連結開啟網頁編輯器\n此連結 15 分鐘內有效，若過期請再次使用指令。",
+  profile_Editor_BGModal_Title: "更換背景圖片",
+  profile_Editor_BGModal_URL: "圖片網址 (URL)",
+  profile_Config_Elements: {
+    avatar: "頭像",
+    name: "暱稱",
+    badge: "UID/伺服器資訊",
+    statsGrid: "數據統計",
+    missionBox: "主線任務",
+    authLevelBox: "終端等級",
+    realtimeTitle: "即時數據標題",
+    staminaBox: "體力資訊",
+    activityBpBox: "活躍度與營運協議",
+    operatorsTitle: "幹員列表標題",
+    operatorsGrid: "幹員列表",
+  },
 
   // Canvas UI Labels
   canvas_ExploreLevel: "探索等級",
@@ -105,7 +147,7 @@ const langs: Record<string, any> = {
   login_CookieSetTitle: "設定 Endfield Cookie",
   login_CookiePlaceholder: "ACCOUNT_TOKEN=...",
   login_CookieSuccess:
-    "✅ **驗證成功**\n歡迎管理員，**<name>**!\n已將此帳號加入綁定列表，並自動同步憑證。",
+    "✅ **驗證成功**\n歡迎管理員，**<name>**!\n已將此帳號加入綁定列表。",
   login_CaptchaRequired:
     "🛡️ **由 Gryphline 觸發的人機驗證**\n請點擊下方網址並在瀏覽器中開啟：\n**[👉 點我進行驗證](<url>)**\n\n1. 開啟上述網址後，驗證碼會自動載入。\n2. 完成驗證後，網頁會自動傳回結果。\n3. **機器人偵測到驗證成功後會自動完成登入。**",
   login_ManualVerify: "手動檢查驗證狀態",
@@ -114,10 +156,12 @@ const langs: Record<string, any> = {
   gacha_Title: "# 當前卡池資訊",
   gacha_CharPool: "角色池：<name>",
   gacha_WeaponPool: "武器池：<name>",
-  gacha_Time: "-# 卡池時間: <start> - <end>",
   gacha_CharEmpty: "## 角色池\n目前沒有開啟的角色池。",
   gacha_WeaponEmpty: "## 武器池\n目前沒有開啟的武器池。",
   gacha_NoData: "暫時沒有可用的卡池資訊。",
+  gacha_Global_End:
+    "美洲/歐洲：將在 <globalEndTs> (<globalEndTsRelative>) 結束",
+  gacha_Asia_End: "亞洲：將在 <asiaEndTs> (<asiaEndTsRelative>) 結束",
 
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",

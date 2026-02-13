@@ -10,6 +10,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { SkportNewsService } from "../services/SkportNewsService";
 import { AutoDailyService } from "../services/AutoDailyService";
+import { CharacterWikiService } from "../services/CharacterWikiService";
 
 dotenv.config();
 
@@ -18,6 +19,7 @@ export class ExtendedClient extends Client {
   public db: CustomDatabase;
   public newsService!: SkportNewsService;
   public autoDailyService!: AutoDailyService;
+  public wikiService!: CharacterWikiService;
   public cluster: ClusterClient<Client>;
 
   constructor() {

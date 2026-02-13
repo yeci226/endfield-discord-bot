@@ -65,6 +65,11 @@ export async function ensureAccountBinding(
   db: CustomDatabase,
   lang: string,
 ): Promise<boolean> {
+  // If we already have roles, we assume they are valid (e.g. from a fresh login or previous use)
+  // This avoids redundant binding calls which can trigger 401 if credentials are old but still okay for other APIs.
+  if (account.roles && account.roles.length > 0) {
+    return false;
+  }
   // If we already have roles and we assume they are valid, we might skip.
   // BUT the user wants to fix 401s too, which means cred/salt might be stale even if roles exist.
   // However, forcing a check every time might be expensive/slow.

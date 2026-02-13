@@ -30,8 +30,14 @@ export async function getCardDetail(
  */
 export function formatSkLanguage(locale?: string): string {
   const base = locale || "tw";
-  if (base === "zh-TW" || base === "zh-HK" || base === "tw") return "zh_Hant";
-  if (base === "zh-CN" || base === "cn") return "zh_Hans";
+  if (
+    base === "zh-TW" ||
+    base === "zh-HK" ||
+    base === "tw" ||
+    base === "zh_Hant"
+  )
+    return "zh_Hant";
+  if (base === "zh-CN" || base === "cn" || base === "zh_Hans") return "zh_Hans";
   return "en_US";
 }
 
@@ -91,12 +97,17 @@ export interface ResourceInfo {
   icon: string;
 }
 
+export interface AwardId {
+  id: string;
+}
+
 export interface AttendanceResponse {
   currentTs: string;
   calendar: AttendanceReward[];
   first: AttendanceReward[];
   resourceInfoMap: Record<string, ResourceInfo>;
   hasToday: boolean;
+  awardIds?: AwardId[];
 }
 
 // Enums Interfaces
@@ -778,7 +789,7 @@ export async function executeAttendance(
   locale?: string,
   cred?: string,
   salt?: string,
-) {
+): Promise<{ code: number; message: string; data?: AttendanceResponse }> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
     "sk-game-role": gameRole,
@@ -786,7 +797,11 @@ export async function executeAttendance(
   };
   if (cookie) headers.Cookie = cookie;
 
-  const res = await makeRequest<any>("POST", url, {
+  const res = await makeRequest<{
+    code: number;
+    message: string;
+    data?: AttendanceResponse;
+  }>("POST", url, {
     locale,
     cred,
     salt,
@@ -811,6 +826,48 @@ export async function getEnums(
   });
 }
 
+export async function getItemCatalog(
+  typeMainId: number = 1,
+  cred?: string,
+  locale?: string,
+  salt?: string,
+): Promise<any | null> {
+  const url = `https://zonai.skport.com/web/v1/wiki/item/catalog`;
+  console.log(`[skportApi] getItemCatalog URL: ${url}`);
+  return makeRequest("GET", url, {
+    cred,
+    locale,
+    salt,
+    params: { typeMainId, gameId: 3 },
+    headers: {
+      Origin: "https://wiki.skport.com",
+      Referer: "https://wiki.skport.com/",
+    },
+  });
+}
+
+export async function getItemInfo(
+  id: number | string,
+  cred?: string,
+  locale?: string,
+  salt?: string,
+): Promise<any | null> {
+  const url = `https://zonai.skport.com/web/v1/wiki/item/info`;
+  console.log(
+    `[skportApi] getItemInfo URL: ${url}, Params: ${JSON.stringify({ id })}`,
+  );
+  return makeRequest("GET", url, {
+    cred,
+    locale,
+    salt,
+    params: { id },
+    headers: {
+      Origin: "https://wiki.skport.com",
+      Referer: "https://wiki.skport.com/",
+    },
+  });
+}
+
 export async function loginByEmailPassword(
   credentials: { email: string; password?: string },
   captcha?: any,
@@ -824,7 +881,11 @@ export async function loginByEmailPassword(
   };
 
   if (captcha) {
-    data.captcha = captcha;
+    data.captcha = {
+      geetest_challenge: captcha.geetest_challenge,
+      geetest_validate: captcha.geetest_validate,
+      geetest_seccode: captcha.geetest_seccode,
+    };
   }
 
   // Use a simpler request for Gryphline to avoid 403 from excess headers
@@ -835,6 +896,15 @@ export async function loginByEmailPassword(
         Accept: "application/json",
       },
     });
+
+    const aigisHeader = response.headers["x-rpc-aigis"];
+    if (aigisHeader) {
+      return {
+        ...response.data,
+        aigisHeader: aigisHeader,
+      };
+    }
+
     return response.data;
   } catch (error: any) {
     console.error(`Error requesting ${url}:`, error.message);

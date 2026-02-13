@@ -41,40 +41,80 @@ export async function processRoleAttendance(
         salt,
       );
 
-      if (claimResult && claimResult.code === 0) {
+      if (
+        claimResult &&
+        (claimResult.code === 0 || claimResult.code === 10001)
+      ) {
         signedNow = true;
-        // Refresh status to get updated reward info
-        const newStatus = await getAttendanceList(
-          gameRoleStr,
-          cookie,
-          lang,
-          cred,
-          salt,
-        );
-        if (newStatus) status = newStatus;
+
+        if (claimResult.code === 0 && claimResult.data?.awardIds) {
+          // If we got reward info in the response, we can use it directly
+          status.awardIds = claimResult.data.awardIds;
+          status.hasToday = true;
+          // Optionally update resourceInfoMap if it's also provided in the claim response
+          if (claimResult.data.resourceInfoMap) {
+            status.resourceInfoMap = {
+              ...status.resourceInfoMap,
+              ...claimResult.data.resourceInfoMap,
+            };
+          }
+        } else {
+          // Fallback: Refresh status if reward info wasn't in the claim response or it was code 10001
+          const newStatus = await getAttendanceList(
+            gameRoleStr,
+            cookie,
+            lang,
+            cred,
+            salt,
+          );
+          if (newStatus) status = newStatus;
+        }
       }
     }
 
     // Extract reward info
     const totalDays = status.calendar.filter((d) => d.done).length;
-    const todayReward =
-      status.calendar.find((r) => r.available) ||
-      [...status.calendar].reverse().find((r) => r.done);
 
     let rewardName = tr("None") || "None";
     let rewardIcon = "";
 
-    if (todayReward) {
-      const resInfo = status.resourceInfoMap?.[todayReward.awardId];
-      if (resInfo) {
-        rewardName = `${resInfo.name} x${resInfo.count}`;
-        rewardIcon = resInfo.icon;
+    // Try to get reward from awardIds (from claim response) first
+    if (status.awardIds && status.awardIds.length > 0) {
+      const awards = status.awardIds.map((award) => {
+        const resource = status.resourceInfoMap?.[award.id];
+        if (resource) {
+          if (!rewardIcon) rewardIcon = resource.icon;
+          return `${resource.name} x${resource.count}`;
+        }
+        return award.id;
+      });
+      rewardName = awards.join("\n");
+    } else {
+      // Fallback to calendar status
+      const todayReward =
+        status.calendar.find((r) => r.available) ||
+        [...status.calendar].reverse().find((r) => r.done);
+
+      if (todayReward) {
+        const resInfo = status.resourceInfoMap?.[todayReward.awardId];
+        if (resInfo) {
+          rewardName = `${resInfo.name} x${resInfo.count}`;
+          rewardIcon = resInfo.icon;
+        }
       }
     }
 
     let firstRewardName = "";
     if (status.first) {
-      const targetFirst = status.first.find((f) => f.available || f.done);
+      // Find a newcomer reward that is either available to claim OR was just claimed (available in new status or matches awardId)
+      const targetFirst = status.first.find((f) => {
+        if (f.available) return true;
+        // If we just signed in and this reward matches one of the awardIds, it's the one we just got
+        if (signedNow && status.awardIds?.some((a) => a.id === f.awardId))
+          return true;
+        return false;
+      });
+
       if (targetFirst) {
         const fRes = status.resourceInfoMap[targetFirst.awardId];
         if (fRes) {

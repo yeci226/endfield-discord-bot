@@ -172,105 +172,48 @@ const command: Command = {
 
           hasResult = true;
 
-          let status = await getAttendanceList(
-            gameRoleStr,
+          const {
+            processRoleAttendance,
+          } = require("../../utils/attendanceUtils");
+          const res = await processRoleAttendance(
+            role,
+            binding.gameId || 3,
             account.cookie,
             t.lang,
             account.cred,
             account.salt,
+            isClaim,
+            t,
           );
-          let claimResult = null;
-          let claimedNow = false;
 
-          if (isClaim && status && !status.hasToday) {
-            claimResult = await executeAttendance(
-              gameRoleStr,
-              account.cookie,
-              t.lang,
-              account.cred,
-              account.salt,
-            );
-            if (claimResult && claimResult.code === 0) {
-              claimedNow = true;
-              // Refresh status
-              status = await getAttendanceList(
-                gameRoleStr,
-                account.cookie,
-                t.lang,
-                account.cred,
-                account.salt,
-              );
-            }
-          }
-
-          // Build Section for this role
-          const totalDays = status?.calendar.filter((d) => d.done).length || 0;
-          const todayReward =
-            status?.calendar.find((r) => r.available) ||
-            [...(status?.calendar || [])].reverse().find((r) => r.done);
-
-          let rewardName = t("None");
-          let rewardIcon = "";
-
-          if (todayReward) {
-            const resInfo = status?.resourceInfoMap?.[todayReward.awardId];
-            if (resInfo) {
-              rewardName = `${resInfo.name} x${resInfo.count}`;
-              rewardIcon = resInfo.icon;
-            }
-          }
-
-          let firstRewardName = "";
-          let firstRewardIcon = "";
-
-          if (status?.first) {
-            const signedCount = status.calendar.filter((d) => d.done).length;
-
-            // Try to find an available first reward (e.g., for day 1, 2, or 3)
-            let targetFirst = status.first.find((f) => f.available);
-
-            // If nothing is explicitly available now (maybe because we just signed in),
-            // we should NOT fallback to signedCount because signedCount is MONTHLY,
-            // while "first" rewards are ONE-TIME (lifetime). using signedCount causes
-            // "Newcomer Reward" to appear on day 1-3 of EVERY month, which is wrong.
-            // We rely solely on `available` field from API or if we want to confirm claiming,
-            // we'd need better data. For now, strict check is better than wrong info.
-
-            if (targetFirst && (targetFirst.available || targetFirst.done)) {
-              const fRes = status.resourceInfoMap[targetFirst.awardId];
-              if (fRes) {
-                firstRewardName = `${fRes.name} x${fRes.count}`;
-                if (!rewardIcon) firstRewardIcon = fRes.icon;
-              }
-            }
-          }
+          if (!res) continue;
 
           let statusText = "";
-          if (status?.hasToday || claimedNow) {
-            statusText = `## ${t("daily_Success")}\n### ${t("daily_TodayReward")}: \`${rewardName}\``;
-            if (firstRewardName) {
-              statusText += `\n### ${t("daily_FirstReward")}: \`${firstRewardName}\``;
+          if (res.hasToday || res.signedNow) {
+            statusText = `## ${t("daily_Success")}\n### ${t("daily_TodayReward")}: \`${res.rewardName}\``;
+            if (res.firstRewardName) {
+              statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
             }
-            statusText += `\n### ${t("daily_TotalDays")}: \`${totalDays}\` ${t("Day")}`;
+            statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
           } else {
-            statusText = `## ${t("daily_Failed")}\n### ${t("daily_TodayPending")}: \`${rewardName}\``;
-            if (firstRewardName) {
-              statusText += `\n### ${t("daily_FirstReward")}: \`${firstRewardName}\``;
+            statusText = `## ${t("daily_Failed")}\n### ${t("daily_TodayPending")}: \`${res.rewardName}\``;
+            if (res.firstRewardName) {
+              statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
             }
-            statusText += `\n### ${t("daily_TotalDays")}: \`${totalDays}\` ${t("Day")}`;
-            if (isClaim && !claimedNow) {
-              statusText += `\n⚠️ ${t("Error")}: \`${claimResult?.message || t("UnknownError")}\``;
+            statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
+            if (isClaim && !res.signedNow) {
+              statusText += `\n⚠️ ${t("Error")}: \`${res.message || t("UnknownError")}\``;
             }
           }
 
           const textDisplay = new TextDisplayBuilder().setContent(
             `**${role.nickname}** (Lv.${role.level}) - ${role.serverName}\n${statusText}`,
           );
-          if (rewardIcon) {
+          if (res.rewardIcon) {
             const roleSection = new SectionBuilder()
               .addTextDisplayComponents(textDisplay)
               .setThumbnailAccessory(
-                new ThumbnailBuilder({ media: { url: rewardIcon } }),
+                new ThumbnailBuilder({ media: { url: res.rewardIcon } }),
               );
             container.addSectionComponents(roleSection);
           } else {
