@@ -1,4 +1,7 @@
 import { getAttendanceList, executeAttendance } from "./skportApi";
+import { Logger } from "./Logger";
+
+const logger = new Logger("AttendanceUtils");
 
 /**
  * Processes attendance for a single game role.
@@ -13,11 +16,20 @@ export async function processRoleAttendance(
   salt: string,
   isClaim: boolean,
   tr: any,
+  options: any = {},
 ) {
   const gameRoleStr = `3_${role.roleId}_${role.serverId}`;
 
   try {
-    let status = await getAttendanceList(gameRoleStr, cookie, lang, cred, salt);
+    const res = await getAttendanceList(
+      gameRoleStr,
+      cookie,
+      lang,
+      cred,
+      salt,
+      options,
+    );
+    let status = res?.data;
 
     if (!status) {
       return {
@@ -25,7 +37,10 @@ export async function processRoleAttendance(
         nickname: role.nickname,
         level: role.level,
         error: true,
-        message: tr("Error") || "Status request failed",
+        message:
+          res?.code === 10000
+            ? tr("TokenExpired")
+            : tr("Error") || "Status request failed",
       };
     }
 
@@ -39,6 +54,7 @@ export async function processRoleAttendance(
         lang,
         cred,
         salt,
+        options,
       );
 
       if (
@@ -66,8 +82,9 @@ export async function processRoleAttendance(
             lang,
             cred,
             salt,
+            options,
           );
-          if (newStatus) status = newStatus;
+          if (newStatus?.data) status = newStatus.data;
         }
       }
     }
@@ -105,11 +122,12 @@ export async function processRoleAttendance(
     }
 
     let firstRewardName = "";
-    if (status.first) {
-      // Find a newcomer reward that is either available to claim OR was just claimed (available in new status or matches awardId)
+    if (status.first && status.first.length > 0) {
+      // Find a newcomer reward that is:
+      // 1. Available to claim right now AND not done
+      // 2. OR just claimed successfully
       const targetFirst = status.first.find((f) => {
-        if (f.available) return true;
-        // If we just signed in and this reward matches one of the awardIds, it's the one we just got
+        if (f.available && !f.done) return true;
         if (signedNow && status.awardIds?.some((a) => a.id === f.awardId))
           return true;
         return false;
@@ -119,6 +137,14 @@ export async function processRoleAttendance(
         const fRes = status.resourceInfoMap[targetFirst.awardId];
         if (fRes) {
           firstRewardName = `${fRes.name} x${fRes.count}`;
+
+          // If this reward is already in rewardName (because it was in awardIds),
+          // we should remove it from rewardName to avoid showing it twice,
+          // or just keep it as the "Newbie Reward" specifically.
+          // For now, we'll just ensure it's not showing as the "Main" reward if possible.
+          // However, if awardIds has multiple, rewardName already has them all joined.
+          // We'll leave the dual-display for now as it's safer, but the !f.done check
+          // should fix the "showing old rewards" issue.
         }
       }
     }
@@ -137,7 +163,7 @@ export async function processRoleAttendance(
       message: claimResult?.message,
     };
   } catch (error: any) {
-    console.error(`[AttendanceUtils] Error for role ${role.roleId}:`, error);
+    logger.error(`Error for role ${role.roleId}: ${error.message}`);
     return {
       roleId: role.roleId,
       nickname: role.nickname,

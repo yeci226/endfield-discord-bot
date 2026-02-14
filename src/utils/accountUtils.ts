@@ -1,5 +1,10 @@
 import { CustomDatabase } from "./Database";
-import { getGamePlayerBinding, verifyToken } from "./skportApi";
+import {
+  getGamePlayerBinding,
+  verifyToken,
+  refreshSkToken,
+  refreshAccountToken,
+} from "./skportApi";
 import { extractAccountToken } from "../commands/account/login";
 import { decryptAccount, encryptAccount } from "./cryptoUtils";
 
@@ -93,42 +98,42 @@ export async function ensureAccountBinding(
   let bindingList: any[] = [];
   let newCred = account.cred;
   let newSalt = account.salt;
+  let newCookie = account.cookie;
   let modified = false;
 
-  // Step 1: Try with existing credentials if available
-  // This serves as both a "check validity" and "refresh roles" step.
+  // We handle imports via top-level now, but kept for context if needed.
+  // const { refreshSkToken, refreshAccountToken, getGamePlayerBinding, verifyToken } = require("./skportApi");
+
+  // Step 1: Try with existing credentials (fastest)
   if (account.cred && account.salt) {
     try {
       const bindings = await getGamePlayerBinding(
-        undefined, // Try without cookie first to test cred validity
+        undefined,
         lang,
         account.cred,
         account.salt,
       );
-      const endfield = bindings?.find((b) => b.appCode === "endfield");
+      const endfield = bindings?.find((b: any) => b.appCode === "endfield");
       if (endfield && endfield.bindingList) {
         bindingList = endfield.bindingList;
         rolesRestored = true;
       }
-    } catch (e) {
-      // Step 1 Failed (likely 401 or network), proceed to Step 2
-    }
+    } catch (e) {}
   }
 
-  // Step 2: Try Refreshing with Cred if Step 1 failed
+  // Step 2: Try Refreshing Salt with Cred
   if (!rolesRestored && account.cred) {
-    const { refreshSkToken } = require("./skportApi");
     const newToken = await refreshSkToken(account.cred);
     if (newToken) {
       newSalt = newToken;
       try {
         const bindings = await getGamePlayerBinding(
-          account.cookie,
+          undefined,
           lang,
           account.cred,
           newSalt,
         );
-        const endfield = bindings?.find((b) => b.appCode === "endfield");
+        const endfield = bindings?.find((b: any) => b.appCode === "endfield");
         if (endfield && endfield.bindingList) {
           bindingList = endfield.bindingList;
           rolesRestored = true;
@@ -137,27 +142,28 @@ export async function ensureAccountBinding(
     }
   }
 
-  // Step 3: Full Re-verification if Step 1 & 2 failed or no creds
-  if (!rolesRestored) {
-    const token = extractAccountToken(account.cookie);
-    if (token) {
-      const verifyRes = await verifyToken(`ACCOUNT_TOKEN=${token}`, lang);
+  // Step 3: Refresh Master Cookie (ACCOUNT_TOKEN) if still failed
+  if (!rolesRestored && account.cookie) {
+    const newTokenValue = await refreshAccountToken(account.cookie);
+    if (newTokenValue) {
+      newCookie = `ACCOUNT_TOKEN=${newTokenValue}`;
+      const verifyRes = await verifyToken(newCookie, lang);
       if (
         verifyRes &&
         verifyRes.status === 0 &&
         verifyRes.cred &&
-        (verifyRes as any).token // Check for token which acts as salt
+        verifyRes.token
       ) {
         newCred = verifyRes.cred;
-        newSalt = (verifyRes as any).token;
+        newSalt = verifyRes.token;
 
         const bindings = await getGamePlayerBinding(
-          account.cookie,
+          newCookie,
           lang,
           newCred,
           newSalt,
         );
-        const endfield = bindings?.find((b) => b.appCode === "endfield");
+        const endfield = bindings?.find((b: any) => b.appCode === "endfield");
         if (endfield && endfield.bindingList) {
           bindingList = endfield.bindingList;
           rolesRestored = true;
@@ -172,18 +178,20 @@ export async function ensureAccountBinding(
     const rolesChanged =
       JSON.stringify(account.roles) !== JSON.stringify(bindingList);
     const credsChanged = account.cred !== newCred || account.salt !== newSalt;
+    const cookieChanged = account.cookie !== newCookie;
 
-    if (rolesChanged || credsChanged) {
+    if (rolesChanged || credsChanged || cookieChanged) {
       account.roles = bindingList;
       account.cred = newCred;
       account.salt = newSalt;
+      account.cookie = newCookie;
       modified = true;
 
       // Save back to DB
       const allAccounts = await getAccounts(db, userId);
       if (allAccounts) {
         const idx = allAccounts.findIndex(
-          (acc) => acc.info.id === account.info.id,
+          (acc: any) => acc.info.id === account.info.id,
         );
         if (idx !== -1) {
           allAccounts[idx] = account; // account is already decrypted at runtime
@@ -194,4 +202,38 @@ export async function ensureAccountBinding(
   }
 
   return modified;
+}
+
+/**
+ * A generic wrapper that provides auto-refresh capabilities to any SKPort API action.
+ *
+ * @param client ExtendedClient instance
+ * @param userId Discord User ID
+ * @param account The account object (will be modified if refreshed)
+ * @param action A callback that receives (cred, salt, options) and returns a promise
+ * @param locale Language for the refresh logic
+ */
+export async function withAutoRefresh<T>(
+  client: any,
+  userId: string,
+  account: any,
+  action: (cred: string, salt: string, options: any) => Promise<T>,
+  locale: string = "tw",
+): Promise<T> {
+  const onStale = async (options: any) => {
+    const wasModified = await ensureAccountBinding(
+      account,
+      userId,
+      client.db,
+      locale,
+    );
+    if (wasModified) {
+      options.cred = account.cred;
+      options.salt = account.salt;
+      return true;
+    }
+    return false;
+  };
+
+  return action(account.cred, account.salt, { onStale, locale });
 }

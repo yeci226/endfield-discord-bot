@@ -22,6 +22,8 @@ const langs: Record<string, any> = {
   BindingNotFound:
     "No game binding info found. Please make sure you have created a character in the game.",
   AuthError: "Authentication failed. Please re-bind your account.",
+  TokenExpired:
+    "❌ **Token Expired or Request Error**\nWe apologize that the bot is not yet fully perfected. This account's session has expired. Please use `/login` to re-login and restore functionality.",
 
   // Account
   AccountNotFound:

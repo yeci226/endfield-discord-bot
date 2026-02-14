@@ -6,6 +6,7 @@ import {
 } from "discord-hybrid-sharding";
 import dotenv from "dotenv";
 import { join } from "path";
+import { Logger } from "./utils/Logger";
 
 dotenv.config();
 
@@ -47,8 +48,10 @@ manager.extend(
   }),
 );
 
+const logger = new Logger("Cluster Manager");
+
 manager.on("clusterCreate", (cluster) =>
-  console.log(`[Cluster Manager] Launched Cluster ${cluster.id}`),
+  logger.info(`Launched Cluster ${cluster.id}`),
 );
 
 manager.spawn({ timeout: -1 });

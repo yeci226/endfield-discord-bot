@@ -10,7 +10,11 @@ import {
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
-import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
+import {
+  ensureAccountBinding,
+  getAccounts,
+  withAutoRefresh,
+} from "../../utils/accountUtils";
 import {
   getAttendanceList,
   executeAttendance,
@@ -175,15 +179,23 @@ const command: Command = {
           const {
             processRoleAttendance,
           } = require("../../utils/attendanceUtils");
-          const res = await processRoleAttendance(
-            role,
-            binding.gameId || 3,
-            account.cookie,
+          const res: any = await withAutoRefresh(
+            client,
+            userId,
+            account,
+            (c: string, s: string, opt: any) =>
+              processRoleAttendance(
+                role,
+                binding.gameId || 3,
+                account.cookie,
+                t.lang,
+                c,
+                s,
+                isClaim,
+                t,
+                opt,
+              ),
             t.lang,
-            account.cred,
-            account.salt,
-            isClaim,
-            t,
           );
 
           if (!res) continue;

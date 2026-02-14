@@ -1,6 +1,9 @@
 import axios, { AxiosRequestConfig } from "axios";
 import crypto from "crypto";
 import { UserInfoResponse } from "./UserInfoInterfaces";
+import { Logger } from "./Logger";
+
+const logger = new Logger("SkportAPI");
 
 export async function getCardDetail(
   roleId: string,
@@ -359,15 +362,14 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
   };
 }
 
-/**
- * Generates the mandatory signature for Skport API requests
- */
+// Interfaces for API Responses
 export function generateSign(
   path: string,
   query: string,
   timestamp: string,
+  providedSalt?: string,
 ): string {
-  const salt = process.env.SKPORT_SALT || "";
+  const salt = providedSalt || process.env.SKPORT_SALT || "";
   const s = `${path}${query}${timestamp}${salt}`;
   return crypto.createHash("md5").update(s).digest("hex");
 }
@@ -400,25 +402,51 @@ export async function refreshSkToken(
   platform: string = "3",
 ): Promise<string | null> {
   const url = "https://zonai.skport.com/web/v1/auth/refresh";
+  const res = await makeRequest<{ code: number; data: { token: string } }>(
+    "GET",
+    url,
+    {
+      cred,
+      headers: {
+        platform,
+        vname: "1.0.0",
+        Origin: "https://www.skport.com",
+        Referer: "https://www.skport.com/",
+      },
+    },
+  );
+
+  if (res && res.code === 0 && res.data?.token) {
+    return res.data.token;
+  }
+  return null;
+}
+
+/**
+ * Refreshes the Gryphline ACCOUNT_TOKEN cookie via the web-api.
+ */
+export async function refreshAccountToken(
+  cookie: string,
+): Promise<string | null> {
+  const url = "https://web-api.skport.com/cookie_store/account_token";
   try {
     const response = await axios.get(url, {
       headers: {
-        cred: cred,
-        platform: platform,
-        vName: "1.0.0",
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Origin: "https://game.skport.com",
-        Referer: "https://game.skport.com/",
+        Accept: "application/json",
+        Cookie: cookie,
+        Origin: "https://www.skport.com",
+        Referer: "https://www.skport.com/",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
       },
     });
 
-    if (response.data?.code === 0 && response.data?.data?.token) {
-      return response.data.data.token;
+    if (response.data?.code === 0 && response.data?.data?.content) {
+      return response.data.data.content;
     }
     return null;
   } catch (error: any) {
-    console.error("[Skport] Refresh token failed:", error.message);
+    console.error("[Skport] refreshAccountToken failed:", error.message);
     return null;
   }
 }
@@ -433,101 +461,119 @@ export async function makeRequest<T>(
     data?: any;
     cred?: string;
     salt?: string;
-    retryIf401?: boolean;
+    onStale?: (options: any) => Promise<boolean>;
   } = {},
 ): Promise<T | null> {
-  const commonHeaders = getCommonHeaders(options.cred, options.locale);
-  const headers: any = { ...commonHeaders, ...options.headers };
+  const execute = async () => {
+    const commonHeaders = getCommonHeaders(options.cred, options.locale);
+    const headers: any = { ...commonHeaders, ...options.headers };
 
-  // Clean up undefined headers
-  Object.keys(headers).forEach((key) => {
-    if (headers[key] === undefined) delete headers[key];
-  });
-
-  if (method === "POST" && options.data !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  // Generate signature
-  const urlObj = new URL(url);
-  const pathname = urlObj.pathname;
-  let searchParams = new URLSearchParams(urlObj.search);
-
-  if (options.params) {
-    Object.entries(options.params).forEach(([key, val]) => {
-      if (val !== undefined && val !== null) {
-        searchParams.append(key, String(val));
-      }
+    // Clean up undefined headers
+    Object.keys(headers).forEach((key) => {
+      if (headers[key] === undefined) delete headers[key];
     });
-  }
 
-  const queryString = searchParams.toString();
-  const bodyString = options.data
-    ? typeof options.data === "string"
-      ? options.data
-      : JSON.stringify(options.data)
-    : "";
-
-  // Use V2 (HMAC) for binding and critical endpoints
-  const useV2 =
-    pathname.includes("/binding") ||
-    pathname.includes("/card/detail") ||
-    pathname.includes("/wiki/") ||
-    pathname.includes("/enums") ||
-    pathname.includes("/attendance") ||
-    pathname.includes("/v2/");
-
-  const signContent = method === "POST" ? bodyString : queryString;
-  const dId = headers.dId || headers.did || "";
-
-  // Ensure dId is in headers if we are using it for signature
-  if (!headers.dId && !headers.did) {
-    headers.dId = dId;
-  }
-
-  const sign = useV2
-    ? generateSignV2(
-        pathname,
-        signContent,
-        headers.timestamp,
-        headers.platform,
-        headers.vName || headers.vname || "1.0.0",
-        dId,
-        options.salt,
-      )
-    : generateSign(pathname, queryString, headers.timestamp);
-
-  // Optional: Debugging log for signed string
-  if (process.env.DEBUG_SKPORT_SIGN === "true") {
-    console.log(`[Debug] Sign Content: ${signContent}`);
-    console.log(`[Debug] Full Path: ${pathname}`);
-    console.log(`[Debug] Sign Result: ${sign}`);
-  }
-
-  headers.sign = sign;
-
-  try {
-    const config: AxiosRequestConfig = {
-      method,
-      url,
-      headers,
-      params: options.params,
-      data: options.data,
-    };
-    const response = await axios(config);
-    return response.data;
-  } catch (error: any) {
-    if (error.response?.status !== 404) {
-      console.error(`Error requesting ${url}:`, error.message);
-      if (error.response?.status === 401) {
-        console.error(
-          `[401 Unauthorized] URL: ${url} | Details:`,
-          JSON.stringify(error.response.data),
-        );
-      }
+    if (method === "POST" && options.data !== undefined) {
+      headers["Content-Type"] = "application/json";
     }
-    return error.response?.data || null;
+
+    // Generate signature
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname;
+    let searchParams = new URLSearchParams(urlObj.search);
+
+    if (options.params) {
+      Object.entries(options.params).forEach(([key, val]) => {
+        if (val !== undefined && val !== null) {
+          searchParams.append(key, String(val));
+        }
+      });
+    }
+
+    const queryString = searchParams.toString();
+    const bodyString = options.data
+      ? typeof options.data === "string"
+        ? options.data
+        : JSON.stringify(options.data)
+      : "";
+
+    // Use V2 (HMAC) for binding and critical endpoints
+    const useV2 =
+      pathname.includes("/binding") ||
+      pathname.includes("/card/detail") ||
+      pathname.includes("/wiki/") ||
+      pathname.includes("/enums") ||
+      pathname.includes("/attendance") ||
+      pathname.includes("/v2/");
+
+    const signContent = method === "POST" ? bodyString : queryString;
+    const dId = headers.dId || headers.did || "";
+
+    // Ensure dId is in headers if we are using it for signature
+    if (!headers.dId && !headers.did) {
+      headers.dId = dId;
+    }
+
+    const sign = useV2
+      ? generateSignV2(
+          pathname,
+          signContent,
+          headers.timestamp,
+          headers.platform,
+          headers.vName || headers.vname || "1.0.0",
+          dId,
+          options.salt,
+        )
+      : generateSign(pathname, queryString, headers.timestamp, options.salt);
+
+    // Optional: Debugging log for signed string
+    if (process.env.DEBUG_SKPORT_SIGN === "true") {
+      logger.debug(`Sign Content: ${signContent}`);
+      logger.debug(`Full Path: ${pathname}`);
+      logger.debug(`Sign Result: ${sign}`);
+    }
+
+    headers.sign = sign;
+
+    try {
+      const config: AxiosRequestConfig = {
+        method,
+        url,
+        headers,
+        params: options.params,
+        data: options.data,
+      };
+      const response = await axios(config);
+      return response.data;
+    } catch (error: any) {
+      const resp = error.response;
+      if (resp?.status !== 404) {
+        if (resp?.status === 401) {
+          logger.warn(`[401 Unauthorized] URL: ${url}`);
+        } else {
+          logger.error(`Error requesting ${url}: ${error.message}`);
+        }
+      }
+      return resp?.data || null;
+    }
+  };
+
+  let result = await execute();
+
+  // Automatic retry on stale token (code 10000 or 401 status)
+  const isStale = result && (result.code === 10000 || result.status === 401);
+  if (isStale && options.onStale) {
+    logger.info(
+      `Stale token (Code ${result.code}) detected. Attempting refresh...`,
+    );
+    const refreshed = await options.onStale(options);
+    if (refreshed) {
+      logger.info(`Refresh successful. Retrying request to ${url}...`);
+      result = await execute();
+    }
   }
+
+  return result;
 }
 
 // Pool Interfaces
@@ -683,6 +729,7 @@ export async function getGamePlayerBinding(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<GameBinding[] | null> {
   const url = "https://zonai.skport.com/api/v1/game/player/binding";
   const headers: any = {
@@ -702,6 +749,7 @@ export async function getGamePlayerBinding(
     cred,
     salt,
     headers,
+    ...options,
   });
   if (res && res.code === 0) {
     return res.data.list;
@@ -733,7 +781,8 @@ export async function getAttendanceList(
   locale?: string,
   cred?: string,
   salt?: string,
-): Promise<AttendanceResponse | null> {
+  options: any = {},
+): Promise<{ code: number; data: AttendanceResponse } | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
     "sk-game-role": gameRole,
@@ -749,12 +798,10 @@ export async function getAttendanceList(
       cred,
       salt,
       headers,
+      ...options,
     },
   );
-  if (res && res.code === 0) {
-    return res.data;
-  }
-  return null;
+  return res;
 }
 
 export async function getAttendanceRecords(
@@ -763,7 +810,7 @@ export async function getAttendanceRecords(
   locale?: string,
   cred?: string,
   salt?: string,
-) {
+): Promise<{ code: number; data: any } | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance/record";
   const headers: any = {
     "sk-game-role": gameRole,
@@ -777,10 +824,7 @@ export async function getAttendanceRecords(
     salt,
     headers,
   });
-  if (res && res.code === 0) {
-    return res.data;
-  }
-  return null;
+  return res;
 }
 
 export async function executeAttendance(
@@ -789,6 +833,7 @@ export async function executeAttendance(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<{ code: number; message: string; data?: AttendanceResponse }> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
@@ -806,6 +851,7 @@ export async function executeAttendance(
     cred,
     salt,
     headers,
+    ...options,
   });
   return res || { code: -1, message: "Request failed" };
 }
@@ -831,9 +877,9 @@ export async function getItemCatalog(
   cred?: string,
   locale?: string,
   salt?: string,
+  options: any = {},
 ): Promise<any | null> {
   const url = `https://zonai.skport.com/web/v1/wiki/item/catalog`;
-  console.log(`[skportApi] getItemCatalog URL: ${url}`);
   return makeRequest("GET", url, {
     cred,
     locale,
@@ -843,6 +889,7 @@ export async function getItemCatalog(
       Origin: "https://wiki.skport.com",
       Referer: "https://wiki.skport.com/",
     },
+    ...options,
   });
 }
 
@@ -851,11 +898,9 @@ export async function getItemInfo(
   cred?: string,
   locale?: string,
   salt?: string,
+  options: any = {},
 ): Promise<any | null> {
   const url = `https://zonai.skport.com/web/v1/wiki/item/info`;
-  console.log(
-    `[skportApi] getItemInfo URL: ${url}, Params: ${JSON.stringify({ id })}`,
-  );
   return makeRequest("GET", url, {
     cred,
     locale,
@@ -865,6 +910,7 @@ export async function getItemInfo(
       Origin: "https://wiki.skport.com",
       Referer: "https://wiki.skport.com/",
     },
+    ...options,
   });
 }
 

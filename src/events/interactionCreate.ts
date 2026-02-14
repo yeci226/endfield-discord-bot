@@ -67,12 +67,13 @@ const event: Event = {
           });
         }
       } catch (error: any) {
-        console.log(error);
         if (error.code === 10062 || error.code === 40060) {
           // Interaction expired or already handled, ignore
           return;
         }
-        logger.error(`Command execution error: ${error.message}`);
+        logger.error(
+          `Command execution error: ${error.message}${error.stack ? `\n${error.stack}` : ""}`,
+        );
         if (interaction.replied || interaction.deferred) {
           await interaction.followUp({
             content: tr("Error"),
@@ -93,8 +94,11 @@ const event: Event = {
       if (command) {
         try {
           await command.execute(client, interaction, tr, client.db);
-        } catch (error) {
-          console.error("Error handling select menu interaction:", error);
+        } catch (error: any) {
+          if (error.code === 10062 || error.code === 40060) return;
+          logger.error(
+            `Error handling select menu interaction: ${error.message}`,
+          );
           if (interaction.replied || interaction.deferred) {
             await interaction.followUp({
               content: tr("Error"),
@@ -125,7 +129,8 @@ const event: Event = {
       if (command) {
         try {
           await command.execute(client, interaction, tr, client.db);
-        } catch (error) {
+        } catch (error: any) {
+          if (error.code === 10062 || error.code === 40060) return;
           console.error("Error handling modal submit:", error);
         }
       }

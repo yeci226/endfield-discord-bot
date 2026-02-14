@@ -20,6 +20,8 @@ const langs: Record<string, any> = {
   FetchDataFailed: "獲取遊戲資料失敗，請檢查 Cookie 是否有效或稍後再試。",
   BindingNotFound: "未找到遊戲綁定資訊，請確認您已在遊戲中創建角色。",
   AuthError: "身分驗證失敗，請重新綁定帳號。",
+  TokenExpired:
+    "❌ **Token 已過期或請求異常**\n很抱歉機器人尚未完全完善，此帳號的登入態已失效，請使用 `/login` 重新登入以恢復功能。",
 
   // Account
   AccountNotFound:

@@ -4,7 +4,11 @@ import {
   formatSkGameRole,
   getAttendanceList,
 } from "../utils/skportApi";
-import { ensureAccountBinding, getAccounts } from "../utils/accountUtils";
+import {
+  ensureAccountBinding,
+  getAccounts,
+  withAutoRefresh,
+} from "../utils/accountUtils";
 import {
   ContainerBuilder,
   SectionBuilder,
@@ -13,7 +17,7 @@ import {
   MessageFlags,
 } from "discord.js";
 import moment from "moment-timezone";
-import colors from "colors";
+import { Logger } from "../utils/Logger";
 
 interface AutoDailyConfig {
   time: number; // 0-23
@@ -27,9 +31,11 @@ export class AutoDailyService {
   private client: ExtendedClient;
   private interval: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
+  private logger: Logger;
 
   constructor(client: ExtendedClient) {
     this.client = client;
+    this.logger = new Logger("AutoDaily");
   }
 
   public start() {
@@ -40,7 +46,7 @@ export class AutoDailyService {
     // Or better, calculate delay to next hour.
 
     this.scheduleNextRun();
-    console.log(colors.green("[AutoDaily] Service started."));
+    this.logger.success("Service started.");
   }
 
   private scheduleNextRun() {
@@ -57,10 +63,8 @@ export class AutoDailyService {
   }
 
   public async manualRunRange(startHour: number, endHour: number) {
-    console.log(
-      colors.yellow(
-        `[AutoDaily] Manually running range: ${startHour}:00 to ${endHour}:00 (Asia/Taipei)`,
-      ),
+    this.logger.warn(
+      `Manually running range: ${startHour}:00 to ${endHour}:00 (Asia/Taipei)`,
     );
     for (let h = startHour; h <= endHour; h++) {
       await this.runHourlyCheck(h);
@@ -76,10 +80,8 @@ export class AutoDailyService {
         targetHour !== undefined
           ? targetHour
           : parseInt(moment().tz("Asia/Taipei").format("H"));
-      console.log(
-        colors.blue(
-          `[AutoDaily] Running checks for hour ${currentHour}:00 (Asia/Taipei)`,
-        ),
+      this.logger.info(
+        `Running checks for hour ${currentHour}:00 (Asia/Taipei)`,
       );
 
       const dailyData =
@@ -101,28 +103,23 @@ export class AutoDailyService {
           `${userId}.lastAutoDaily`,
         );
         if (lastProcessed === today) {
-          console.log(
-            colors.gray(
-              `[AutoDaily] Skipping user ${userId} (already done today)`,
-            ),
-          );
+          // Skipping noisy user logs to keep it clean
           continue;
         }
 
         eligibleUsers.push(userId);
       }
 
-      console.log(
-        colors.cyan(
-          `[AutoDaily] Found ${eligibleUsers.length} users for this hour.`,
-        ),
-      );
+      this.logger.info(`Found ${eligibleUsers.length} users for this hour.`);
 
       for (const userId of eligibleUsers) {
         await this.processUser(userId, dailyData[userId]);
       }
     } catch (error) {
-      console.error(colors.red("[AutoDaily] Error in hourly check:"), error);
+      this.logger.error(
+        "Error in hourly check: " +
+          (error instanceof Error ? error.message : error),
+      );
     } finally {
       this.isRunning = false;
     }
@@ -173,15 +170,23 @@ export class AutoDailyService {
             if (processedRoles.has(gameRoleStr)) continue;
             processedRoles.add(gameRoleStr);
 
-            const res = await processRoleAttendance(
-              role,
-              gameId,
-              account.cookie,
+            const res: any = await withAutoRefresh(
+              this.client,
+              userId,
+              account,
+              (c: string, s: string, opt: any) =>
+                processRoleAttendance(
+                  role,
+                  gameId,
+                  account.cookie,
+                  tr.lang,
+                  c,
+                  s,
+                  true,
+                  tr,
+                  opt,
+                ),
               tr.lang,
-              account.cred,
-              account.salt,
-              true, // Always claim in AutoDaily
-              tr,
             );
 
             if (res) {
@@ -275,16 +280,16 @@ export class AutoDailyService {
             },
           );
         } catch (e) {
-          console.error(
-            colors.red("[AutoDaily] Failed to broadcast notification:"),
-            e instanceof Error ? e.message : e,
+          this.logger.error(
+            "Failed to broadcast notification: " +
+              (e instanceof Error ? e.message : e),
           );
         }
       }
     } catch (error) {
-      console.error(
-        colors.red(`[AutoDaily] Error processing user ${userId}:`),
-        error,
+      this.logger.error(
+        `Error processing user ${userId}: ` +
+          (error instanceof Error ? error.message : error),
       );
     }
   }

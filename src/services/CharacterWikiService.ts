@@ -2,13 +2,9 @@ import { ExtendedClient } from "../structures/Client";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
-import {
-  getItemCatalog,
-  getItemInfo,
-  refreshSkToken,
-} from "../utils/skportApi";
+import { getItemCatalog, getItemInfo } from "../utils/skportApi";
+import { getAccounts, withAutoRefresh } from "../utils/accountUtils";
 import { Logger } from "../utils/Logger";
-import colors from "colors";
 
 export class CharacterWikiService {
   private client: ExtendedClient;
@@ -174,53 +170,25 @@ export class CharacterWikiService {
       );
       const accountData = await this.getValidAccount();
       if (!accountData) {
-        console.warn("[CharacterWiki] No valid user account found.");
+        this.logger.warn("No valid user account found.");
         return;
       }
 
-      console.log(`[CharacterWiki] Using account ${accountData.id}`);
+      this.logger.info(`Using account ${accountData.id}`);
 
-      let catalogRes = await getItemCatalog(
-        1,
-        accountData.cred,
+      let catalogRes: any = await withAutoRefresh(
+        this.client,
+        accountData.userId,
+        accountData,
+        (c: string, s: string, opt: any) =>
+          getItemCatalog(1, c, "zh_Hant", s, opt),
         "zh_Hant",
-        accountData.salt,
       );
+
       fs.appendFileSync(
         "wiki_debug.log",
         `[${new Date().toISOString()}] Catalog Code: ${catalogRes?.code}\n`,
       );
-
-      // Handle Code 10000 (Auth/Sign failed, likely stale token)
-      if (catalogRes?.code === 10000) {
-        fs.appendFileSync(
-          "wiki_debug.log",
-          `[${new Date().toISOString()}] Auth failed (10000), attempting token refresh...\n`,
-        );
-        const newToken = await refreshSkToken(accountData.cred);
-        if (newToken) {
-          fs.appendFileSync(
-            "wiki_debug.log",
-            `[${new Date().toISOString()}] Token refreshed. Retrying catalog fetch.\n`,
-          );
-          accountData.salt = newToken; // Update salt for this session
-          catalogRes = await getItemCatalog(
-            1,
-            accountData.cred,
-            "zh_Hant",
-            accountData.salt,
-          );
-          fs.appendFileSync(
-            "wiki_debug.log",
-            `[${new Date().toISOString()}] Retry Catalog Code: ${catalogRes?.code}\n`,
-          );
-        } else {
-          fs.appendFileSync(
-            "wiki_debug.log",
-            `[${new Date().toISOString()}] Token refresh failed.\n`,
-          );
-        }
-      }
 
       if (!catalogRes || catalogRes.code !== 0 || !catalogRes.data?.catalog) {
         fs.appendFileSync(
@@ -325,9 +293,7 @@ export class CharacterWikiService {
         `[${new Date().toISOString()}] Finished. Processed ${totalProcessed} items.\n`,
       );
 
-      console.log(
-        `[CharacterWiki] Finished. Processed ${totalProcessed} items.`,
-      );
+      this.logger.success(`Finished. Processed ${totalProcessed} items.`);
 
       // 只有在真的有處理到東西時才更新時間戳記，避免因為資料不完整導致今天都不再執行
       if (totalProcessed > 0 && !force) {
@@ -384,11 +350,13 @@ export class CharacterWikiService {
         }
       }
 
-      const infoRes = await getItemInfo(
-        itemId,
-        accountData.cred,
+      const infoRes: any = await withAutoRefresh(
+        this.client,
+        accountData.userId,
+        accountData,
+        (c: string, s: string, opt: any) =>
+          getItemInfo(itemId, c, "zh_Hant", s, opt),
         "zh_Hant",
-        accountData.salt,
       );
       if (!infoRes || infoRes.code !== 0 || !infoRes.data?.item) {
         this.logger.error(`Failed to fetch info for item ${itemId}`);
@@ -722,7 +690,7 @@ export class CharacterWikiService {
       }
     }
 
-    console.log(
+    this.logger.info(
       `Found ${accounts.length} potential accounts. Testing for robustness...`,
     );
 
@@ -730,26 +698,19 @@ export class CharacterWikiService {
     for (const acc of accounts) {
       try {
         // Check item 21 (Perica) for extraInfo
-        // Note: Using skportApi.getItemInfo (no gameId: 3)
-        let res = await getItemInfo(21, acc.cred, "zh_Hant", acc.salt);
+        // We use withAutoRefresh to handle 401/10000 automatically and save any new salt to DB.
+        let res: any = await withAutoRefresh(
+          this.client,
+          acc.userId,
+          acc,
+          (c: string, s: string, opt: any) =>
+            getItemInfo(21, c, "zh_Hant", s, opt),
+          "zh_Hant",
+        );
 
-        // Refresh if stale (Code 10000) OR if data is missing (Code 0 but public/restricted view)
-        const hasExtraInitial = !!res?.data?.item?.extraInfo;
-        const hasWidgetInitial = !!res?.data?.item?.widgetCommonMap;
-
-        if (
-          (res && res.code === 10000) ||
-          (res && res.code === 0 && !hasExtraInitial && !hasWidgetInitial)
-        ) {
-          console.log(
-            `Token likely stale (Code ${res.code}, Missing Data), refreshing account ${acc.id}...`,
-          );
-          const newToken = await refreshSkToken(acc.cred);
-          if (newToken) {
-            acc.salt = newToken;
-            res = await getItemInfo(21, acc.cred, "zh_Hant", acc.salt);
-          }
-        }
+        // Even after auto-refresh, if data is missing (Code 0 but restricted view),
+        // we might still consider it "stale" or "insufficient".
+        // However, withAutoRefresh handles the 10000 code specifically now.
 
         const hasExtra = !!res?.data?.item?.extraInfo;
         const hasWidget = !!res?.data?.item?.widgetCommonMap;
@@ -759,14 +720,17 @@ export class CharacterWikiService {
             await this.client.db.set("wiki_last_robust_account_id", acc.id);
             this.logger.info(`Updated robust account cache: ${acc.id}`);
           }
-          console.log(`Found robust account: ${acc.userId} / ${acc.id}`);
+          this.logger.success(
+            `Found robust account: ${acc.userId} / ${acc.id}`,
+          );
           return {
             id: acc.id,
+            userId: acc.userId,
             cred: acc.cred,
             salt: acc.salt,
           };
         } else {
-          console.warn(
+          this.logger.warn(
             `Account ${acc.id} rejected. Code: ${res?.code}, HasExtra: ${hasExtra}, HasWidget: ${hasWidget}`,
           );
         }
@@ -775,10 +739,11 @@ export class CharacterWikiService {
       }
     }
 
-    console.warn("No robust account found. Using first available.");
+    this.logger.warn("No robust account found. Using first available.");
     const first = accounts[0];
     return {
       id: first.id,
+      userId: first.userId,
       cred: first.cred,
       salt: first.salt,
     };

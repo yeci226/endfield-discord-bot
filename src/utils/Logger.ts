@@ -8,39 +8,41 @@ export class Logger {
     this.scope = scope;
   }
 
-  public log(message: string): void {
-    console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${message}`,
-    );
+  private getTimestamp(): string {
+    return colors.grey(`[${moment().format("YYYY-MM-DD HH:mm:ss")}]`);
   }
 
   public info(message: string): void {
     console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${colors.green("INFO")} ${message}`,
-    );
-  }
-
-  public warn(message: string): void {
-    console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${colors.yellow("WARN")} ${message}`,
-    );
-  }
-
-  public error(message: string): void {
-    console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${colors.red("ERROR")} ${message}`,
+      `${this.getTimestamp()} ${colors.cyan(`[${this.scope}]`)} ${message}`,
     );
   }
 
   public success(message: string): void {
     console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${colors.green("SUCCESS")} ${message}`,
+      `${this.getTimestamp()} ${colors.green(`[${this.scope}]`)} ${message}`,
+    );
+  }
+
+  public warn(message: string): void {
+    console.log(
+      `${this.getTimestamp()} ${colors.yellow(`[${this.scope}]`)} ${message}`,
+    );
+  }
+
+  public error(message: string): void {
+    console.log(
+      `${this.getTimestamp()} ${colors.red(`[${this.scope}]`)} ${message}`,
     );
   }
 
   public debug(message: string): void {
     console.log(
-      `[${moment().format("YYYY-MM-DD HH:mm:ss")}] [${this.scope}] ${colors.blue("DEBUG")} ${message}`,
+      `${this.getTimestamp()} ${colors.magenta(`[${this.scope}]`)} ${message}`,
     );
+  }
+
+  public log(message: string): void {
+    this.info(message);
   }
 }

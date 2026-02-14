@@ -90,6 +90,11 @@ const command: Command = {
           }
           hasData = true;
         }
+      } else if (charPoolData?.code === 10000) {
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(tr("TokenExpired")),
+        );
+        hasData = true;
       } else {
         container.addTextDisplayComponents(
           new TextDisplayBuilder().setContent(tr("gacha_CharEmpty")),

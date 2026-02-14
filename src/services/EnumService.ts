@@ -1,5 +1,8 @@
 import { getEnums, SkEnumsData } from "../utils/skportApi";
 import { CustomDatabase } from "../utils/Database";
+import { Logger } from "../utils/Logger";
+
+const logger = new Logger("EnumService");
 
 export class EnumService {
   private static readonly CACHE_KEY = "game_enums_cache";
@@ -31,8 +34,8 @@ export class EnumService {
         });
         return res.data;
       }
-    } catch (error) {
-      console.error("[EnumService] Failed to refresh enums:", error);
+    } catch (error: any) {
+      logger.error(`Failed to refresh enums: ${error.message}`);
     }
 
     // Fallback to stale cache if API fails

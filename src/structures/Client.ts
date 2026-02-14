@@ -11,6 +11,7 @@ import dotenv from "dotenv";
 import { SkportNewsService } from "../services/SkportNewsService";
 import { AutoDailyService } from "../services/AutoDailyService";
 import { CharacterWikiService } from "../services/CharacterWikiService";
+import { Logger } from "../utils/Logger";
 
 dotenv.config();
 
@@ -21,6 +22,7 @@ export class ExtendedClient extends Client {
   public autoDailyService!: AutoDailyService;
   public wikiService!: CharacterWikiService;
   public cluster: ClusterClient<Client>;
+  private logger!: Logger;
 
   constructor() {
     const isSharded = process.env.CLUSTER !== undefined;
@@ -48,6 +50,7 @@ export class ExtendedClient extends Client {
       } as any;
     }
     this.db = new CustomDatabase("json.sqlite");
+    this.logger = new Logger(`Cluster ${this.cluster.id}`);
   }
 
   public start() {
@@ -65,8 +68,8 @@ export class ExtendedClient extends Client {
       process.exit(1);
     }
     this.login(token);
-    console.log(
-      `[Cluster ${this.cluster.id}] Client logged in. Shards: ${getInfo().SHARD_LIST.join(", ")}`,
+    this.logger.success(
+      `Client logged in. Shards: ${getInfo().SHARD_LIST.join(", ")}`,
     );
   }
 }

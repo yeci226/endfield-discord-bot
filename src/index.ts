@@ -6,6 +6,9 @@ import { AutoDailyService } from "./services/AutoDailyService";
 import { VerificationClient } from "./web/VerificationClient";
 import { CharacterWikiService } from "./services/CharacterWikiService";
 import { WebManager } from "./web/WebManager";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 (async () => {
   const client = new ExtendedClient();
@@ -17,16 +20,14 @@ import { WebManager } from "./web/WebManager";
   await loadEvents(client);
   client.start();
 
-  // Initialize WebManager
+  // Initialize WebManager and VerificationClient (will start later based on cluster)
   const webManager = new WebManager(client);
-  webManager.start();
-
-  // Initialize VerificationClient on all clusters for session registration
   const verifyClient = new VerificationClient(client);
-  verifyClient.start();
 
   // 只有在 Cluster 0 啟動全域服務
   if (client.cluster.id === 0) {
+    webManager.start();
+    verifyClient.start();
     client.newsService.start();
     client.autoDailyService.start();
     // client.wikiService.start();
