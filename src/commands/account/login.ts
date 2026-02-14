@@ -597,6 +597,7 @@ const command: Command = {
           if (exists) {
             // Update existing
             Object.assign(exists, accountData);
+            exists.invalid = false;
           } else {
             if (accounts.length >= 5) {
               const limitContainer =
@@ -744,6 +745,7 @@ async function handleLoginSuccess(
 
     if (exists) {
       Object.assign(exists, accountData);
+      exists.invalid = false;
     } else {
       if (accounts.length >= 5) {
         const container = new ContainerBuilder().addTextDisplayComponents(

@@ -70,9 +70,11 @@ export async function ensureAccountBinding(
   db: CustomDatabase,
   lang: string,
 ): Promise<boolean> {
-  // If we already have roles, we assume they are valid (e.g. from a fresh login or previous use)
-  // This avoids redundant binding calls which can trigger 401 if credentials are old but still okay for other APIs.
-  if (account.roles && account.roles.length > 0) {
+  // Clear invalid flag if we are attempting ensure (force re-validation)
+  // or if roles already exist, keep it as is.
+  // Actually, if this is called, we usually WANT to validate.
+
+  if (account.roles && account.roles.length > 0 && !account.invalid) {
     return false;
   }
   // If we already have roles and we assume they are valid, we might skip.
@@ -172,6 +174,33 @@ export async function ensureAccountBinding(
     }
   }
 
+  // Final Step: If still not restored, mark as invalid to prevent further retries
+  if (!rolesRestored) {
+    if (!account.invalid) {
+      account.invalid = true;
+      modified = true;
+
+      // Save back to DB
+      const allAccounts = await getAccounts(db, userId);
+      if (allAccounts) {
+        const idx = allAccounts.findIndex(
+          (acc: any) => acc.info.id === account.info.id,
+        );
+        if (idx !== -1) {
+          allAccounts[idx] = account;
+          await saveAccounts(db, userId, allAccounts);
+        }
+      }
+    }
+    return modified;
+  }
+
+  // Successful restoration or already valid - clear invalid flag
+  if (account.invalid) {
+    account.invalid = false;
+    modified = true;
+  }
+
   // Save if we successfully restored/validated roles
   if (rolesRestored) {
     // Check if anything actually changed to avoid unnecessary DB writes
@@ -220,6 +249,14 @@ export async function withAutoRefresh<T>(
   action: (cred: string, salt: string, options: any) => Promise<T>,
   locale: string = "tw",
 ): Promise<T> {
+  if (account.invalid) {
+    // If account is marked invalid, we can choose to throw or return a specific "invalid" response.
+    // However, throw is cleaner for catching at a higher level (like in a loop).
+    const error = new Error("TokenExpired");
+    (error as any).code = 10000;
+    throw error;
+  }
+
   const onStale = async (options: any) => {
     const wasModified = await ensureAccountBinding(
       account,
@@ -227,7 +264,7 @@ export async function withAutoRefresh<T>(
       client.db,
       locale,
     );
-    if (wasModified) {
+    if (wasModified && !account.invalid) {
       options.cred = account.cred;
       options.salt = account.salt;
       return true;

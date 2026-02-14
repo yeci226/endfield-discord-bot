@@ -10,7 +10,11 @@ import {
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { getCharacterPool, getWeaponPool } from "../../utils/skportApi";
-import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
+import {
+  ensureAccountBinding,
+  getAccounts,
+  withAutoRefresh,
+} from "../../utils/accountUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -33,14 +37,36 @@ const command: Command = {
       const accounts = await getAccounts(db, userId);
       const account = accounts?.[0] || {}; // Use first account for salt if exists
 
-      if (account.cookie) {
-        await ensureAccountBinding(account, userId, db, tr.lang);
-      }
+      let charPoolData: any;
+      let weaponPoolData: any;
 
-      const [charPoolData, weaponPoolData] = await Promise.all([
-        getCharacterPool(interaction.locale, account.cred, account.salt),
-        getWeaponPool(interaction.locale, account.cred, account.salt),
-      ]);
+      try {
+        if (account.cookie) {
+          charPoolData = await withAutoRefresh(
+            client,
+            userId,
+            account,
+            (c, s) => getCharacterPool(interaction.locale, c, s),
+            tr.lang,
+          );
+          weaponPoolData = await withAutoRefresh(
+            client,
+            userId,
+            account,
+            (c, s) => getWeaponPool(interaction.locale, c, s),
+            tr.lang,
+          );
+        } else {
+          charPoolData = await getCharacterPool(interaction.locale);
+          weaponPoolData = await getWeaponPool(interaction.locale);
+        }
+      } catch (e: any) {
+        if (e.message === "TokenExpired") {
+          charPoolData = { code: 10000 };
+        } else {
+          throw e;
+        }
+      }
 
       const container = new ContainerBuilder();
 

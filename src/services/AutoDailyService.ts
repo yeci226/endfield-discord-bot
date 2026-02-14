@@ -153,6 +153,21 @@ export class AutoDailyService {
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
+        if (account.invalid) {
+          this.logger.warn(
+            `Skipping invalid account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
+          );
+          results.push({
+            roleName: `${account.info?.nickname || "Unknown"} (Account Invalid)`,
+            rewardName: "",
+            rewardIcon: "",
+            totalDays: 0,
+            status: tr("TokenExpired"),
+          });
+          failCount++;
+          continue;
+        }
+
         await ensureAccountBinding(account, userId, this.client.db, tr.lang);
 
         const roles = account.roles;

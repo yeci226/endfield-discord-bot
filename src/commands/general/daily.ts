@@ -179,24 +179,36 @@ const command: Command = {
           const {
             processRoleAttendance,
           } = require("../../utils/attendanceUtils");
-          const res: any = await withAutoRefresh(
-            client,
-            userId,
-            account,
-            (c: string, s: string, opt: any) =>
-              processRoleAttendance(
-                role,
-                binding.gameId || 3,
-                account.cookie,
-                t.lang,
-                c,
-                s,
-                isClaim,
-                t,
-                opt,
-              ),
-            t.lang,
-          );
+          let res: any;
+          try {
+            res = await withAutoRefresh(
+              client,
+              userId,
+              account,
+              (c: string, s: string, opt: any) =>
+                processRoleAttendance(
+                  role,
+                  binding.gameId || 3,
+                  account.cookie,
+                  t.lang,
+                  c,
+                  s,
+                  isClaim,
+                  t,
+                  opt,
+                ),
+              t.lang,
+            );
+          } catch (e: any) {
+            if (e.message === "TokenExpired") {
+              res = {
+                error: true,
+                message: t("TokenExpired"),
+              };
+            } else {
+              throw e;
+            }
+          }
 
           if (!res) continue;
 

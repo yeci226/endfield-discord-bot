@@ -28,7 +28,11 @@ import {
   ProfileElement,
 } from "../../interfaces/ProfileTemplate";
 import { EnumService } from "../../services/EnumService";
-import { ensureAccountBinding, getAccounts } from "../../utils/accountUtils";
+import {
+  ensureAccountBinding,
+  getAccounts,
+  withAutoRefresh,
+} from "../../utils/accountUtils";
 import { ProfileTemplateService } from "../../services/ProfileTemplateService";
 
 const command: Command = {
@@ -461,14 +465,30 @@ const command: Command = {
       return;
     }
 
-    const cardRes = await getCardDetail(
-      role.roleId,
-      role.serverId,
-      account.info?.id || uid,
-      tr.lang,
-      account.cred,
-      account.salt,
-    );
+    let cardRes: any;
+    try {
+      cardRes = await withAutoRefresh(
+        client,
+        targetUserId,
+        account,
+        (c: string, s: string) =>
+          getCardDetail(
+            role.roleId,
+            role.serverId,
+            account.info?.id || uid,
+            tr.lang,
+            c,
+            s,
+          ),
+        tr.lang,
+      );
+    } catch (e: any) {
+      if (e.message === "TokenExpired") {
+        cardRes = { code: 10000, message: "TokenExpired" };
+      } else {
+        throw e;
+      }
+    }
 
     if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
       const errorMsg =
@@ -502,7 +522,7 @@ const command: Command = {
       .setCustomId(customId)
       .setPlaceholder(tr("profile_SelectCharacter"))
       .addOptions(
-        detail.chars.slice(0, 25).map((char) => ({
+        detail.chars.slice(0, 25).map((char: any) => ({
           label: char.charData.name,
           description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
           value: char.id,
