@@ -75,6 +75,12 @@ const event: Event = {
           `Command execution error: ${error.message}${error.stack ? `\n${error.stack}` : ""}`,
         );
         if (interaction.replied || interaction.deferred) {
+          try {
+            // If it was a public defer, delete it to hide the "Loading..." from others
+            if (!(interaction as any).ephemeral) {
+              await interaction.deleteReply().catch(() => {});
+            }
+          } catch {}
           await interaction.followUp({
             content: tr("Error"),
             flags: MessageFlags.Ephemeral,

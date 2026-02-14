@@ -107,8 +107,11 @@ const command: Command = {
       // Config commands are ephemeral by default
       const group = interaction.options.getSubcommandGroup(false);
       const isEphemeral = group === "config" || subcommand === "edit";
+
       await interaction
-        .deferReply({ flags: isEphemeral ? MessageFlags.Ephemeral : 1 << 15 })
+        .deferReply({
+          flags: (isEphemeral ? MessageFlags.Ephemeral : 1 << 15) as any,
+        })
         .catch(() => {});
     } else if (interaction.isStringSelectMenu()) {
       await interaction.deferUpdate().catch(() => {});
@@ -133,10 +136,9 @@ const command: Command = {
       const account = accounts?.[0];
 
       if (!account) {
-        await interaction.editReply({
+        await interaction.followUp({
           content: tr("NoSetAccount"),
-          components: [],
-          files: [],
+          flags: MessageFlags.Ephemeral,
         });
         return;
       }
@@ -154,9 +156,11 @@ const command: Command = {
         );
 
         if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-          await interaction.editReply(
-            cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
-          );
+          await interaction.followUp({
+            content:
+              cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
+            flags: MessageFlags.Ephemeral,
+          });
           return;
         }
 
@@ -201,9 +205,11 @@ const command: Command = {
       );
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-        await interaction.editReply(
-          cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
-        );
+        await interaction.followUp({
+          content:
+            cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
+          flags: MessageFlags.Ephemeral,
+        });
         return;
       }
 
@@ -212,7 +218,10 @@ const command: Command = {
       const selectedChar = detail.chars[charIdx];
 
       if (!selectedChar) {
-        await interaction.editReply(tr("daily_RoleNotFound"));
+        await interaction.followUp({
+          content: tr("daily_RoleNotFound"),
+          flags: MessageFlags.Ephemeral,
+        });
         return;
       }
 
@@ -261,7 +270,10 @@ const command: Command = {
         });
       } catch (e) {
         console.error("Error generating detail:", e);
-        await interaction.editReply(tr("Error"));
+        await interaction.followUp({
+          content: tr("Error"),
+          flags: MessageFlags.Ephemeral,
+        });
       }
       return;
     }
@@ -285,8 +297,10 @@ const command: Command = {
             await interaction.editReply(tr("profile_Config_InvalidUUID"));
             return;
           }
-          await ProfileTemplateService.saveUserTemplate(db, userId, template);
-          await interaction.editReply(tr("profile_Config_Success"));
+          await interaction.editReply({
+            content: tr("profile_Config_Success"),
+            flags: MessageFlags.Ephemeral as any,
+          });
           return;
         }
 
@@ -375,30 +389,55 @@ const command: Command = {
     }
 
     // 4. Main Profile View Logic (for ChatInput)
-    const userId = targetUser.id;
-    const accounts = await getAccounts(db, userId);
+    const targetUserId = targetUser.id;
+    const accounts = await getAccounts(db, targetUserId);
 
     if (!accounts || accounts.length === 0) {
       const container = new ContainerBuilder().addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-          userId === interaction.user.id
+          targetUserId === interaction.user.id
             ? tr("NoSetAccount")
-            : tr("AccountNotFoundUser", { targetUser: `<@${userId}>` }),
+            : tr("AccountNotFoundUser", { targetUser: `<@${targetUserId}>` }),
         ),
       );
-      await interaction.editReply({
-        content: "",
-        flags: MessageFlags.IsComponentsV2,
-        components: [container],
-      });
+
+      if (!(interaction.deferred && (interaction as any).ephemeral)) {
+        try {
+          await interaction.deleteReply().catch(() => {});
+        } catch {}
+        await interaction.followUp({
+          content: "",
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+          components: [container],
+        });
+      } else {
+        await interaction.editReply({
+          content: "",
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+          components: [container],
+        });
+      }
       return;
     }
 
     const account = accounts[accountIndex] || accounts[0];
-    await ensureAccountBinding(account, userId, db, tr.lang);
+    await ensureAccountBinding(account, targetUserId, db, tr.lang);
 
     if (!account.roles || account.roles.length === 0) {
-      await interaction.editReply(tr("BindingNotFound"));
+      // If we deferred with a public flag but want an ephemeral error, we must delete and followUp
+      if (!(interaction.deferred && (interaction as any).ephemeral)) {
+        try {
+          await interaction.deleteReply();
+        } catch {}
+        await interaction.followUp({
+          content: tr("BindingNotFound"),
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.editReply({
+          content: tr("BindingNotFound"),
+        });
+      }
       return;
     }
 
@@ -406,7 +445,19 @@ const command: Command = {
     const uid = account.roles[0].uid || account.info?.id;
 
     if (!role) {
-      await interaction.editReply(tr("daily_RoleNotFound"));
+      if (!(interaction.deferred && (interaction as any).ephemeral)) {
+        try {
+          await interaction.deleteReply();
+        } catch {}
+        await interaction.followUp({
+          content: tr("daily_RoleNotFound"),
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.editReply({
+          content: tr("daily_RoleNotFound"),
+        });
+      }
       return;
     }
 
@@ -420,18 +471,33 @@ const command: Command = {
     );
 
     if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-      await interaction.editReply(
-        cardRes?.code === 10000 ? tr("TokenExpired") : tr("Error"),
-      );
+      const errorMsg =
+        cardRes?.code === 10000 ? tr("TokenExpired") : tr("Error");
+      if (!(interaction.deferred && (interaction as any).ephemeral)) {
+        try {
+          await interaction.deleteReply();
+        } catch {}
+        await interaction.followUp({
+          content: errorMsg,
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.editReply({
+          content: errorMsg,
+        });
+      }
       return;
     }
 
     const detail = cardRes.data.detail;
-    const template = await ProfileTemplateService.getUserTemplate(db, userId);
+    const template = await ProfileTemplateService.getUserTemplate(
+      db,
+      targetUserId,
+    );
     const buffer = await drawDashboard(detail, tr, template);
     const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
 
-    const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${userId}`;
+    const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${targetUserId}`;
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId(customId)
       .setPlaceholder(tr("profile_SelectCharacter"))

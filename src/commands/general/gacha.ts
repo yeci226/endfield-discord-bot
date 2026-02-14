@@ -102,8 +102,6 @@ const command: Command = {
         hasData = true; // Still show the message
       }
 
-      // No weapon pool display as requested, but we keep the API call for potential future use or consistency
-
       await interaction.editReply({
         content: "",
         flags: MessageFlags.IsComponentsV2 as any,
@@ -111,8 +109,14 @@ const command: Command = {
       });
     } catch (error) {
       console.error("Error in gacha command:", error);
-      await interaction.editReply({
+      try {
+        if (!(interaction as any).ephemeral) {
+          await interaction.deleteReply().catch(() => {});
+        }
+      } catch {}
+      await interaction.followUp({
         content: tr("UnknownError"),
+        flags: MessageFlags.Ephemeral as any,
       });
     }
   },
