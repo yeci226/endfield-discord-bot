@@ -104,6 +104,15 @@ const command: Command = {
             )
             .setRequired(false),
         ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("status")
+        .setDescription("View real-time status of all bound accounts")
+        .setNameLocalizations({ "zh-TW": "狀態總覽" })
+        .setDescriptionLocalizations({
+          "zh-TW": "查看所有綁定帳號的理智、任務與簽到狀態",
+        }),
     ) as SlashCommandBuilder,
 
   execute: async (
@@ -119,6 +128,11 @@ const command: Command = {
 
     if (interaction.options.getSubcommand() === "setup") {
       await handleSetup(client, interaction, db);
+      return;
+    }
+
+    if (interaction.options.getSubcommand() === "status") {
+      await handleStatus(client, interaction, db, t);
       return;
     }
 
@@ -300,6 +314,15 @@ async function handleSetup(
     userConfig.notify_method = notifyMethod as "dm" | "channel";
   }
 
+  const staminaNotify = interaction.options.getBoolean("stamina_notify");
+  const missionNotify = interaction.options.getBoolean("mission_notify");
+  const staminaThreshold = interaction.options.getInteger("stamina_threshold");
+
+  if (staminaNotify !== null) userConfig.stamina_notify = staminaNotify;
+  if (missionNotify !== null) userConfig.mission_notify = missionNotify;
+  if (staminaThreshold !== null)
+    userConfig.stamina_threshold = staminaThreshold;
+
   // Always update channelId to current where command is run
   userConfig.channelId = interaction.channelId;
 
@@ -316,7 +339,7 @@ async function handleSetup(
     `### ${t("daily_SetupSuccess")}\n` +
     `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
     `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
-    `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\``;
+    `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\` `;
 
   if (userConfig.notify_method !== "dm") {
     setupContent += `\n**${t("daily_SetupChannel")}**: <#${userConfig.channelId}>`;
@@ -328,6 +351,98 @@ async function handleSetup(
   );
 
   await interaction.reply({
+    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    components: [container],
+  });
+}
+
+async function handleStatus(
+  client: ExtendedClient,
+  interaction: ChatInputCommandInteraction,
+  db: CustomDatabase,
+  tr: any,
+) {
+  const t = tr || ((key: string) => key);
+  await interaction.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
+
+  const userId = interaction.user.id;
+  const accounts = await getAccounts(db, userId);
+
+  if (!accounts || accounts.length === 0) {
+    await interaction.editReply(t("NoSetAccount"));
+    return;
+  }
+
+  const { getCardDetail, getAttendanceList } = require("../../utils/skportApi");
+  const container = new ContainerBuilder();
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(t("daily_StatusSummary")),
+  );
+
+  const processedRoles = new Set<string>();
+  const rows = [];
+
+  for (const account of accounts) {
+    if (account.invalid) continue;
+    await ensureAccountBinding(account, userId, db, t.lang);
+
+    const roles = account.roles;
+    if (!roles || roles.length === 0) continue;
+
+    for (const binding of roles) {
+      for (const role of binding.roles) {
+        const gameRoleStr = `3_${role.roleId}_${role.serverId}`;
+        if (processedRoles.has(gameRoleStr)) continue;
+        processedRoles.add(gameRoleStr);
+
+        try {
+          const [cardRes, attendRes] = (await Promise.all([
+            withAutoRefresh(client, userId, account, (c, s) =>
+              getCardDetail(
+                role.roleId,
+                role.serverId,
+                account.info?.id || role.roleId,
+                t.lang,
+                c,
+                s,
+              ),
+            ),
+            withAutoRefresh(client, userId, account, (c, s) =>
+              getAttendanceList(gameRoleStr, account.cookie, t.lang, c, s),
+            ),
+          ])) as any[];
+
+          if (cardRes?.code === 0 && cardRes.data?.detail) {
+            const d = cardRes.data.detail;
+            const stamina = `${d.dungeon.curStamina}/${d.dungeon.maxStamina}`;
+            const mission = `${d.dailyMission.dailyActivation}/${d.dailyMission.maxDailyActivation}`;
+            const bp = `Lv.${d.bpSystem.curLevel}`;
+            const checkin = attendRes?.data?.hasToday ? "✅" : "❌";
+
+            rows.push(
+              `**${role.nickname}**\n` +
+                `> 🔋 ${t("daily_Status_Stamina")}: \`${stamina}\` | 🎯 ${t("daily_Status_Missions")}: \`${mission}\`\n` +
+                `> 🎫 ${t("daily_Status_BP")}: \`${bp}\` | 🗓️ ${t("daily_Status_Checkin")}: ${checkin}`,
+            );
+          }
+        } catch (e) {
+          rows.push(`**${role.nickname}**: ⚠️ ${t("Error")}`);
+        }
+      }
+    }
+  }
+
+  if (rows.length === 0) {
+    await interaction.editReply(t("daily_RoleNotFound"));
+    return;
+  }
+
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(rows.join("\n\n")),
+  );
+
+  await interaction.editReply({
+    content: "",
     flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
     components: [container],
   });

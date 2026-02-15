@@ -3,7 +3,12 @@ import tw from "../assets/languages/tw";
 
 const langs: Record<string, any> = { en, tw };
 
-export function createTranslator(lang: string) {
+export interface Translator {
+  (key: string, options?: any, ...args: any[]): any;
+  lang: string;
+}
+
+export function createTranslator(lang: string): Translator {
   const selectedLang = langs[lang] ? lang : "en";
   const content = langs[selectedLang];
 
@@ -28,9 +33,9 @@ export function createTranslator(lang: string) {
     }
 
     return str;
-  };
+  } as Translator;
 
-  (tr as any).lang = selectedLang;
+  tr.lang = selectedLang;
   return tr;
 }
 

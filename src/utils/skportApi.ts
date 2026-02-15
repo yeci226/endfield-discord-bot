@@ -402,22 +402,25 @@ export async function refreshSkToken(
   platform: string = "3",
 ): Promise<string | null> {
   const url = "https://zonai.skport.com/web/v1/auth/refresh";
-  const res = await makeRequest<{ code: number; data: { token: string } }>(
-    "GET",
-    url,
-    {
-      cred,
-      headers: {
-        platform,
-        vname: "1.0.0",
-        Origin: "https://www.skport.com",
-        Referer: "https://www.skport.com/",
-      },
-    },
-  );
+  const headers = {
+    platform,
+    vName: "1.0.0",
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    Accept: "application/json, text/plain, */*",
+    cred: cred,
+    Origin: "https://game.skport.com",
+    Referer: "https://game.skport.com/",
+  };
 
-  if (res && res.code === 0 && res.data?.token) {
-    return res.data.token;
+  try {
+    const response = await axios.get(url, { headers });
+    const json = response.data;
+    if (json && json.code === 0 && json.data?.token) {
+      return json.data.token;
+    }
+  } catch (error: any) {
+    logger.error(`[Skport] refreshSkToken failed: ${error.message}`);
   }
   return null;
 }
@@ -449,6 +452,64 @@ export async function refreshAccountToken(
     console.error("[Skport] refreshAccountToken failed:", error.message);
     return null;
   }
+}
+
+/**
+ * Chained refresh for Skport tokens.
+ * Handles ACCOUNT_TOKEN (cookie) -> cred -> salt chain.
+ */
+export async function ensureValidTokens(
+  userId: string,
+  db: any,
+  options: {
+    cookie?: string;
+    cred?: string;
+    salt?: string;
+    platform?: string;
+  } = {},
+): Promise<{ cred: string; salt: string } | null> {
+  const platform = options.platform || "3";
+  let currentCookie = options.cookie;
+  let currentCred = options.cred;
+
+  // 1. If we don't have a cookie or it's potentially stale, try to refresh it
+  if (!currentCookie) {
+    const rawCookie = await db.get(`${userId}.cookie`);
+    if (rawCookie) {
+      const refreshedAccountToken = await refreshAccountToken(rawCookie);
+      if (refreshedAccountToken) {
+        currentCookie = `ACCOUNT_TOKEN=${refreshedAccountToken}`;
+      } else {
+        currentCookie = rawCookie;
+      }
+    }
+  }
+
+  // 2. If cred is missing or 401 occurred, refresh cred using OAuth
+  if (!currentCred && currentCookie) {
+    const match = currentCookie.match(/ACCOUNT_TOKEN=([^;\s]+)/);
+    const accountToken = match ? match[1] : null;
+
+    if (accountToken) {
+      const grantRes = await grantOAuthCode(accountToken);
+      if (grantRes && grantRes.status === 0 && grantRes.data?.code) {
+        const credRes = await generateCredByCode(grantRes.data.code);
+        if (credRes && credRes.code === 0 && credRes.data?.cred) {
+          currentCred = credRes.data.cred;
+        }
+      }
+    }
+  }
+
+  // 3. Refresh Salt using Cred
+  if (currentCred) {
+    const newSalt = await refreshSkToken(currentCred, platform);
+    if (newSalt) {
+      return { cred: currentCred, salt: newSalt };
+    }
+  }
+
+  return null;
 }
 
 export async function makeRequest<T>(
@@ -550,6 +611,8 @@ export async function makeRequest<T>(
       if (resp?.status !== 404) {
         if (resp?.status === 401) {
           logger.warn(`[401 Unauthorized] URL: ${url}`);
+          // Return an object that mirrors the structure expected by the stale check
+          return { code: 10000, status: 401, ...(resp?.data || {}) };
         } else {
           logger.error(`Error requesting ${url}: ${error.message}`);
         }
@@ -558,17 +621,19 @@ export async function makeRequest<T>(
     }
   };
 
-  let result = await execute();
+  let result: any = await execute();
 
   // Automatic retry on stale token (code 10000 or 401 status)
   const isStale = result && (result.code === 10000 || result.status === 401);
   if (isStale && options.onStale) {
     logger.info(
-      `Stale token (Code ${result.code}) detected. Attempting refresh...`,
+      `Stale token (Code ${result.code}, HTTP ${result.status}) detected. Attempting refresh...`,
     );
     const refreshed = await options.onStale(options);
     if (refreshed) {
       logger.info(`Refresh successful. Retrying request to ${url}...`);
+      // Update options with potentially new cred/salt from onStale
+      // Note: context management is handled by the caller (accountUtils.ts)
       result = await execute();
     }
   }

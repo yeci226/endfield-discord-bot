@@ -3,6 +3,7 @@ import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
 import { SkportNewsService } from "./services/SkportNewsService";
 import { AutoDailyService } from "./services/AutoDailyService";
+import { MonitorService } from "./services/MonitorService";
 import { VerificationClient } from "./web/VerificationClient";
 import { CharacterWikiService } from "./services/CharacterWikiService";
 import { WebManager } from "./web/WebManager";
@@ -14,6 +15,7 @@ dotenv.config();
   const client = new ExtendedClient();
   client.newsService = new SkportNewsService(client);
   client.autoDailyService = new AutoDailyService(client);
+  client.monitorService = new MonitorService(client);
   client.wikiService = new CharacterWikiService(client);
 
   await loadCommands(client);
@@ -30,6 +32,7 @@ dotenv.config();
     verifyClient.start();
     client.newsService.start();
     client.autoDailyService.start();
+    client.monitorService.start();
     // client.wikiService.start();
   }
 

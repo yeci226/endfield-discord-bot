@@ -10,6 +10,7 @@ import path from "path";
 import dotenv from "dotenv";
 import { SkportNewsService } from "../services/SkportNewsService";
 import { AutoDailyService } from "../services/AutoDailyService";
+import { MonitorService } from "../services/MonitorService";
 import { CharacterWikiService } from "../services/CharacterWikiService";
 import { Logger } from "../utils/Logger";
 
@@ -20,6 +21,7 @@ export class ExtendedClient extends Client {
   public db: CustomDatabase;
   public newsService!: SkportNewsService;
   public autoDailyService!: AutoDailyService;
+  public monitorService!: MonitorService;
   public wikiService!: CharacterWikiService;
   public cluster: ClusterClient<Client>;
   private logger!: Logger;

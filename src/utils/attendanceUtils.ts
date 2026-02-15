@@ -92,22 +92,22 @@ export async function processRoleAttendance(
     // Extract reward info
     const totalDays = status.calendar.filter((d) => d.done).length;
 
-    let rewardName = tr("None") || "None";
+    let rewards: string[] = [];
     let rewardIcon = "";
 
-    // Try to get reward from awardIds (from claim response) first
+    // 1. Try to get rewards from awardIds (the prioritized source from Python code)
     if (status.awardIds && status.awardIds.length > 0) {
-      const awards = status.awardIds.map((award) => {
+      for (const award of status.awardIds) {
         const resource = status.resourceInfoMap?.[award.id];
         if (resource) {
           if (!rewardIcon) rewardIcon = resource.icon;
-          return `${resource.name} x${resource.count}`;
+          rewards.push(`${resource.name} x${resource.count}`);
         }
-        return award.id;
-      });
-      rewardName = awards.join("\n");
-    } else {
-      // Fallback to calendar status
+      }
+    }
+
+    // 2. Fallback to calendar if rewards empty
+    if (rewards.length === 0) {
       const todayReward =
         status.calendar.find((r) => r.available) ||
         [...status.calendar].reverse().find((r) => r.done);
@@ -115,17 +115,18 @@ export async function processRoleAttendance(
       if (todayReward) {
         const resInfo = status.resourceInfoMap?.[todayReward.awardId];
         if (resInfo) {
-          rewardName = `${resInfo.name} x${resInfo.count}`;
+          rewards.push(`${resInfo.name} x${resInfo.count}`);
           rewardIcon = resInfo.icon;
         }
       }
     }
 
+    const rewardName =
+      rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
+
     let firstRewardName = "";
     if (status.first && status.first.length > 0) {
-      // Find a newcomer reward that is:
-      // 1. Available to claim right now AND not done
-      // 2. OR just claimed successfully
+      // Find a newcomer reward that is either currently available or was just claimed
       const targetFirst = status.first.find((f) => {
         if (f.available && !f.done) return true;
         if (signedNow && status.awardIds?.some((a) => a.id === f.awardId))
@@ -134,17 +135,9 @@ export async function processRoleAttendance(
       });
 
       if (targetFirst) {
-        const fRes = status.resourceInfoMap[targetFirst.awardId];
+        const fRes = status.resourceInfoMap?.[targetFirst.awardId];
         if (fRes) {
           firstRewardName = `${fRes.name} x${fRes.count}`;
-
-          // If this reward is already in rewardName (because it was in awardIds),
-          // we should remove it from rewardName to avoid showing it twice,
-          // or just keep it as the "Newbie Reward" specifically.
-          // For now, we'll just ensure it's not showing as the "Main" reward if possible.
-          // However, if awardIds has multiple, rewardName already has them all joined.
-          // We'll leave the dual-display for now as it's safer, but the !f.done check
-          // should fix the "showing old rewards" issue.
         }
       }
     }

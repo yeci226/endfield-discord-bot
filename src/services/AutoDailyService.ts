@@ -9,6 +9,7 @@ import {
   getAccounts,
   withAutoRefresh,
 } from "../utils/accountUtils";
+import { createTranslator } from "../utils/i18n";
 import {
   ContainerBuilder,
   SectionBuilder,
@@ -145,7 +146,7 @@ export class AutoDailyService {
 
       const processedRoles = new Set<string>();
 
-      const { createTranslator, toI18nLang } = require("../utils/i18n");
+      const { toI18nLang } = require("../utils/i18n");
       const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
 
@@ -209,9 +210,12 @@ export class AutoDailyService {
               else if (res.hasToday) alreadySignedCount++;
               else if (res.error) failCount++;
 
+              // Support multi-line rewards from Python logic
+              const displayedReward = res.rewardName || tr("None");
+
               results.push({
                 roleName: `${res.nickname} (Lv.${res.level})`,
-                rewardName: res.rewardName,
+                rewardName: displayedReward,
                 rewardIcon: res.rewardIcon,
                 firstRewardName: res.firstRewardName,
                 totalDays: res.totalDays,
@@ -335,5 +339,53 @@ export class AutoDailyService {
     }
 
     return minIdx;
+  }
+
+  private async sendNotification(
+    userId: string,
+    config: AutoDailyConfig,
+    payload: any,
+  ) {
+    const notifyMethod = config.notify_method;
+    const channelId = config.channelId;
+
+    try {
+      await this.client.cluster.broadcastEval(
+        async (c: any, context: any) => {
+          try {
+            if (context.notifyMethod === "dm") {
+              const user = c.users.cache.get(context.userId);
+              if (user) {
+                await user.send(context.payload);
+                return true;
+              }
+            } else if (
+              context.notifyMethod === "channel" &&
+              context.channelId
+            ) {
+              const channel = c.channels.cache.get(context.channelId);
+              if (channel) {
+                await channel.send(context.payload);
+                return true;
+              }
+            }
+          } catch (e) {}
+          return false;
+        },
+        {
+          context: {
+            userId,
+            payload,
+            notifyMethod,
+            channelId,
+          },
+        },
+      );
+    } catch (e) {
+      this.logger.error(
+        "Failed to broadcast notification: " +
+          (e instanceof Error ? e.message : e),
+      );
+    }
   }
 }
