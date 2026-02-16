@@ -997,10 +997,13 @@
             const gap = cfg.gap || 15;
             const cw = cfg.charWidth || 210;
             const ch = cfg.charHeight || 270;
-            
-            const limit = cfg.limit || chars.length; 
+            const limit = cfg.limit || chars.length;
+            const activeChars = chars.slice(0, limit);
 
-            // Common cache for icons
+            // Update loading status
+            const loadingText = document.querySelector('#loading p');
+            if(loadingText) loadingText.innerText = `Hydrating ${activeChars.length} Operators...`;
+
             const iconCache = {};
             const loadIcon = async (url) => {
                 if(iconCache[url]) return iconCache[url];
@@ -1009,39 +1012,46 @@
                 return i;
             };
 
-            for(let i=0; i<Math.min(chars.length, limit); i++) {
-                const char = chars[i];
+            // Pre-load all unique icons and avatars in parallel
+            const avatarUrls = [...new Set(activeChars.map(c => c.charData.avatarSqUrl || c.charData.avatarRtUrl).filter(Boolean))];
+            const profKeys = [...new Set(activeChars.map(c => c.charData.profession?.key?.replace("profession_", "").toLowerCase()).filter(Boolean))];
+            const propKeys = [...new Set(activeChars.map(c => c.charData.property?.key?.replace("char_property_", "").toLowerCase()).filter(Boolean))];
+            const weaponKeys = [...new Set(activeChars.map(c => c.charData.weaponType?.key?.replace("weapon_type_", "").toLowerCase()).filter(Boolean))];
+            const phases = [...new Set(activeChars.map(c => Number(c.evolvePhase) || 0).filter(p => p > 0))];
+
+            await Promise.all([
+                ...avatarUrls.map(url => loadImg(url)),
+                ...profKeys.map(k => loadIcon(`/assets/prof/${k}.jpg`)),
+                ...propKeys.map(k => loadIcon(`/assets/element/${k}.jpg`)),
+                ...weaponKeys.map(k => loadIcon(`/assets/weapon/black/${k}.png`)),
+                ...phases.map(p => loadIcon(`/assets/phase/${p}.png`)),
+                loadIcon(`/assets/phase/bg.png`)
+            ]);
+
+            for(let i=0; i < activeChars.length; i++) {
+                const char = activeChars[i];
                 const rx = (i % cols) * (cw + gap);
                 const ry = Math.floor(i / cols) * (ch + gap);
                 const cardKey = `char_${i}`;
 
-                // 1. Card Shape
                 const r = 15;
                 const pathData = `M ${rx+r} ${ry} L ${rx+cw-r} ${ry} Q ${rx+cw} ${ry} ${rx+cw} ${ry+r} L ${rx+cw} ${ry+cw} L ${rx} ${ry+cw} L ${rx} ${ry+r} Q ${rx} ${ry} ${rx+r} ${ry} Z`;
-                
                 finalObjs.push(new fabric.Path(pathData, { left: rx, top: ry, fill: '#fff', data: { key: `${cardKey}_bg` } }));
 
-                // 2. Avatar
                 const aviUrl = char.charData.avatarSqUrl || char.charData.avatarRtUrl;
                 if(aviUrl) {
                     const img = await loadImg(aviUrl);
                     if(img) {
                         const aviObj = await new Promise(r => img.clone(c => r(c)));
-                        aviObj.set({ 
-                            left: rx, top: ry, 
-                            scaleX: cw / aviObj.width, scaleY: cw / aviObj.height,
-                            data: { key: `${cardKey}_avatar`, src: aviUrl }
-                        });
+                        aviObj.set({ left: rx, top: ry, scaleX: cw / aviObj.width, scaleY: cw / aviObj.height, data: { key: `${cardKey}_avatar`, src: aviUrl } });
                         finalObjs.push(aviObj);
                     }
                 }
 
-                // 3. Icons (Attribute, Profession, Weapon)
                 const iconSize = 36;
                 const iconPadding = 8;
                 let iconY = ry + iconPadding;
 
-                // Profession
                 const profKey = char.charData.profession?.key?.replace("profession_", "").toLowerCase();
                 if(profKey) {
                     const icon = await loadIcon(`/assets/prof/${profKey}.jpg`);
@@ -1053,7 +1063,6 @@
                     }
                 }
 
-                // Element/Property
                 const propKey = char.charData.property?.key?.replace("char_property_", "").toLowerCase();
                 if(propKey) {
                     const icon = await loadIcon(`/assets/element/${propKey}.jpg`);
@@ -1065,7 +1074,6 @@
                     }
                 }
 
-                // Weapon Type
                 const weaponKey = char.charData.weaponType?.key?.replace("weapon_type_", "").toLowerCase();
                 if(weaponKey) {
                     const icon = await loadIcon(`/assets/weapon/black/${weaponKey}.png`);
@@ -1076,54 +1084,30 @@
                     }
                 }
 
-                // 4. Level (Fixed Pos: Bottom Left)
-                // Backend: "Lv." at (x+10, y+cw-18 baseline). Font 18
-                // Backend: Number at (x+10+LvW+2, y+cw-18 baseline). Font 28 Bold
-                // Fabric Text originY defaults to top. To match baseline at cw-18:
-                // Top ~= cw - 18 - FontSize roughly? Or just use originY: 'bottom' and top: ry+cw-18.
-                // Let's use originY: 'bottom' for easier alignment.
-                // Note: Fabric bounding box might be slightly different but 'bottom' is safer.
+                finalObjs.push(new fabric.Text('Lv.', { left: rx+10, top: ry+cw-18, fontSize: 18, fill: '#fff', stroke: '#000', strokeWidth: 3, fontFamily: 'Noto Sans TC', originY: 'bottom', data: { key: `${cardKey}_lv_label` } }));
+                const lvLabelW = 28;
+                finalObjs.push(new fabric.Text(`${char.level}`, { left: rx+10+lvLabelW+2, top: ry+cw-18, fontSize: 28, fontWeight: 'bold', fill: '#fff', stroke: '#000', strokeWidth: 3, fontFamily: 'Noto Sans TC', originY: 'bottom', data: { key: `${cardKey}_level` } }));
                 
-                finalObjs.push(new fabric.Text('Lv.', { 
-                    left: rx+10, top: ry+cw-18, fontSize: 18, fill: '#fff', stroke: '#000', strokeWidth: 3, fontFamily: 'Noto Sans TC', originY: 'bottom',
-                    data: { key: `${cardKey}_lv_label` } 
-                }));
-
-                const lvLabelW = 28; // Approx width of "Lv." at 18px
-                finalObjs.push(new fabric.Text(`${char.level}`, { 
-                    left: rx+10+lvLabelW+2, top: ry+cw-18, fontSize: 28, fontWeight: 'bold', fill: '#fff', stroke: '#000', strokeWidth: 3, fontFamily: 'Noto Sans TC', originY: 'bottom',
-                    data: { key: `${cardKey}_level` } 
-                }));
-                
-                // 5. Phase Icon (Bottom Right)
                 const phase = Number(char.evolvePhase) || 0;
                 if (phase > 0) {
                      const phaseBg = await loadIcon(`/assets/phase/bg.png`);
                      const phaseNum = await loadIcon(`/assets/phase/${phase}.png`);
-                     
                      if(phaseBg && phaseNum) {
                          const phaseSize = 32;
                          const pX = rx + cw - 45;
                          const pY = ry + cw - 40;
-                         
                          const pBgObj = await new Promise(r => phaseBg.clone(c => r(c)));
                          pBgObj.set({ left: pX, top: pY, scaleX: phaseSize/pBgObj.width, scaleY: phaseSize/pBgObj.height });
                          finalObjs.push(pBgObj);
-                         
                          const numSize = phaseSize * (204 / 336);
                          const nX = pX + (phaseSize - numSize) / 2;
                          const nY = pY + (phaseSize - numSize) / 2;
-                         
                          const pNumObj = await new Promise(r => phaseNum.clone(c => r(c)));
                          pNumObj.set({ left: nX, top: nY, scaleX: numSize/pNumObj.width, scaleY: numSize/pNumObj.height });
-                         // Masking in Fabric for simple circle is tricky without Group + ClipPath. 
-                         // But the phase icons are usually pre-masked or look fine overlapping. 
-                         // Backend uses clip. We can try `clipPath` on the object itself if needed, but let's just layer it for now to save complexity.
                          finalObjs.push(pNumObj);
                      }
                 }
 
-                // 6. Rarity Bar
                 const rarity = parseInt(char.charData.rarity?.value) || 3;
                 let rColor = '#ccc';
                 if(rarity===6) rColor='#ff7100';
@@ -1131,19 +1115,12 @@
                 if(rarity===4) rColor='#b380ff';
                 if(rarity===3) rColor='#33c2ff';
                 if(rarity===2) rColor='#b4d945';
-                
                 finalObjs.push(new fabric.Rect({ left: rx, top: ry+cw-6, width: cw, height: 6, fill: rColor, data: { key: `${cardKey}_rarity` } }));
 
-                // 7. Name
-                finalObjs.push(new fabric.Text(char.charData.name, {
-                    left: rx + cw/2, top: ry + cw + 15, fontSize: 26, fontWeight: 'bold', fill: '#fff', fontFamily: 'Noto Sans TC', textAlign: 'center', originX: 'center',
-                    data: { key: `${cardKey}_name` }
-                }));
+                finalObjs.push(new fabric.Text(char.charData.name, { left: rx + cw/2, top: ry + cw + 15, fontSize: 26, fontWeight: 'bold', fill: '#fff', fontFamily: 'Noto Sans TC', textAlign: 'center', originX: 'center', data: { key: `${cardKey}_name` } }));
             }
 
-            return new fabric.Group(finalObjs, {
-                data: { key: 'operatorsGrid' }
-            });
+            return new fabric.Group(finalObjs, { data: { key: 'operatorsGrid' } });
         }
 
         // --- Granular Factories (Ungrouped) ---
