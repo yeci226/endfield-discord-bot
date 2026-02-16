@@ -1571,12 +1571,16 @@
             fillInspector(r);
         };
 
-        window.addImage = () => {
+        window.addImage = async () => {
             const url = prompt('請輸入圖片網址 (URL):');
             if(!url) return;
-            fabric.Image.fromURL(url, (img) => {
+            
+            // Use loadImg to leverage proxy and caching
+            const img = await loadImg(url);
+            if (img) {
                 img.set({
-                    left: 100, top: 100, scaleX: 0.5, scaleY: 0.5,
+                    left: 100,
+                    top: 100,
                     data: { key: 'custom_image_' + Date.now(), src: url }
                 });
                 Editor.canvas.add(img);
@@ -1585,7 +1589,9 @@
                 saveState();
                 switchTab('inspector');
                 fillInspector(img);
-            }, { crossOrigin: 'anonymous' });
+            } else {
+                alert('圖片載入失敗，請確認網址是否正確。');
+            }
         };
 
         window.changeBg = async (urlOrPath) => {
