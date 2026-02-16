@@ -7,6 +7,9 @@ import {
 } from "./skportApi";
 import { extractAccountToken } from "../commands/account/login";
 import { decryptAccount, encryptAccount } from "./cryptoUtils";
+import { Logger } from "./Logger";
+
+const logger = new Logger("AccountUtils");
 
 /**
  * Ensures that the account has valid bindings (roles) and credentials.
@@ -70,31 +73,8 @@ export async function ensureAccountBinding(
   db: CustomDatabase,
   lang: string,
 ): Promise<boolean> {
-  // Clear invalid flag if we are attempting ensure (force re-validation)
-  // or if roles already exist, keep it as is.
-  // Actually, if this is called, we usually WANT to validate.
-
-  if (account.roles && account.roles.length > 0 && !account.invalid) {
-    return false;
-  }
-  // If we already have roles and we assume they are valid, we might skip.
-  // BUT the user wants to fix 401s too, which means cred/salt might be stale even if roles exist.
-  // However, forcing a check every time might be expensive/slow.
-  // Compromise: We check if roles are missing OR if we explicitly want to validate.
-  // For now, adhering to the "Auto-Rebind" logic primarily when roles are missing
-  // or if prior 401s suggested invalidity.
-  // Since we don't track 401 history easily here, we rely on the caller usually checks `!roles`
-  // OR we can make this 'ensure' strict.
-  // Given the user constraint "Auto-rebind accounts with missing roles" + "fix 401",
-  // we will trigger this IF roles are missing OR if the caller suspects it's needed (context).
-  // But to be safe and robust as a general utility, we'll run the check if roles are empty.
-  // If roles exist, we assume they are fine UNLESS this function is called specifically to fix a 401.
-  // To avoid over-engineering, we will stick to the "missing roles" trigger primarily,
-  // but we can also check if `cred` or `salt` is missing.
-
-  // We remove the early return optimization because we need to properly handle 401s (stale credentials).
-  // Even if we have roles, the credentials might differ or be expired.
-  // "Step 1" acts as a validity check.
+  // Clear invalid flag and attempt full validation.
+  // We don't early return here because we need to handle proactive checks and 401s.
 
   let rolesRestored = false;
   let bindingList: any[] = [];
@@ -103,12 +83,33 @@ export async function ensureAccountBinding(
   let newCookie = account.cookie;
   let modified = false;
 
-  // We handle imports via top-level now, but kept for context if needed.
-  // const { refreshSkToken, refreshAccountToken, getGamePlayerBinding, verifyToken } = require("./skportApi");
+  const now = Date.now();
+  const oldLastRefresh = account.lastRefresh || 0;
+
+  // Fast-path: If verified within last 5 minutes, skip Step 1 network call
+  // unless we specifically want to fix a failure (account.invalid)
+  const isRecent = now - oldLastRefresh < 5 * 60 * 1000;
+  if (!account.invalid && account.roles?.length > 0 && isRecent) {
+    return false;
+  }
+
+  if (
+    !account.invalid &&
+    account.cookie &&
+    (!account.roles || account.roles.length === 0)
+  ) {
+    // Initial fetch if roles are missing
+    logger.info(
+      `[Auth] Initial role capture for ${account.info?.id || "New Account"}...`,
+    );
+  }
 
   // Step 1: Try with existing credentials (fastest)
-  if (account.cred && account.salt) {
+  if (!rolesRestored && account.cred && account.salt) {
     try {
+      logger.info(
+        `[Step 1] Attempting role check with existing credentials for ${account.info?.id}...`,
+      );
       const bindings = await getGamePlayerBinding(
         undefined,
         lang,
@@ -119,12 +120,18 @@ export async function ensureAccountBinding(
       if (endfield && endfield.bindingList) {
         bindingList = endfield.bindingList;
         rolesRestored = true;
+        logger.success(`[Step 1] Success! Credentials are still valid.`);
       }
-    } catch (e) {}
+    } catch (e: any) {
+      logger.warn(`[Step 1] Failed: ${e.message}`);
+    }
   }
 
   // Step 2: Try Refreshing Salt with Cred
   if (!rolesRestored && account.cred) {
+    logger.info(
+      `[Step 2] Attempting to refresh salt with cred for ${account.info?.id}...`,
+    );
     const newToken = await refreshSkToken(account.cred);
     if (newToken) {
       newSalt = newToken;
@@ -139,13 +146,21 @@ export async function ensureAccountBinding(
         if (endfield && endfield.bindingList) {
           bindingList = endfield.bindingList;
           rolesRestored = true;
+          logger.success(`[Step 2] Success! Refreshed salt works.`);
         }
-      } catch (e) {}
+      } catch (e: any) {
+        logger.warn(`[Step 2] Failed: ${e.message}`);
+      }
+    } else {
+      logger.warn(`[Step 2] refreshSkToken returned null.`);
     }
   }
 
   // Step 3: Refresh Master Cookie (ACCOUNT_TOKEN) if still failed
   if (!rolesRestored && account.cookie) {
+    logger.info(
+      `[Step 3] Attempting Master token refresh for ${account.info?.id}...`,
+    );
     const newTokenValue = await refreshAccountToken(account.cookie);
     if (newTokenValue) {
       newCookie = `ACCOUNT_TOKEN=${newTokenValue}`;
@@ -158,6 +173,7 @@ export async function ensureAccountBinding(
       ) {
         newCred = verifyRes.cred;
         newSalt = verifyRes.token;
+        account.lastRefresh = now;
 
         const bindings = await getGamePlayerBinding(
           newCookie,
@@ -169,8 +185,17 @@ export async function ensureAccountBinding(
         if (endfield && endfield.bindingList) {
           bindingList = endfield.bindingList;
           rolesRestored = true;
+          logger.success(`[Step 3] Success! Full session restored.`);
+        } else {
+          logger.warn(
+            `[Step 3] Token verified but couldn't get game bindings.`,
+          );
         }
+      } else {
+        logger.warn(`[Step 3] verifyToken failed or returned invalid status.`);
       }
+    } else {
+      logger.warn(`[Step 3] refreshAccountToken returned null.`);
     }
   }
 
@@ -205,15 +230,18 @@ export async function ensureAccountBinding(
   if (rolesRestored) {
     // Check if anything actually changed to avoid unnecessary DB writes
     const rolesChanged =
+      bindingList.length > 0 &&
       JSON.stringify(account.roles) !== JSON.stringify(bindingList);
     const credsChanged = account.cred !== newCred || account.salt !== newSalt;
     const cookieChanged = account.cookie !== newCookie;
+    const heartbeatUpdated = account.lastRefresh !== oldLastRefresh;
 
-    if (rolesChanged || credsChanged || cookieChanged) {
-      account.roles = bindingList;
+    if (rolesChanged || credsChanged || cookieChanged || heartbeatUpdated) {
+      if (bindingList.length > 0) account.roles = bindingList;
       account.cred = newCred;
       account.salt = newSalt;
       account.cookie = newCookie;
+      // account.lastRefresh is already updated above if needed
       modified = true;
 
       // Save back to DB
@@ -250,14 +278,18 @@ export async function withAutoRefresh<T>(
   locale: string = "tw",
 ): Promise<T> {
   if (account.invalid) {
-    // If account is marked invalid, we can choose to throw or return a specific "invalid" response.
-    // However, throw is cleaner for catching at a higher level (like in a loop).
     const error = new Error("TokenExpired");
     (error as any).code = 10000;
     throw error;
   }
 
+  // Purely Reactive: No more proactive timers.
+  // ensureAccountBinding will only be called by onStale (when 401 occurs) or if roles are missing.
+
   const onStale = async (options: any) => {
+    logger.info(
+      `[Auth] 401 detected. Triggering reactive session restoration for ${account.info?.id}...`,
+    );
     const wasModified = await ensureAccountBinding(
       account,
       userId,

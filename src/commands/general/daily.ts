@@ -199,7 +199,7 @@ const command: Command = {
               client,
               userId,
               account,
-              (c: string, s: string, opt: any) =>
+              (c: string, s: string, options: any) =>
                 processRoleAttendance(
                   role,
                   binding.gameId || 3,
@@ -209,7 +209,7 @@ const command: Command = {
                   s,
                   isClaim,
                   t,
-                  opt,
+                  options,
                 ),
               t.lang,
             );
@@ -397,7 +397,7 @@ async function handleStatus(
 
         try {
           const [cardRes, attendRes] = (await Promise.all([
-            withAutoRefresh(client, userId, account, (c, s) =>
+            withAutoRefresh(client, userId, account, (c, s, options) =>
               getCardDetail(
                 role.roleId,
                 role.serverId,
@@ -405,10 +405,18 @@ async function handleStatus(
                 t.lang,
                 c,
                 s,
+                options,
               ),
             ),
-            withAutoRefresh(client, userId, account, (c, s) =>
-              getAttendanceList(gameRoleStr, account.cookie, t.lang, c, s),
+            withAutoRefresh(client, userId, account, (c, s, options) =>
+              getAttendanceList(
+                gameRoleStr,
+                account.cookie,
+                t.lang,
+                c,
+                s,
+                options,
+              ),
             ),
           ])) as any[];
 

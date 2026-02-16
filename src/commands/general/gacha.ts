@@ -46,14 +46,15 @@ const command: Command = {
             client,
             userId,
             account,
-            (c, s) => getCharacterPool(interaction.locale, c, s),
+            (c, s, options) =>
+              getCharacterPool(interaction.locale, c, s, options),
             tr.lang,
           );
           weaponPoolData = await withAutoRefresh(
             client,
             userId,
             account,
-            (c, s) => getWeaponPool(interaction.locale, c, s),
+            (c, s, options) => getWeaponPool(interaction.locale, c, s, options),
             tr.lang,
           );
         } else {

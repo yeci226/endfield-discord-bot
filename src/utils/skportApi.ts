@@ -12,6 +12,7 @@ export async function getCardDetail(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<CardDetailResponse | null> {
   const url = "https://zonai.skport.com/api/v1/game/endfield/card/detail";
   return makeRequest<CardDetailResponse>("GET", url, {
@@ -23,6 +24,7 @@ export async function getCardDetail(
     cred,
     locale,
     salt,
+    ...options,
   });
 }
 
@@ -352,6 +354,14 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "User-Agent":
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     Accept: "application/json, text/plain, */*",
+    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6",
+    "sec-ch-ua":
+      '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "cross-site",
     cred: cred,
     platform: "3",
     vName: "1.0.0",
@@ -587,13 +597,6 @@ export async function makeRequest<T>(
         )
       : generateSign(pathname, queryString, headers.timestamp, options.salt);
 
-    // Optional: Debugging log for signed string
-    if (process.env.DEBUG_SKPORT_SIGN === "true") {
-      logger.debug(`Sign Content: ${signContent}`);
-      logger.debug(`Full Path: ${pathname}`);
-      logger.debug(`Sign Result: ${sign}`);
-    }
-
     headers.sign = sign;
 
     try {
@@ -632,8 +635,6 @@ export async function makeRequest<T>(
     const refreshed = await options.onStale(options);
     if (refreshed) {
       logger.info(`Refresh successful. Retrying request to ${url}...`);
-      // Update options with potentially new cred/salt from onStale
-      // Note: context management is handled by the caller (accountUtils.ts)
       result = await execute();
     }
   }
@@ -668,7 +669,11 @@ export interface SkPoolResponse {
 /**
  * Gryphline OAuth Grant to get exchange code
  */
-async function grantOAuthCode(token: string) {
+async function grantOAuthCode(
+  token: string,
+  appCode: string = "6eb76d4e13aa36e6",
+  type: number = 0,
+) {
   const url = "https://as.gryphline.com/user/oauth2/v2/grant";
   return makeRequest<any>("POST", url, {
     headers: {
@@ -677,8 +682,8 @@ async function grantOAuthCode(token: string) {
     },
     data: {
       token: token,
-      appCode: "6eb76d4e13aa36e6",
-      type: 0,
+      appCode: appCode,
+      type: type,
     },
   });
 }
@@ -775,6 +780,7 @@ export async function getCharacterPool(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/char-pool";
   return makeRequest("GET", url, {
@@ -786,6 +792,7 @@ export async function getCharacterPool(
       origin: "https://www.skport.com",
       referer: "https://wiki.skport.com/",
     },
+    ...options,
   });
 }
 
@@ -826,6 +833,7 @@ export async function getWeaponPool(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<SkPoolResponse | null> {
   const url = "https://zonai.skport.com/web/v1/wiki/weapon-pool";
   return makeRequest("GET", url, {
@@ -837,6 +845,7 @@ export async function getWeaponPool(
       origin: "https://www.skport.com",
       referer: "https://wiki.skport.com/",
     },
+    ...options,
   });
 }
 
@@ -875,6 +884,7 @@ export async function getAttendanceRecords(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<{ code: number; data: any } | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance/record";
   const headers: any = {
@@ -888,6 +898,7 @@ export async function getAttendanceRecords(
     cred,
     salt,
     headers,
+    ...options,
   });
   return res;
 }
@@ -925,6 +936,7 @@ export async function getEnums(
   cred?: string,
   locale?: string,
   salt?: string,
+  options: any = {},
 ): Promise<SkEnumsResponse | null> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/enums";
   return makeRequest("GET", url, {
@@ -934,6 +946,7 @@ export async function getEnums(
     headers: {
       referrer: "https://game.skport.com/",
     },
+    ...options,
   });
 }
 

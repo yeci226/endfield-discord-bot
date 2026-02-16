@@ -384,7 +384,7 @@ const command: Command = {
 
           const sessionId = Math.random().toString(36).substring(2, 12);
           const baseUrl =
-            process.env.VERIFY_PUBLIC_URL || "http://localhost:3000/endfield";
+            process.env.VERIFY_HUB_URL || "http://localhost:3000/endfield";
 
           const params = new URLSearchParams({
             captchaId: geetestId,
@@ -587,6 +587,7 @@ const command: Command = {
             cred: cred,
             salt: result.token, // Store the dynamic salt (token)
             roles: roles, // Store roles to avoid redundant getGamePlayerBinding calls
+            lastRefresh: Date.now(), // Initialize refresh timestamp
             info: {
               id: hgId,
               nickname: nickName,

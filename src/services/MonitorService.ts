@@ -94,7 +94,7 @@ export class MonitorService {
           this.client,
           userId,
           account,
-          (c, s) =>
+          (c, s, options) =>
             getCardDetail(
               role.roleId,
               role.serverId,
@@ -102,6 +102,7 @@ export class MonitorService {
               tr.lang,
               c,
               s,
+              options,
             ),
           tr.lang,
         )) as any;

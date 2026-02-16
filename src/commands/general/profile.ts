@@ -150,14 +150,19 @@ const command: Command = {
       await ensureAccountBinding(account, targetUserId, db, tr.lang);
 
       if (charId === "home") {
-        const cardRes: CardDetailResponse | null = await getCardDetail(
-          roleId,
-          serverId,
-          uid,
-          tr.lang,
-          account.cred,
-          account.salt,
-        );
+        let cardRes: any;
+        try {
+          cardRes = await withAutoRefresh(
+            client,
+            targetUserId,
+            account,
+            (c: string, s: string, options: any) =>
+              getCardDetail(roleId, serverId, uid, tr.lang, c, s, options),
+            tr.lang,
+          );
+        } catch (e: any) {
+          cardRes = { code: 10000 };
+        }
 
         if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
           await interaction.followUp({
@@ -180,7 +185,7 @@ const command: Command = {
           (interaction.message.components[0] as any).components[0] as any,
         );
         selectMenu.setOptions(
-          detail.chars.slice(0, 25).map((char) => ({
+          detail.chars.slice(0, 25).map((char: any) => ({
             label: char.charData.name,
             description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
             value: char.id,
@@ -199,14 +204,19 @@ const command: Command = {
       }
 
       // Handle Character Detail View
-      const cardRes: CardDetailResponse | null = await getCardDetail(
-        roleId,
-        serverId,
-        uid,
-        tr.lang,
-        account.cred,
-        account.salt,
-      );
+      let cardRes: any;
+      try {
+        cardRes = await withAutoRefresh(
+          client,
+          targetUserId,
+          account,
+          (c: string, s: string, options: any) =>
+            getCardDetail(roleId, serverId, uid, tr.lang, c, s, options),
+          tr.lang,
+        );
+      } catch (e: any) {
+        cardRes = { code: 10000 };
+      }
 
       if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
         await interaction.followUp({
@@ -218,7 +228,7 @@ const command: Command = {
       }
 
       const detail = cardRes.data.detail;
-      const charIdx = detail.chars.findIndex((c) => c.id === charId);
+      const charIdx = detail.chars.findIndex((c: any) => c.id === charId);
       const selectedChar = detail.chars[charIdx];
 
       if (!selectedChar) {
@@ -256,7 +266,7 @@ const command: Command = {
         if (!selectMenu.options.some((o) => o.data.value === "home")) {
           selectMenu.setOptions([
             { label: "🏠 " + tr("MainPage"), value: "home" },
-            ...detail.chars.slice(0, 24).map((char) => ({
+            ...detail.chars.slice(0, 24).map((char: any) => ({
               label: char.charData.name,
               description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
               value: char.id,
@@ -471,7 +481,7 @@ const command: Command = {
         client,
         targetUserId,
         account,
-        (c: string, s: string) =>
+        (c: string, s: string, options: any) =>
           getCardDetail(
             role.roleId,
             role.serverId,
@@ -479,6 +489,7 @@ const command: Command = {
             tr.lang,
             c,
             s,
+            options,
           ),
         tr.lang,
       );
