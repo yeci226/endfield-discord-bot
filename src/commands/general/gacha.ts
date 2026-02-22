@@ -363,7 +363,7 @@ const command: Command = {
     if (interaction.isChatInputCommand()) {
       if (subcommandGroup === "log") {
         if (subcommand === "how") {
-          await interaction.deferReply();
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           await interaction.editReply({
             content: `${tr("gacha_log_how_Title")}\n\n${tr("gacha_log_how_Steps")}`,
           });

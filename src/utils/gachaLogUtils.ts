@@ -1,7 +1,6 @@
 import axios from "axios";
 import { CustomDatabase } from "./Database";
-import moment from "moment";
-import { mapLocaleToLang, getCharacterPool, getWeaponPool } from "./skportApi";
+import { mapLocaleToLang } from "./skportApi";
 
 export interface GachaRecord {
   seqId: string;
@@ -36,11 +35,6 @@ const POOL_TYPES = [
   "E_CharacterGachaPoolType_Beginner",
 ];
 
-const CHAR_METADATA_URL =
-  "https://endfieldtools.dev/localdb/optimized/characters/characters-list.json";
-const WEAPON_METADATA_URL =
-  "https://endfieldtools.dev/localdb/optimized/weapons/weapons-list.json";
-
 const STANDARD_SIX_STARS = [
   "chr_0009_azrila",
   "chr_0015_lifeng",
@@ -48,54 +42,6 @@ const STANDARD_SIX_STARS = [
   "chr_0026_lastrite",
   "chr_0029_pograni",
 ];
-
-export async function getCharacterMetadata(db: CustomDatabase) {
-  const cacheKey = "GACHA_CHAR_METADATA";
-  const cached = await db.get<{ data: any; lastFetch: number }>(cacheKey);
-
-  if (cached && moment().diff(moment(cached.lastFetch), "hours") < 24) {
-    return cached.data;
-  }
-
-  try {
-    const res = await axios.get(CHAR_METADATA_URL);
-    if (res.data) {
-      await db.set(cacheKey, {
-        data: res.data,
-        lastFetch: Date.now(),
-      });
-      return res.data;
-    }
-  } catch (error) {
-    console.error("Failed to fetch character metadata:", error);
-  }
-
-  return cached?.data || {};
-}
-
-export async function getWeaponMetadata(db: CustomDatabase) {
-  const cacheKey = "GACHA_WEAPON_METADATA";
-  const cached = await db.get<{ data: any; lastFetch: number }>(cacheKey);
-
-  if (cached && moment().diff(moment(cached.lastFetch), "hours") < 24) {
-    return cached.data;
-  }
-
-  try {
-    const res = await axios.get(WEAPON_METADATA_URL);
-    if (res.data) {
-      await db.set(cacheKey, {
-        data: res.data,
-        lastFetch: Date.now(),
-      });
-      return res.data;
-    }
-  } catch (error) {
-    console.error("Failed to fetch weapon metadata:", error);
-  }
-
-  return cached?.data || {};
-}
 
 export async function getPoolMetadata(
   db: CustomDatabase,
@@ -107,7 +53,7 @@ export async function getPoolMetadata(
   const cacheKey = `GACHA_POOL_METADATA_${poolId}`;
   const cached = await db.get<{ data: any; lastFetch: number }>(cacheKey);
 
-  if (cached && moment().diff(moment(cached.lastFetch), "hours") < 24) {
+  if (cached) {
     return cached.data;
   }
 
@@ -130,7 +76,7 @@ export async function getPoolMetadata(
     console.error(`Failed to fetch pool metadata for ${poolId}:`, error);
   }
 
-  return cached?.data || null;
+  return null;
 }
 
 /**
@@ -307,9 +253,6 @@ export async function fetchAndMergeGachaLog(
 }
 
 export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
-  const charMeta = await getCharacterMetadata(db);
-  const weaponMeta = await getWeaponMetadata(db);
-
   const uniquePoolIds = new Set<string>();
   data.characterList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
   data.weaponList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
@@ -417,12 +360,6 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             if (found) name = name || found.name;
           }
 
-          if (record.charId && charMeta[record.charId]) {
-            name = name || charMeta[record.charId].engName;
-          } else if (record.weaponId && weaponMeta[record.weaponId]) {
-            name = name || weaponMeta[record.weaponId].engName;
-          }
-
           let isOffRate = false;
           let isFeatured = false;
           const rarityNum = Number(record.rarity || 0);
@@ -433,18 +370,18 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
 
             // Try to resolve UP character ID from pool metadata names
             let upCids: string[] = [];
-            if (pMeta?.up6_name || pMeta?.up6_item_name) {
-              const upName = pMeta.up6_name || pMeta.up6_item_name;
-              // Search in charMeta for IDs matching this upName
-              for (const [cid, meta] of Object.entries(charMeta)) {
-                const m = meta as any;
+            if (pMeta?.all && (pMeta.up6_name || pMeta.up6_item_name)) {
+              const upName = pMeta.up6_name;
+              const upItemName = pMeta.up6_item_name;
+
+              for (const a of pMeta.all) {
                 if (
-                  m.engName === upName ||
-                  m.name === upName ||
-                  m.tcName === upName ||
-                  m.scName === upName
+                  a.rarity >= 6 &&
+                  (a.name === upName ||
+                    a.name === upItemName ||
+                    (upItemName && upItemName.includes(a.name)))
                 ) {
-                  upCids.push(cid.replace("icon_", ""));
+                  upCids.push(a.id.replace("icon_", ""));
                 }
               }
             }
@@ -457,8 +394,14 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
               }
             } else {
               // Priority 2: Traditional Name Match
-              if (pMeta?.up6_name) {
-                if (name === pMeta.up6_name || name === pMeta.up6_item_name) {
+              if (pMeta?.up6_item_name || pMeta?.up6_name) {
+                const upName = pMeta.up6_item_name || pMeta.up6_name;
+                // Compare with current localized name or standard name
+                if (
+                  name === upName ||
+                  record.charName === upName ||
+                  record.weaponName === upName
+                ) {
                   isFeatured = true;
                 } else {
                   isOffRate = true;
