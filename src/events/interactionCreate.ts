@@ -50,7 +50,7 @@ const event: Event = {
                   }) || null,
                 )
                 .setDescription(
-                  `\`\`\`${interaction.guild?.name} - ${interaction.guild?.id}\`\`\``,
+                  `\`\`\`${interaction.guild?.name ?? "Direct Message"} - ${interaction.guild?.id ?? interaction.user.id}\`\`\``,
                 )
                 .addFields({
                   name: command.data.name,

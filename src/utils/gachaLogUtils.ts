@@ -391,6 +391,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         }
 
         const pId = record.poolId || "unknown";
+        // Endfield milestone gifts (isFree) are separate and don't count towards pity counters
         const isActuallyFree = record.isFree === true;
 
         if (!isActuallyFree) {
@@ -427,18 +428,48 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           const rarityNum = Number(record.rarity || 0);
 
           if (rarityNum >= 6 && record.poolType?.includes("Special")) {
-            if (pMeta?.up6_name) {
-              if (name === pMeta.up6_name || name === pMeta.up6_item_name) {
+            // Priority 1: Match by ID
+            const recordCid = String(record.charId || "").replace("icon_", "");
+
+            // Try to resolve UP character ID from pool metadata names
+            let upCids: string[] = [];
+            if (pMeta?.up6_name || pMeta?.up6_item_name) {
+              const upName = pMeta.up6_name || pMeta.up6_item_name;
+              // Search in charMeta for IDs matching this upName
+              for (const [cid, meta] of Object.entries(charMeta)) {
+                const m = meta as any;
+                if (
+                  m.engName === upName ||
+                  m.name === upName ||
+                  m.tcName === upName ||
+                  m.scName === upName
+                ) {
+                  upCids.push(cid.replace("icon_", ""));
+                }
+              }
+            }
+
+            if (upCids.length > 0) {
+              if (upCids.includes(recordCid)) {
                 isFeatured = true;
               } else {
                 isOffRate = true;
               }
             } else {
-              const cid = String(record.charId || "").replace("icon_", "");
-              if (STANDARD_SIX_STARS.includes(cid)) {
-                isOffRate = true;
+              // Priority 2: Traditional Name Match
+              if (pMeta?.up6_name) {
+                if (name === pMeta.up6_name || name === pMeta.up6_item_name) {
+                  isFeatured = true;
+                } else {
+                  isOffRate = true;
+                }
               } else {
-                isFeatured = true;
+                // Priority 3: Standard List Fallback
+                if (STANDARD_SIX_STARS.includes(recordCid)) {
+                  isOffRate = true;
+                } else {
+                  isFeatured = true;
+                }
               }
             }
           }

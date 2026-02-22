@@ -74,6 +74,7 @@ export async function drawGachaStats(
   page: number = 0,
 ): Promise<Buffer> {
   const apiLang = data.info.lang || "zh-tw";
+  const isEn = apiLang.toLowerCase().includes("en");
   const apiServerId = data.info.serverId || "2";
   // Load Pool API Data if applicable
   let poolApiData: any = null;
@@ -618,11 +619,16 @@ export async function drawGachaStats(
             ctx,
             centerX + 60 + textWidth + 30,
             curY + rectH / 2 + 2,
+            22,
+            isEn,
           );
         }
 
         ctx.textAlign = "right";
-        if (item.isFree) {
+        if (
+          item.isFree &&
+          !(type === "weapon" || item.poolType?.includes("Special"))
+        ) {
           ctx.fillStyle = "#ffcc00";
           ctx.font = "bold 26px NotoSansTCBold";
           ctx.fillText(
@@ -631,23 +637,27 @@ export async function drawGachaStats(
             curY + rectH / 2 + 10,
           );
         } else {
+          // Display the banner-specific total count
           ctx.fillStyle = "#ff7100";
           ctx.font = "bold 34px NotoSansTCBold";
-          ctx.fillText(
-            `${item.pitySixCount}`, // No extra "抽" for localization cleanliness
-            curX + colW - 25,
-            curY + rectH / 2 - 5,
-          );
+
+          if (!item.isFree) {
+            ctx.fillText(
+              `${item.pitySixCount}`,
+              curX + colW - 25,
+              curY + rectH / 2 - 5,
+            );
+          }
 
           ctx.fillStyle = "#aaa";
           ctx.font = "20px NotoSans";
           ctx.fillText(
             tr("gacha_log_canvas_TotalCount").replace(
               "<pTotal>",
-              String(item.totalCount),
+              String(item.poolTotalCount),
             ),
             curX + colW - 25,
-            curY + rectH / 2 + 25,
+            curY + rectH / 2 + (item.isFree ? 10 : 25),
           );
         }
 
@@ -943,9 +953,10 @@ export async function drawGachaStats(
         const textWidth = ctx.measureText(nameText).width;
         drawOffRateBadge(
           ctx,
-          centerX + radius + 10 + textWidth + 22,
+          centerX + radius + 10 + textWidth + 20,
           curY + itemH / 2 - 13,
           18,
+          isEn,
         );
       }
 
@@ -960,7 +971,10 @@ export async function drawGachaStats(
       );
 
       ctx.textAlign = "right";
-      if (item.isFree) {
+      if (
+        item.isFree &&
+        !(type === "weapon" || item.poolType?.includes("Special"))
+      ) {
         ctx.fillStyle = "#ffcc00";
         ctx.font = `bold 28px NotoSansTCBold`;
         ctx.fillText(
@@ -969,30 +983,36 @@ export async function drawGachaStats(
           curY + itemH / 2 + 10,
         );
       } else {
+        const displayPity = isSix ? item.pitySixCount : item.pityCount;
+
         if (isSix) {
           ctx.fillStyle = "#ff7100";
           ctx.font = `bold ${fontSize + 4}px NotoSansTCBold`;
-          ctx.fillText(
-            `${item.pitySixCount}`,
-            curX + itemW - 15,
-            curY + itemH / 2 - 5,
-          );
-          // Total (same as 5-star/4-star)
+          if (!item.isFree) {
+            ctx.fillText(
+              `${displayPity}`,
+              curX + itemW - 15,
+              curY + itemH / 2 - 5,
+            );
+          }
+          // Total
           ctx.fillStyle = "#888";
           ctx.font = `${subFontSize}px NotoSans`;
           ctx.fillText(
             `T${String(item.poolTotalCount)}`,
             curX + itemW - 15,
-            curY + itemH / 2 + 20,
+            curY + itemH / 2 + (item.isFree ? 10 : 20),
           );
         } else {
           ctx.fillStyle = isFive ? "#ffcc00" : "#b04dff";
           ctx.font = `bold ${fontSize + 4}px NotoSansTCBold`;
-          ctx.fillText(
-            `${item.pityCount}`,
-            curX + itemW - 15,
-            curY + itemH / 2 + 10,
-          );
+          if (!item.isFree) {
+            ctx.fillText(
+              `${displayPity}`,
+              curX + itemW - 15,
+              curY + itemH / 2 + 10,
+            );
+          }
 
           // Total
           ctx.fillStyle = "#888";
@@ -1000,7 +1020,7 @@ export async function drawGachaStats(
           ctx.fillText(
             `T${String(item.poolTotalCount)}`,
             curX + itemW - 15,
-            curY + itemH / 2 + 35,
+            curY + itemH / 2 + (item.isFree ? 25 : 35),
           );
         }
       }
@@ -1040,22 +1060,38 @@ function drawOffRateBadge(
   x: number,
   y: number,
   radius: number = 22,
+  isEn: boolean = false,
 ) {
   ctx.save();
   ctx.translate(x, y);
 
-  // Background circle
-  ctx.beginPath();
-  ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  ctx.fillStyle = "#ff0000";
-  ctx.fill();
+  if (isEn) {
+    // Background circle for "L" (LOSE)
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#1e3a8a"; // Deep blue
+    ctx.fill();
 
-  // Text
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 24px NotoSansTCBold";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("歪", 0, -2.5);
+    // Text "L"
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${Math.floor(radius * 1.3)}px NotoSansTCBold`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("L", 0, -1);
+  } else {
+    // Background circle for "歪" (Chinese)
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff0000";
+    ctx.fill();
+
+    // Text "歪"
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${Math.floor(radius * 1.1)}px NotoSansTCBold`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("歪", 0, -2.5);
+  }
 
   ctx.restore();
 }

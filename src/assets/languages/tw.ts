@@ -239,7 +239,7 @@ const langs: Record<string, any> = {
   gacha_log_canvas_RecordTime: "紀錄時間",
   gacha_log_canvas_TotalPulls: "總累計抽數",
   gacha_log_canvas_CurrentTotal: "當期總抽數",
-  gacha_log_canvas_SixStarRate: "6* 出率(含保底)",
+  gacha_log_canvas_SixStarRate: "6 星出率(含保底)",
   gacha_log_canvas_UpCharWinRate: "UP角色不歪率",
   gacha_log_canvas_UpWeaponWinRate: "UP武器不歪率",
   gacha_log_canvas_Padding: "墊了 <hardRemaining> 抽，共 <hardCount> 抽",
