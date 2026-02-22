@@ -311,6 +311,18 @@ const event: Event = {
           components: [container],
           flags: (1 << 15) | MessageFlags.Ephemeral,
         });
+      } else {
+        // Generic routing: forward to the relevant command via customId prefix (e.g. "gacha:log_page:...")
+        const commandName = interaction.customId.split(":")[0];
+        const command = client.commands.get(commandName);
+        if (command) {
+          try {
+            await command.execute(client, interaction as any, tr, client.db);
+          } catch (error: any) {
+            if (error.code === 10062 || error.code === 40060) return;
+            logger.error(`Error handling button interaction: ${error.message}`);
+          }
+        }
       }
     } else if (interaction.isAutocomplete()) {
       const command = client.commands.get(interaction.commandName);

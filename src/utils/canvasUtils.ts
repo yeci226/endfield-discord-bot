@@ -741,12 +741,18 @@ export async function drawDashboard(
   return canvas.toBuffer("image/png");
 }
 
-async function fetchImage(url: string): Promise<Image> {
+export async function fetchImage(
+  url: string,
+  customCacheName?: string,
+): Promise<Image> {
   if (imageCache.has(url)) return imageCache.get(url)!;
 
-  const urlHash = crypto.createHash("md5").update(url).digest("hex");
   const ext = url.split(".").pop()?.split(/[?#]/)[0] || "png";
-  const cachePath = path.join(CACHE_DIR, `${urlHash}.${ext}`);
+  const fileName = customCacheName
+    ? `${customCacheName}.${ext}`
+    : `${crypto.createHash("md5").update(url).digest("hex")}.${ext}`;
+
+  const cachePath = path.join(CACHE_DIR, fileName);
 
   // 1. Check disk cache
   if (fs.existsSync(cachePath)) {
@@ -762,7 +768,19 @@ async function fetchImage(url: string): Promise<Image> {
 
   // 2. Fetch remote
   try {
-    const response = await axios.get(url, { responseType: "arraybuffer" });
+    let response;
+    try {
+      response = await axios.get(url, { responseType: "arraybuffer" });
+    } catch (e) {
+      // Fallback: If .png fails, try .webp if it's not already webp
+      if (url.endsWith(".png")) {
+        const webpUrl = url.replace(".png", ".webp");
+        response = await axios.get(webpUrl, { responseType: "arraybuffer" });
+      } else {
+        throw e;
+      }
+    }
+
     const buffer = Buffer.from(response.data);
 
     // Save to disk cache

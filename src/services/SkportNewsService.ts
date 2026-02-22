@@ -322,28 +322,50 @@ export class SkportNewsService {
       let bodyBuffer = "";
 
       for (const block of news.item.caption) {
+        let blockContent = "";
+
         if (block.kind === "text" && block.text) {
-          let text = block.text.text;
-          if (!text) continue;
+          blockContent = block.text.text;
+          if (!blockContent) continue;
 
-          // Heuristic: Bold important categories
+          // Heuristic: Bold important categories/headers
           if (
-            /^([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])?\s*[\u4e00-\u9fa5\w]{2,10}(：|:)/.test(
-              text,
+            /^([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])?\s*[\u4e00-\u9fa5\w]{2,12}(：|:)/.test(
+              blockContent,
             ) ||
-            /^【[\u4e00-\u9fa5\w]{2,10}】/.test(text)
+            /^【[\u4e00-\u9fa5\w]{2,12}】/.test(blockContent)
           ) {
-            text = `**${text}**`;
+            blockContent = `**${blockContent}**`;
           }
-
-          bodyBuffer += text;
         } else if (block.kind === "link" && block.link) {
           const linkText = block.link.text;
           const linkUrl = block.link.link;
-          const linkMarkdown =
+          blockContent =
             linkText === linkUrl ? linkUrl : `[${linkText}](${linkUrl})`;
+        }
 
-          bodyBuffer += linkMarkdown;
+        if (blockContent) {
+          // If bodyBuffer has content and doesn't end with a newline,
+          // and the new block looks like a new line/paragraph, add a newline.
+          if (
+            bodyBuffer &&
+            !bodyBuffer.endsWith("\n") &&
+            !blockContent.startsWith("\n")
+          ) {
+            // Newline if:
+            // 1. New block starts with emoji or 【
+            // 2. Previous block was fairly long or ended with punctuation
+            if (
+              /^([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF]|【)/.test(
+                blockContent,
+              ) ||
+              bodyBuffer.length > 30 ||
+              /[。！？；：…\)\"」』\>]$/.test(bodyBuffer)
+            ) {
+              bodyBuffer += "\n";
+            }
+          }
+          bodyBuffer += blockContent;
         }
       }
 

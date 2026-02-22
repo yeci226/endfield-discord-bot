@@ -59,6 +59,27 @@ export function formatAcceptLanguage(locale?: string): string {
   return `${base},en;q=0.9`;
 }
 
+/**
+ * Maps Discord/bot locale to Gryphline API 'lang' parameter
+ * @param locale Bot locale (tw, en)
+ * @returns API compatible language code (zh-tw, en-us)
+ */
+export function mapLocaleToLang(locale?: string): string {
+  const base = locale || "tw";
+  if (
+    base === "zh-TW" ||
+    base === "zh-HK" ||
+    base === "tw" ||
+    base === "zh_Hant"
+  ) {
+    return "zh-tw";
+  }
+  if (base === "zh-CN" || base === "cn" || base === "zh_Hans") {
+    return "zh-cn";
+  }
+  return "en-us";
+}
+
 // Interfaces for API Responses
 export interface GameRole {
   serverId: string;
@@ -536,6 +557,14 @@ export async function makeRequest<T>(
   } = {},
 ): Promise<T | null> {
   const execute = async () => {
+    // Automatically inject 'lang' parameter if locale is provided
+    if (options.locale) {
+      if (!options.params) options.params = {};
+      if (!options.params.lang) {
+        options.params.lang = mapLocaleToLang(options.locale);
+      }
+    }
+
     const commonHeaders = getCommonHeaders(options.cred, options.locale);
     const headers: any = { ...commonHeaders, ...options.headers };
 
@@ -673,9 +702,11 @@ async function grantOAuthCode(
   token: string,
   appCode: string = "6eb76d4e13aa36e6",
   type: number = 0,
+  locale?: string,
 ) {
   const url = "https://as.gryphline.com/user/oauth2/v2/grant";
   return makeRequest<any>("POST", url, {
+    locale,
     headers: {
       "sec-fetch-site": "cross-site",
       referrer: "https://www.skport.com/",
@@ -691,9 +722,10 @@ async function grantOAuthCode(
 /**
  * Skport Credential Generation using OAuth code
  */
-async function generateCredByCode(code: string) {
+async function generateCredByCode(code: string, locale?: string) {
   const url = "https://zonai.skport.com/web/v1/user/auth/generate_cred_by_code";
   return makeRequest<any>("POST", url, {
+    locale,
     headers: {
       platform: "3",
       referrer: "https://www.skport.com/",
@@ -758,12 +790,12 @@ export async function verifyToken(cookie: string, locale?: string) {
   }
 
   // 2. Grant OAuth Code
-  const grantResult = await grantOAuthCode(cleanToken);
+  const grantResult = await grantOAuthCode(cleanToken, undefined, 0, locale);
   if (grantResult && grantResult.status === 0 && grantResult.data?.code) {
     const code = grantResult.data.code;
 
     // 3. Generate Skport Cred
-    const credResult = await generateCredByCode(code);
+    const credResult = await generateCredByCode(code, locale);
     if (credResult && credResult.code === 0 && credResult.data?.cred) {
       return {
         ...basicResult,
