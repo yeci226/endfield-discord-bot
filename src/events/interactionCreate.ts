@@ -160,7 +160,9 @@ const event: Event = {
 
             const permissions = channel.permissionsFor(client.user?.id!);
             if (!permissions) {
-              invalidChannels.push(`<#${channelId}> (無法確認權限)`);
+              invalidChannels.push(
+                `<#${channelId}> (${tr("news_PermissionUnknown")})`,
+              );
               continue;
             }
 
@@ -171,10 +173,10 @@ const event: Event = {
               validChannels.push(channelId);
             } else {
               const missing: string[] = [];
-              if (!hasView) missing.push("檢視頻道");
-              if (!hasSend) missing.push("發送訊息");
+              if (!hasView) missing.push(tr("news_ViewChannel"));
+              if (!hasSend) missing.push(tr("news_SendMessages"));
               invalidChannels.push(
-                `<#${channelId}> (缺少: ${missing.join(", ")})`,
+                `<#${channelId}> (${tr("news_PermissionMissing")}${missing.join(", ")})`,
               );
             }
           } catch (e) {
@@ -182,7 +184,9 @@ const event: Event = {
               `Error checking permissions for channel ${channelId}:`,
               e,
             );
-            invalidChannels.push(`<#${channelId}> (檢查時發生錯誤)`);
+            invalidChannels.push(
+              `<#${channelId}> (${tr("news_PermissionError")})`,
+            );
           }
         }
 
@@ -217,20 +221,18 @@ const event: Event = {
         if (validChannels.length > 0) {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `✅ **設定已更新**\n已綁定以下頻道接收通知：\n${validChannels.map((id) => `<#${id}>`).join("\n")}`,
+              `${tr("news_SetupSuccess")}\n${tr("news_BindSuccessDetail")}\n${validChannels.map((id) => `<#${id}>`).join("\n")}`,
             ),
           );
         } else if (selectedChannels.length > 0 && validChannels.length === 0) {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `❌ **設定失敗**\n所有選擇的頻道皆無效，請檢查機器人權限。`,
+              `${tr("news_BindFail")}\n${tr("news_BindFailDetail")}`,
             ),
           );
         } else {
           container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              `✅ **設定已更新**\n已取消所有頻道綁定。`,
-            ),
+            new TextDisplayBuilder().setContent(tr("news_UnbindAll")),
           );
         }
 
@@ -240,7 +242,7 @@ const event: Event = {
           );
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `⚠️ **以下頻道無法綁定** (權限不足)：\n${invalidChannels.join("\n")}\n請確保機器人擁有「檢視頻道」和「發送訊息」權限。`,
+              `${tr("news_InvalidChannels")}\n${invalidChannels.join("\n")}\n${tr("news_PermissionTip")}`,
             ),
           );
         }
@@ -271,7 +273,7 @@ const event: Event = {
         ) {
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              `❌ **無法綁定當前頻道**\n請確保機器人擁有「檢視頻道」和「發送訊息」權限。`,
+              `${tr("news_BindFail")}\n${tr("news_PermissionTip")}`,
             ),
           );
           await interaction.editReply({
@@ -302,7 +304,7 @@ const event: Event = {
 
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `✅ **設定已更新**\n已綁定當前頻道 <#${channel.id}> 接收通知。`,
+            tr("news_BindCurrentSuccess", { channelId: channel.id }),
           ),
         );
 

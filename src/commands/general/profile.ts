@@ -382,7 +382,7 @@ const command: Command = {
 
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
-            .setLabel("開啟網頁編輯器 Open Editor")
+            .setLabel(tr("profile_Editor_Button"))
             .setStyle(ButtonStyle.Link)
             .setURL(editUrl),
         );

@@ -135,7 +135,8 @@ const langs: Record<string, any> = {
   profile_Editor_Prop_FontSize: "Font Size",
   profile_Editor_SelectToEdit: "Select element to adjust",
   profile_Editor_WebLinkDesc:
-    "## Please open the link below to open the web editor:\n{url}\n*(Valid for 15 minutes)* ",
+    "Click the button below to open the web-based profile editor. This link is valid for 15 minutes. If it expires, please use the command again.",
+  profile_Editor_Button: "Open Web Editor",
   profile_Editor_BGModal_Title: "Change Background",
   profile_Editor_BGModal_URL: "Image URL",
   profile_Config_Elements: {
@@ -256,6 +257,10 @@ const langs: Record<string, any> = {
   gacha_log_canvas_FreeRecruit: "FREE",
   gacha_log_canvas_ListLabel: "Recruitment List",
   gacha_log_canvas_PaddedCount: "Padded <hardCount> Pulls",
+  gacha_log_canvas_FreePullSummary: "Used <count> Expedited Searches",
+  gacha_log_canvas_NoData: "No Data",
+  gacha_log_view_SelectPool: "Select specific pool for details",
+  gacha_log_view_Overview: "Show Overview (All Pools)",
 
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",
@@ -271,6 +276,48 @@ const langs: Record<string, any> = {
   news_UnbindScopeAll: "all server",
   news_UnbindScopeSingle: "this",
   news_NoSub: "No channels are currently bound.",
+
+  // Gacha Leaderboard
+  gacha_log_leaderboard_Title: "Gacha Leaderboard",
+  gacha_log_leaderboard_Empty:
+    "No data on the leaderboard yet. Use `/gacha log load` to upload your records!",
+  gacha_log_leaderboard_SelectCategory: "Select Category",
+  gacha_log_leaderboard_SelectPoolPrecise: "Select specific <category> pool",
+  gacha_log_leaderboard_CategoryTotal: "All <category> Pools Total",
+  gacha_log_leaderboard_SelectSort: "Select Sort Type",
+  gacha_log_leaderboard_category_TOTAL: "All Pools Total",
+  gacha_log_leaderboard_category_Special: "Limited Characters",
+  gacha_log_leaderboard_category_Standard: "Standard Characters",
+  gacha_log_leaderboard_category_Weapon: "Weapon Search",
+  gacha_log_leaderboard_total_players: "Total Players",
+  gacha_log_leaderboard_total_pulls: "Total Pulls",
+  gacha_log_leaderboard_avg_rate: "Avg 6★ Rate",
+  gacha_log_leaderboard_sort_pulls: "Cumulative Pulls Rank",
+  gacha_log_leaderboard_sort_luck: "Luck Rank (6★ Rate)",
+
+  // News specific
+  news_SetupSuccess: "✅ **Settings Updated**",
+  news_BindSuccessDetail: "Bound channels for notifications:",
+  news_BindFail: "❌ **Setup Failed**",
+  news_BindFailDetail:
+    "All selected channels are invalid. Please check bot permissions.",
+  news_UnbindAll: "✅ **Settings Updated**\nUnbound all channels.",
+  news_InvalidChannels:
+    "⚠️ **Following channels could not be bound** (Insufficient permissions):",
+  news_PermissionMissing: "Missing: ",
+  news_PermissionUnknown: "Permission Unknown",
+  news_PermissionError: "Error during check",
+  news_ViewChannel: "View Channel",
+  news_SendMessages: "Send Messages",
+  news_PermissionTip:
+    "Please ensure the bot has 'View Channel' and 'Send Messages' permissions.",
+  news_BindCurrentSuccess:
+    "✅ **Settings Updated**\nBound current channel <#<channelId>> for notifications.",
+
+  // Gacha Canvas Extras
+  gacha_log_canvas_GameNickname: "In-game Name: <name>",
+  gacha_log_canvas_Pulls_Suffix: " Pulls",
+  gacha_log_canvas_Total_Prefix: "Total ",
 };
 
 export default langs;

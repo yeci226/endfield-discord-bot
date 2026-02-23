@@ -15,12 +15,9 @@ import {
   getAccounts,
   withAutoRefresh,
 } from "../../utils/accountUtils";
-import {
-  getAttendanceList,
-  executeAttendance,
-  formatSkGameRole,
-} from "../../utils/skportApi";
+import { formatSkGameRole } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
+import { processRoleAttendance } from "../../utils/attendanceUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -190,9 +187,6 @@ const command: Command = {
 
           hasResult = true;
 
-          const {
-            processRoleAttendance,
-          } = require("../../utils/attendanceUtils");
           let res: any;
           try {
             res = await withAutoRefresh(

@@ -12,37 +12,47 @@ export class Logger {
     return colors.grey(`[${moment().format("YYYY-MM-DD HH:mm:ss")}]`);
   }
 
-  public info(message: string): void {
+  public info(message: any, ...optionalParams: any[]): void {
     console.log(
-      `${this.getTimestamp()} ${colors.cyan(`[${this.scope}]`)} ${message}`,
+      `${this.getTimestamp()} ${colors.cyan(`[${this.scope}]`)}`,
+      message,
+      ...optionalParams,
     );
   }
 
-  public success(message: string): void {
+  public success(message: any, ...optionalParams: any[]): void {
     console.log(
-      `${this.getTimestamp()} ${colors.green(`[${this.scope}]`)} ${message}`,
+      `${this.getTimestamp()} ${colors.green(`[${this.scope}]`)}`,
+      message,
+      ...optionalParams,
     );
   }
 
-  public warn(message: string): void {
+  public warn(message: any, ...optionalParams: any[]): void {
     console.log(
-      `${this.getTimestamp()} ${colors.yellow(`[${this.scope}]`)} ${message}`,
+      `${this.getTimestamp()} ${colors.yellow(`[${this.scope}]`)}`,
+      message,
+      ...optionalParams,
     );
   }
 
-  public error(message: string): void {
+  public error(message: any, ...optionalParams: any[]): void {
     console.log(
-      `${this.getTimestamp()} ${colors.red(`[${this.scope}]`)} ${message}`,
+      `${this.getTimestamp()} ${colors.red(`[${this.scope}]`)}`,
+      message,
+      ...optionalParams,
     );
   }
 
-  public debug(message: string): void {
+  public debug(message: any, ...optionalParams: any[]): void {
     console.log(
-      `${this.getTimestamp()} ${colors.magenta(`[${this.scope}]`)} ${message}`,
+      `${this.getTimestamp()} ${colors.magenta(`[${this.scope}]`)}`,
+      message,
+      ...optionalParams,
     );
   }
 
-  public log(message: string): void {
-    this.info(message);
+  public log(message: any, ...optionalParams: any[]): void {
+    this.info(message, ...optionalParams);
   }
 }

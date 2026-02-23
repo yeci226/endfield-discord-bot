@@ -60,8 +60,11 @@ export const ITEMS_PER_PAGE = 28; // 4 rows × 7 cols
 export function getDetailedPageCount(
   items: any[],
   includesPlaceholder: boolean,
+  includesPaddedCard: boolean = false,
 ): number {
-  const effectiveItems = includesPlaceholder ? items.length + 1 : items.length;
+  let effectiveItems = items.length;
+  if (includesPlaceholder) effectiveItems += 1;
+  if (includesPaddedCard) effectiveItems += 1;
   return Math.max(1, Math.ceil(effectiveItems / ITEMS_PER_PAGE));
 }
 
@@ -139,7 +142,9 @@ export async function drawGachaStats(
 
     for (const p of pools) {
       const items = history.filter(
-        (item: any) => item.poolId === p.id && item.rarity >= 6,
+        (item: any) =>
+          item.poolId === p.id &&
+          (Number(item.rarity || 0) >= 6 || item.isExpeditedBlock),
       );
 
       let gId = "SpecialShared";
@@ -164,7 +169,8 @@ export async function drawGachaStats(
   } else {
     // Detailed Mode: Focus on specific pool
     const items = history.filter(
-      (item: any) => item.poolId === selectedPoolId && item.rarity >= 4,
+      (item: any) =>
+        item.poolId === selectedPoolId && Number(item.rarity || 0) >= 4,
     );
     const pool = (
       type === "weapon" ? stats.weapon.pools : stats.char.pools
@@ -183,11 +189,10 @@ export async function drawGachaStats(
     const pTotal = gSummary[gId]?.poolTotalMap?.[selectedPoolId] || 0;
 
     visualGroups.push({
-      title: normalizeGachaText(
-        pool?.name || (tr?.("gacha_log_canvas_ListLabel") ?? "尋訪清單"),
-      ),
+      title: normalizeGachaText(pool?.name || tr("gacha_log_canvas_ListLabel")),
       items,
       gId,
+      pId: selectedPoolId,
     });
   }
 
@@ -216,7 +221,9 @@ export async function drawGachaStats(
   ctx.font = "bold 80px NotoSansTCBold";
   ctx.textAlign = "left";
   ctx.fillText(
-    tr("gacha_log_stats_Title", { uid: data.info.nickname || stats.uid }),
+    tr("gacha_log_stats_Title", {
+      uid: data.info.nickname || data.info.uid || stats.uid,
+    }),
     padding,
     150,
   );
@@ -254,11 +261,10 @@ export async function drawGachaStats(
       : type === "limited_char"
         ? tr("gacha_log_stats_LimitedCharPool")
         : tr("gacha_log_stats_StandardCharPool");
-  ctx.fillText(
-    `${typeLabel} — ${moment().format("YYYY/MM/DD HH:mm")}`,
-    padding,
-    210,
-  );
+  const recordDate = data.info.export_timestamp
+    ? moment(data.info.export_timestamp).format("YYYY/MM/DD HH:mm")
+    : moment().format("YYYY/MM/DD HH:mm");
+  ctx.fillText(`${typeLabel} — ${recordDate}`, padding, 210);
 
   // 3. Summary Area (Horizontal Cards)
   const summaryY = 280;
@@ -269,89 +275,116 @@ export async function drawGachaStats(
   // Filter total pulls by current pool group
   // For Character limited, we should only sum history from SpecialShared group
   const groupStats = stats[baseType].summary;
-  let activePulls = 0;
-  let activeSixCount = 0;
+  // Aggregated Category Stats
+  let categoryNonFreeTotal = 0;
+  let categoryFreeTotal = 0;
+  let categorySixCount = 0;
+  let categorySixPullCount = 0; // Only non-free
   let featuredSixCount = 0;
 
-  if (selectedPoolId) {
-    // Determine the group ID for the selected pool
-    const pool = (
-      type === "weapon" ? stats.weapon.pools : stats.char.pools
-    ).find((p: any) => p.id === selectedPoolId);
-    let currentGId = "SpecialShared";
-    if (type === "weapon") currentGId = selectedPoolId;
-    else if (pool?.type?.includes("Beginner")) currentGId = "Beginner";
-    else if (pool?.type?.includes("Standard"))
-      currentGId = `Standard_${pool.id}`;
+  // Specific pool values for header
+  let specificPoolTotal = 0;
+  let specificPoolFree = 0;
 
-    activePulls = groupStats[currentGId]?.total || 0;
-
-    // We can't easily get total 6-stars for a specific pool group from summary alone if history is mixed,
-    // but we can count from history
-    const filteredHistory = history.filter((r: any) => {
-      if (r.rarity < 6) return false;
-      if (currentGId === "SpecialShared")
-        return r.poolType?.includes("Special");
-      if (currentGId === "Beginner") return r.poolType?.includes("Beginner");
-      if (currentGId.startsWith("Standard")) return r.poolId === selectedPoolId;
-      return r.poolId === selectedPoolId;
-    });
-
-    activeSixCount = filteredHistory.length;
-    featuredSixCount = filteredHistory.filter((r: any) => r.isFeatured).length;
-  } else {
+  // Overview: Sum relevant groups in category
+  for (const [gid, s] of Object.entries(groupStats)) {
+    const sObj = s as any;
+    let isMatch = false;
     if (type === "weapon") {
-      activePulls = totalPulls;
-      const filteredHistory = history.filter((r: any) => r.rarity >= 6);
-      activeSixCount = filteredHistory.length;
-      featuredSixCount = filteredHistory.filter(
-        (r: any) => r.isFeatured,
-      ).length;
-    } else {
-      activePulls = groupStats["SpecialShared"]?.total || 0;
-      const filteredHistory = history.filter(
-        (r: any) => r.rarity >= 6 && r.poolType?.includes("Special"),
-      );
-      activeSixCount = filteredHistory.length;
-      featuredSixCount = filteredHistory.filter(
-        (r: any) => r.isFeatured,
-      ).length;
+      isMatch = true;
+    } else if (type === "limited_char") {
+      isMatch = gid === "SpecialShared";
+    } else if (type === "standard_char") {
+      isMatch = gid.startsWith("Standard");
+    } else if (type === "beginner_char") {
+      isMatch = gid === "Beginner";
+    }
+
+    if (isMatch) {
+      categoryNonFreeTotal += sObj.nonFreeTotal || 0;
+      categoryFreeTotal += sObj.freeTotal || 0;
+      categorySixCount += sObj.sixStarCount || 0;
+      categorySixPullCount += sObj.sixStarPullCount || 0;
+
+      // For Win Rate in Overview (Limited Only)
+      if (type === "limited_char" && sObj.poolFeaturedSixMap) {
+        Object.values(sObj.poolFeaturedSixMap).forEach((v: any) => {
+          featuredSixCount += v || 0;
+        });
+      }
     }
   }
 
-  const rateUpWinRate =
-    activeSixCount > 0
-      ? ((featuredSixCount / activeSixCount) * 100).toFixed(2) + "%"
-      : "0.00%";
+  let poolSixStarPullCount = 0;
+  let poolFeaturedSixCount = 0;
+
+  if (selectedPoolId) {
+    const pool = (
+      type === "weapon" ? stats.weapon.pools : stats.char.pools
+    ).find((p: any) => p.id === selectedPoolId);
+
+    specificPoolTotal = pool ? pool.total || 0 : 0;
+    specificPoolFree = pool ? pool.freeCount || 0 : 0;
+    poolSixStarPullCount = pool ? pool.sixStarPullCount || 0 : 0;
+    poolFeaturedSixCount = pool ? pool.featuredSixCount || 0 : 0;
+  }
+
+  const rateUpWinRate = selectedPoolId
+    ? poolSixStarPullCount > 0
+      ? ((poolFeaturedSixCount / poolSixStarPullCount) * 100).toFixed(2) + "%"
+      : (tr?.("gacha_log_canvas_NoData") ?? "未有資料")
+    : categorySixPullCount > 0
+      ? ((featuredSixCount / categorySixPullCount) * 100).toFixed(2) + "%"
+      : (tr?.("gacha_log_canvas_NoData") ?? "未有資料");
+
+  // Determine activeCategoryPity for headers
+  const mainActiveGroup = visualGroups[0];
+  const gIdMain =
+    mainActiveGroup?.gId || (type === "weapon" ? "" : "SpecialShared");
+  const mainPityData = groupStats[gIdMain] || {};
+  const activeCategoryPity = mainPityData.currentPity || 0;
 
   const mainSummary = [
     {
       label: tr?.("gacha_log_canvas_TotalPulls") ?? "總累計抽數",
-      value: String(activePulls),
+      value: String(categoryNonFreeTotal),
+      subValue: categoryFreeTotal > 0 ? `+ ${categoryFreeTotal}` : "",
       icon: "📊",
     },
     {
       label: selectedPoolId
         ? (tr?.("gacha_log_canvas_CurrentTotal") ?? "當期總抽數")
         : (tr?.("gacha_log_canvas_SixStarRate") ?? "6星出率 (含保底)"),
-      value: selectedPoolId
-        ? String(history.filter((r: any) => r.poolId === selectedPoolId).length)
-        : activePulls > 0
-          ? ((activeSixCount / activePulls) * 100).toFixed(2) + "%"
-          : "0.00%",
+      value: String(selectedPoolId ? specificPoolTotal : categoryNonFreeTotal),
+      subValue:
+        (selectedPoolId ? specificPoolFree : categoryFreeTotal) > 0
+          ? `+ ${selectedPoolId ? specificPoolFree : categoryFreeTotal}`
+          : "",
       icon: selectedPoolId ? "📅" : "✨",
     },
     {
       label:
-        type === "weapon"
-          ? (tr?.("gacha_log_canvas_UpWeaponWinRate") ?? "UP武器不歪率")
-          : (tr?.("gacha_log_canvas_UpCharWinRate") ?? "UP角色不歪率"),
-      value: rateUpWinRate,
-      icon: "�",
+        type === "limited_char"
+          ? (tr?.("gacha_log_canvas_UpCharWinRate") ?? "UP角色不歪率")
+          : "", // Only show for limited characters
+      value: type === "limited_char" ? rateUpWinRate : "",
+      subValue: "",
+      icon: type === "limited_char" ? "💍" : "",
+      hidden: type !== "limited_char",
     },
   ];
 
-  mainSummary.forEach((s, i) => {
+  // If in Overview mode, we actually want Card 2 to be the 6-star rate
+  if (!selectedPoolId) {
+    mainSummary[1].value =
+      categoryNonFreeTotal > 0
+        ? ((categorySixPullCount / categoryNonFreeTotal) * 100).toFixed(2) + "%"
+        : "0.00%";
+    mainSummary[1].subValue = ""; // No + Expedited on rate card
+  }
+
+  mainSummary.forEach((s: any, i) => {
+    if (s.hidden) return;
     const x = padding + i * (cardW + cardGap);
     ctx.fillStyle = "#fff";
     ctx.shadowColor = "rgba(0,0,0,0.05)";
@@ -362,7 +395,33 @@ export async function drawGachaStats(
     ctx.textAlign = "center";
     ctx.fillStyle = "#111";
     ctx.font = "bold 80px NotoSansTCBold";
-    ctx.fillText(s.value, x + cardW / 2, summaryY + 110);
+    const valText = s.value;
+    const subText = (s as any).subValue || "";
+
+    if (subText) {
+      const valW = ctx.measureText(valText).width;
+      ctx.font = "bold 40px NotoSansTCBold";
+      const subW = ctx.measureText(subText).width;
+      const totalW = valW + 10 + subW;
+      const startX = x + cardW / 2 - totalW / 2;
+
+      ctx.textAlign = "left";
+      ctx.font = "bold 80px NotoSansTCBold";
+      ctx.fillText(valText, startX, summaryY + 110);
+      ctx.fillStyle = "#888";
+      ctx.font = "bold 40px NotoSansTCBold";
+      ctx.fillText("+ ", startX + valW + 5, summaryY + 110);
+      ctx.fillStyle = "#ffcc00";
+      ctx.fillText(
+        subText.replace("+ ", ""),
+        startX + valW + 35,
+        summaryY + 110,
+      );
+    } else {
+      ctx.fillText(valText, x + cardW / 2, summaryY + 110);
+    }
+
+    ctx.textAlign = "center";
     ctx.fillStyle = "#999";
     ctx.font = "32px NotoSans";
     ctx.fillText(s.label, x + cardW / 2, summaryY + 170);
@@ -386,19 +445,48 @@ export async function drawGachaStats(
       const poolTitle = `I ${group.title}`;
       ctx.fillText(poolTitle, curX, curY);
 
-      // Total Pulls in Grey Next to Title
+      // Total Pulls Breakdown Next to Title
       const titleWidth = ctx.measureText(poolTitle).width;
       const gSummary = stats[type === "weapon" ? "weapon" : "char"].summary;
       const gId = group.gId;
-      const pTotal = gSummary[gId]?.poolTotalMap?.[group.pId || "unknown"] || 0;
+      const pId = group.pId || "unknown";
+      const nonFreeCount = gSummary[gId]?.poolTotalMap?.[pId] || 0;
+      const freeCount = gSummary[gId]?.poolFreeTotalMap?.[pId] || 0;
 
-      ctx.fillStyle = "#888"; // Grey text
-      ctx.font = "28px NotoSans"; // Smaller font
-      ctx.fillText(
-        tr("gacha_log_canvas_TotalCount").replace("<pTotal>", String(pTotal)),
-        curX + titleWidth + 15,
-        curY,
-      );
+      let startX = curX + titleWidth + 20;
+      ctx.textBaseline = "alphabetic";
+
+      // "總計"
+      ctx.fillStyle = "#888";
+      ctx.font = "28px NotoSans";
+      ctx.fillText(tr("gacha_log_canvas_Total_Prefix").trim(), startX, curY);
+      startX +=
+        ctx.measureText(tr("gacha_log_canvas_Total_Prefix").trim()).width + 8;
+
+      // Non-free count
+      ctx.fillStyle = "#444";
+      ctx.font = "bold 28px NotoSansTCBold";
+      ctx.fillText(String(nonFreeCount), startX, curY);
+      startX += ctx.measureText(String(nonFreeCount)).width + 8;
+
+      if (freeCount > 0) {
+        // "+"
+        ctx.fillStyle = "#888";
+        ctx.font = "24px NotoSans";
+        ctx.fillText("+", startX, curY);
+        startX += ctx.measureText("+").width + 8;
+
+        // Free count
+        ctx.fillStyle = "#ffcc00";
+        ctx.font = "bold 28px NotoSansTCBold";
+        ctx.fillText(String(freeCount), startX, curY);
+        startX += ctx.measureText(String(freeCount)).width + 8;
+      }
+
+      // "抽"
+      ctx.fillStyle = "#888";
+      ctx.font = "28px NotoSans";
+      ctx.fillText(tr("gacha_log_canvas_Pulls_Suffix").trim(), startX, curY);
 
       curY += 70;
 
@@ -408,7 +496,7 @@ export async function drawGachaStats(
       const isBeginner = gId === "Beginner" || group.title.includes("新手");
       const maxPity80 = isBeginner ? 40 : type === "weapon" ? 40 : 80;
 
-      const currentSoftPity = pityData?.currentPity || 0;
+      const groupPity = pityData?.currentPity || 0;
 
       // Dynamic Hard Pity:
       // Character: 120 (Guarantee) or 240 (Spark)
@@ -418,7 +506,7 @@ export async function drawGachaStats(
       const curPoolTotal = pityData?.poolTotalMap?.[group.pId || ""] || 0;
       const hardCount = pityData?.featuredPityMap?.[group.pId || ""] || 0;
 
-      const softRemaining = Math.max(0, maxPity80 - currentSoftPity);
+      const softRemaining = Math.max(0, maxPity80 - groupPity);
 
       let hardRemaining = 0;
       let isSpark = false;
@@ -448,13 +536,6 @@ export async function drawGachaStats(
       }
 
       let showPadding = false;
-      if (
-        (gId === "SpecialShared" || type === "weapon") &&
-        i > 0 &&
-        hardCount > 0
-      ) {
-        showPadding = true;
-      }
 
       const rectH = 110;
 
@@ -524,37 +605,107 @@ export async function drawGachaStats(
         curY += rectH + 15;
       }
 
-      if (showPadding) {
-        ctx.save();
-        ctx.fillStyle = "#fff";
-        ctx.shadowColor = "rgba(0,0,0,0.02)";
-        ctx.shadowBlur = 10;
-        roundRect(ctx, curX, curY, colW, 60, 15, true);
-        ctx.shadowBlur = 0;
+      // --- PADDED PULLS (Overview Gray Bar) ---
+      {
+        const poolItemsAll = stats[
+          type === "weapon" ? "weapon" : "char"
+        ].history.filter((r: any) => r.poolId === group.pId);
+        const categorySummary =
+          stats[type === "weapon" ? "weapon" : "char"].summary[
+            group.gId || "unknown"
+          ];
+        const poolTotal = categorySummary?.poolTotalMap?.[group.pId || ""] || 0;
 
-        ctx.fillStyle = "#ccc";
-        ctx.fillRect(curX, curY, 8, 60);
+        const poolList = stats[type === "weapon" ? "weapon" : "char"].pools;
+        const newestPoolId = poolList[0]?.id;
+        const isNewestPool = group.pId === newestPoolId;
 
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#555";
-        ctx.font = "bold 18px NotoSans";
-        ctx.fillText(
-          tr("gacha_log_canvas_PaddedCount").replace(
-            "<hardCount>",
-            String(hardCount),
-          ),
-          curX + colW / 2,
-          curY + 30,
-        );
+        let displayPity = 0;
 
-        ctx.restore();
-        curY += 60 + 15;
+        if (isNewestPool) {
+          // Actve pool: Show CURRENT cumulative pity for the group
+          displayPity = categorySummary?.currentPity || 0;
+        } else {
+          // Historical pool: Show LEFTOVER pity (built after the last 6-star)
+          displayPity = poolTotal; // default if no prior pity
+          if (poolItemsAll.length > 0) {
+            // Find the most recent 6-star
+            const lastSix = poolItemsAll.find(
+              (r: any) => r.rarity >= 6 && !r.isFree,
+            );
+            if (lastSix) {
+              displayPity = poolTotal - lastSix.poolTotalCount;
+            } else {
+              // No 6-stars, so pity never reset.
+              const oldest = poolItemsAll[poolItemsAll.length - 1];
+              const initial = Math.max(
+                0,
+                oldest.pitySixCount - oldest.poolTotalCount,
+              );
+              displayPity = initial + poolTotal;
+            }
+          }
+        }
+
+        if (displayPity > 0) {
+          if (curY + 60 <= height - 80) {
+            // Check space
+            ctx.save();
+            ctx.fillStyle = "#f0f2f5"; // Soft gray background
+            ctx.shadowColor = "rgba(0,0,0,0.02)";
+            ctx.shadowBlur = 10;
+            roundRect(ctx, curX, curY, colW, 60, 15, true);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = "#ccc"; // Lighter gray accent
+            ctx.fillRect(curX, curY, 8, 60);
+
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = "#888"; // Gray text
+            ctx.font = "bold 22px NotoSansTCBold";
+            const paddedText = (
+              tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
+            ).replace("<hardCount>", String(displayPity));
+            ctx.fillText(paddedText, curX + colW / 2, curY + 30);
+            ctx.restore();
+            curY += 60 + 15;
+          }
+        }
       }
+
       // ------------------------------------
 
-      // Items (Only 6★)
+      // Items (6★ and Free Blocks)
       for (const item of group.items) {
+        if (item.isExpeditedBlock) {
+          // Render Yellow Free Pull Card
+          if (curY + 60 <= height - 80) {
+            ctx.save();
+            ctx.fillStyle = "#fffbeb";
+            ctx.shadowColor = "rgba(0,0,0,0.02)";
+            ctx.shadowBlur = 10;
+            roundRect(ctx, curX, curY, colW, 60, 15, true);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = "#ffcc00";
+            ctx.fillRect(curX, curY, 8, 60);
+
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = "#d97706";
+            ctx.font = "bold 22px NotoSansTCBold";
+            const freeText = (
+              tr?.("gacha_log_canvas_FreePullSummary") ??
+              "已使用 <count> 抽加急尋訪"
+            ).replace("<count>", String(item.count));
+            ctx.fillText(freeText, curX + colW / 2, curY + 30);
+            ctx.restore();
+            curY += 60 + 15;
+          }
+          continue;
+        }
+
         ctx.fillStyle = "#fff";
         ctx.shadowColor = "rgba(0,0,0,0.02)";
         ctx.shadowBlur = 10;
@@ -613,41 +764,38 @@ export async function drawGachaStats(
         const nameText = normalizeGachaText(item.name);
         ctx.fillText(nameText, centerX + 60, curY + rectH / 2 + 10);
 
-        if (item.isOffRate) {
-          const textWidth = ctx.measureText(nameText).width;
+        if (item.isOffRate && type !== "weapon") {
+          const textWidth = ctx.measureText(nameText).width; // Use nameText for measurement
           drawOffRateBadge(
             ctx,
-            centerX + 60 + textWidth + 30,
-            curY + rectH / 2 + 2,
-            22,
+            centerX + 60 + textWidth + 30, // Keep original X calculation
+            curY + rectH / 2 + 2, // Keep original Y calculation
+            22, // Keep original size
             isEn,
           );
         }
 
         ctx.textAlign = "right";
-        if (
-          item.isFree &&
-          !(type === "weapon" || item.poolType?.includes("Special"))
-        ) {
+        if (item.isFree) {
           ctx.fillStyle = "#ffcc00";
           ctx.font = "bold 26px NotoSansTCBold";
+          ctx.textBaseline = "middle";
           ctx.fillText(
             tr("gacha_log_canvas_FreeRecruit"),
             curX + colW - 25,
-            curY + rectH / 2 + 10,
+            curY + rectH / 2,
           );
+          ctx.textBaseline = "alphabetic";
         } else {
           // Display the banner-specific total count
           ctx.fillStyle = "#ff7100";
           ctx.font = "bold 34px NotoSansTCBold";
 
-          if (!item.isFree) {
-            ctx.fillText(
-              `${item.pitySixCount}`,
-              curX + colW - 25,
-              curY + rectH / 2 - 5,
-            );
-          }
+          ctx.fillText(
+            `${item.pitySixCount}`,
+            curX + colW - 25,
+            curY + rectH / 2 - 5,
+          );
 
           ctx.fillStyle = "#aaa";
           ctx.font = "20px NotoSans";
@@ -657,7 +805,7 @@ export async function drawGachaStats(
               String(item.poolTotalCount),
             ),
             curX + colW - 25,
-            curY + rectH / 2 + (item.isFree ? 10 : 25),
+            curY + rectH / 2 + 25,
           );
         }
 
@@ -699,22 +847,58 @@ export async function drawGachaStats(
     })();
 
     const allItems = group.items;
-    const pageStart = page * ITEMS_PER_PAGE;
-    // On page 0, placeholder occupies slot 0 if visible
-    const placeholderOnThisPage = showPlaceholder && page === 0;
-    const itemsStart =
-      page === 0
-        ? showPlaceholder
-          ? Math.max(0, pageStart)
-          : pageStart
-        : pageStart - (showPlaceholder ? 1 : 0);
-    const effectiveStart =
-      page === 0 ? 0 : pageStart - (showPlaceholder ? 1 : 0);
-    const slotsOnPage = ITEMS_PER_PAGE - (placeholderOnThisPage ? 1 : 0);
-    const pagedItems = allItems.slice(
-      effectiveStart,
-      effectiveStart + slotsOnPage,
+    const poolItemsAll = stats[
+      type === "weapon" ? "weapon" : "char"
+    ].history.filter((r: any) => r.poolId === group.pId);
+    let initialPaddedCount = 0;
+    if (poolItemsAll.length > 0) {
+      const oldest = poolItemsAll[poolItemsAll.length - 1];
+      initialPaddedCount = Math.max(
+        0,
+        oldest.pitySixCount - oldest.poolTotalCount,
+      );
+    } else {
+      // Very rare: user views detailed mode of a pool with <10 pulls and no 4-stars.
+      // We can fallback to currentPity - poolTotal if it's the newest.
+      const categorySummary =
+        stats[type === "weapon" ? "weapon" : "char"].summary[
+          group.gId || "unknown"
+        ];
+      const poolTotal = categorySummary?.poolTotalMap?.[group.pId || ""] || 0;
+      if ((group as any).isNewest)
+        initialPaddedCount = Math.max(
+          0,
+          (categorySummary?.currentPity || 0) - poolTotal,
+        );
+    }
+
+    const totalPages = getDetailedPageCount(
+      allItems,
+      showPlaceholder,
+      initialPaddedCount > 0,
     );
+
+    // Calculate how many items to skip/take based on previous pages' layout
+    let skipped = 0;
+    for (let p = 0; p < page; p++) {
+      const pIsFirst = p === 0;
+      const pIsLast = p === totalPages - 1;
+      const slots =
+        ITEMS_PER_PAGE -
+        (pIsFirst && showPlaceholder ? 1 : 0) -
+        (pIsLast && initialPaddedCount > 0 ? 1 : 0);
+      skipped += slots;
+    }
+
+    const placeholderOnThisPage = showPlaceholder && page === 0;
+    const paddedCardOnThisPage =
+      initialPaddedCount > 0 && page === totalPages - 1;
+    const slotsOnThisPage =
+      ITEMS_PER_PAGE -
+      (placeholderOnThisPage ? 1 : 0) -
+      (paddedCardOnThisPage ? 1 : 0);
+
+    const pagedItems = allItems.slice(skipped, skipped + slotsOnThisPage);
 
     let currentX = centerPadding;
     let currentY = listY;
@@ -727,11 +911,45 @@ export async function drawGachaStats(
     ctx.fillText(poolTitle, centerPadding, currentY);
 
     const titleWidth = ctx.measureText(poolTitle).width;
-    const pTotal = history.filter(
-      (r: any) => r.poolId === selectedPoolId,
-    ).length;
+    let startX = centerPadding + titleWidth + 20;
+    ctx.textBaseline = "alphabetic";
+
+    // "總計"
     ctx.fillStyle = "#888";
     ctx.font = "28px NotoSans";
+    ctx.fillText("總計", startX, currentY);
+    startX += ctx.measureText("總計").width + 8;
+
+    // Non-free count
+    ctx.fillStyle = "#444";
+    ctx.font = "bold 28px NotoSansTCBold";
+    ctx.fillText(String(specificPoolTotal), startX, currentY);
+    startX += ctx.measureText(String(specificPoolTotal)).width + 8;
+
+    if (specificPoolFree > 0) {
+      // "+"
+      ctx.fillStyle = "#888";
+      ctx.font = "24px NotoSans";
+      ctx.fillText("+", startX, currentY);
+      startX += ctx.measureText("+").width + 8;
+
+      // Free count
+      ctx.fillStyle = "#ffcc00";
+      ctx.font = "bold 28px NotoSansTCBold";
+      ctx.fillText(String(specificPoolFree), startX, currentY);
+      startX += ctx.measureText(String(specificPoolFree)).width + 8;
+
+      // "加急"
+      ctx.fillStyle = "#ffcc00";
+      ctx.font = "28px NotoSans";
+      ctx.fillText("加急", startX, currentY);
+      startX += ctx.measureText("加急").width + 8;
+    }
+
+    // "抽"
+    ctx.fillStyle = "#888";
+    ctx.font = "28px NotoSans";
+    ctx.fillText("抽", startX, currentY);
 
     if (poolApiData?.up6_image) {
       try {
@@ -856,11 +1074,13 @@ export async function drawGachaStats(
           ? "gacha_log_canvas_SparkRemaining"
           : "gacha_log_canvas_HardRemaining";
 
+        const label =
+          tr?.(locKey) ??
+          (isSpark
+            ? "剩餘 <hardRemaining> 抽可獲得當期信物"
+            : "剩餘 <hardRemaining> 抽必得當期 6 星");
         ctx.fillText(
-          (tr?.(locKey) ?? "剩餘 <hardRemaining> 抽必得當期 6 星").replace(
-            "<hardRemaining>",
-            String(hardRemaining),
-          ),
+          label.replace("<hardRemaining>", String(hardRemaining)),
           pCenterX + pRadius + 10,
           currentY + itemH / 2 + 30,
         );
@@ -949,7 +1169,7 @@ export async function drawGachaStats(
       const nameText = normalizeGachaText(item.name);
       ctx.fillText(nameText, centerX + radius + 10, curY + itemH / 2 - 5);
 
-      if (item.isOffRate) {
+      if (item.isOffRate && type !== "weapon") {
         const textWidth = ctx.measureText(nameText).width;
         drawOffRateBadge(
           ctx,
@@ -971,61 +1191,86 @@ export async function drawGachaStats(
       );
 
       ctx.textAlign = "right";
-      if (
-        item.isFree &&
-        !(type === "weapon" || item.poolType?.includes("Special"))
-      ) {
+      if (item.isFree) {
         ctx.fillStyle = "#ffcc00";
         ctx.font = `bold 28px NotoSansTCBold`;
+        ctx.textBaseline = "middle";
         ctx.fillText(
           tr?.("gacha_log_canvas_FreeRecruit") ?? "加急",
           curX + itemW - 15,
-          curY + itemH / 2 + 10,
+          curY + itemH / 2,
         );
+        ctx.textBaseline = "alphabetic";
       } else {
         const displayPity = isSix ? item.pitySixCount : item.pityCount;
-
-        if (isSix) {
-          ctx.fillStyle = "#ff7100";
-          ctx.font = `bold ${fontSize + 4}px NotoSansTCBold`;
-          if (!item.isFree) {
-            ctx.fillText(
-              `${displayPity}`,
-              curX + itemW - 15,
-              curY + itemH / 2 - 5,
-            );
-          }
-          // Total
-          ctx.fillStyle = "#888";
-          ctx.font = `${subFontSize}px NotoSans`;
-          ctx.fillText(
-            `T${String(item.poolTotalCount)}`,
-            curX + itemW - 15,
-            curY + itemH / 2 + (item.isFree ? 10 : 20),
-          );
-        } else {
-          ctx.fillStyle = isFive ? "#ffcc00" : "#b04dff";
-          ctx.font = `bold ${fontSize + 4}px NotoSansTCBold`;
-          if (!item.isFree) {
-            ctx.fillText(
-              `${displayPity}`,
-              curX + itemW - 15,
-              curY + itemH / 2 + 10,
-            );
-          }
-
-          // Total
-          ctx.fillStyle = "#888";
-          ctx.font = `${subFontSize}px NotoSans`;
-          ctx.fillText(
-            `T${String(item.poolTotalCount)}`,
-            curX + itemW - 15,
-            curY + itemH / 2 + (item.isFree ? 25 : 35),
-          );
-        }
+        // Pity Count
+        ctx.fillStyle = isSix ? "#ff7100" : isFive ? "#ffcc00" : "#b04dff";
+        ctx.font = `bold ${fontSize + 4}px NotoSansTCBold`;
+        ctx.fillText(`${displayPity}`, curX + itemW - 15, curY + itemH / 2 - 5);
+        // Pool Total Count (Non-free)
+        ctx.fillStyle = "#888";
+        ctx.font = `${subFontSize}px NotoSans`;
+        ctx.fillText(
+          `T${String(item.poolTotalCount)}`,
+          curX + itemW - 15,
+          curY + itemH / 2 + 25,
+        );
       }
 
       currentX += itemW + gap;
+    }
+
+    // --- PADDED PULLS (Detailed Gray Card) ---
+    // If we are on the LAST page, show padded pulls if any
+    const isLastPage =
+      page ===
+      getDetailedPageCount(allItems, showPlaceholder, initialPaddedCount > 0) -
+        1;
+
+    if (isLastPage && initialPaddedCount > 0) {
+      if (currentX + itemW > width - (centerPadding - padding + rightGutter)) {
+        currentX = centerPadding;
+        currentY += itemH + gap;
+      }
+
+      if (currentY + itemH <= height - 50) {
+        ctx.save();
+        ctx.fillStyle = "#fff";
+        ctx.shadowColor = "rgba(0,0,0,0.02)";
+        ctx.shadowBlur = 10;
+        roundRect(ctx, currentX, currentY, itemW, itemH, 15, true);
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = "#ccc"; // Gray accent
+        ctx.fillRect(currentX, currentY, 8, itemH);
+
+        const dRadius = 40;
+        const dCenterX = currentX + dRadius + 15;
+        const dCenterY = currentY + itemH / 2;
+
+        ctx.beginPath();
+        ctx.arc(dCenterX, dCenterY, dRadius, 0, Math.PI * 2);
+        ctx.fillStyle = "#f0f2f5";
+        ctx.fill();
+
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#999";
+        ctx.font = "bold 50px NotoSansTCBold";
+        ctx.fillText("⚓", dCenterX, dCenterY - 2);
+
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#888";
+        ctx.font = "bold 24px NotoSansTCBold";
+        ctx.fillText(
+          (
+            tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
+          ).replace("<hardCount>", String(initialPaddedCount)),
+          dCenterX + dRadius + 10,
+          currentY + itemH / 2,
+        );
+        ctx.restore();
+      }
     }
   }
 

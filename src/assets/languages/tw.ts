@@ -114,6 +114,9 @@ const langs: Record<string, any> = {
   profile_Config_Toggle: "開關顯示元素",
   profile_Config_Share: "分享目前的面版",
   profile_Config_Reset: "重設為預設面版",
+  profile_Editor_WebLinkDesc:
+    "點擊下方按鈕開啟網頁版名片編輯器。此連結 15 分鐘內有效，若過期請再次使用指令。",
+  profile_Editor_Button: "開啟網頁編輯器 Open Editor",
   profile_Config_Success: "設定已更新！",
   profile_Config_InvalidUUID: "無效的 UUID",
   profile_Config_ShareSuccess: "您的面版 UUID 為：`{uuid}`",
@@ -133,8 +136,6 @@ const langs: Record<string, any> = {
   profile_Editor_Prop_Height: "高度",
   profile_Editor_Prop_FontSize: "字體大小",
   profile_Editor_SelectToEdit: "請選擇要調整的元素",
-  profile_Editor_WebLinkDesc:
-    "## 請點選下方連結開啟網頁編輯器\n此連結 15 分鐘內有效，若過期請再次使用指令。",
   profile_Editor_BGModal_Title: "更換背景圖片",
   profile_Editor_BGModal_URL: "圖片網址 (URL)",
   profile_Config_Elements: {
@@ -252,6 +253,10 @@ const langs: Record<string, any> = {
   gacha_log_canvas_FreeRecruit: "加急",
   gacha_log_canvas_ListLabel: "尋訪清單",
   gacha_log_canvas_PaddedCount: "已墊 <hardCount> 抽",
+  gacha_log_canvas_FreePullSummary: "已使用 <count> 抽加急尋訪",
+  gacha_log_canvas_NoData: "未有資料",
+  gacha_log_view_SelectPool: "選擇特定期數查看詳細記錄",
+  gacha_log_view_Overview: "顯示總覽 (不選擇特定池)",
 
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",
@@ -266,6 +271,45 @@ const langs: Record<string, any> = {
   news_UnbindScopeAll: "本伺服器所有",
   news_UnbindScopeSingle: "此",
   news_NoSub: "目前沒有綁定任何頻道。",
+
+  // Gacha Leaderboard
+  gacha_log_leaderboard_Title: "尋訪紀錄排行榜",
+  gacha_log_leaderboard_Empty:
+    "目前榜單上還沒有數據，快來使用 `/gacha log load` 上傳紀錄吧！",
+  gacha_log_leaderboard_SelectCategory: "選擇卡池分類",
+  gacha_log_leaderboard_SelectPoolPrecise: "選擇具體的<category>池",
+  gacha_log_leaderboard_CategoryTotal: "所有<category>池總計",
+  gacha_log_leaderboard_SelectSort: "選擇排序方式",
+  gacha_log_leaderboard_category_TOTAL: "全卡池總計",
+  gacha_log_leaderboard_category_Special: "限定角色尋訪",
+  gacha_log_leaderboard_category_Standard: "一般角色尋訪",
+  gacha_log_leaderboard_category_Weapon: "武器申領",
+  gacha_log_leaderboard_total_players: "總玩家數",
+  gacha_log_leaderboard_total_pulls: "總抽數",
+  gacha_log_leaderboard_avg_rate: "平均六星率",
+  gacha_log_leaderboard_sort_pulls: "累計抽數排名",
+  gacha_log_leaderboard_sort_luck: "幸運度排名 (6星出率)",
+
+  // News specific
+  news_SetupSuccess: "✅ **設定已更新**",
+  news_BindSuccessDetail: "已綁定以下頻道接收通知：",
+  news_BindFail: "❌ **設定失敗**",
+  news_BindFailDetail: "所有選擇的頻道皆無效，請檢查機器人權限。",
+  news_UnbindAll: "✅ **設定已更新**\n已取消所有頻道綁定。",
+  news_InvalidChannels: "⚠️ **以下頻道無法綁定** (權限不足)：",
+  news_PermissionMissing: "缺少: ",
+  news_PermissionUnknown: "無法確認權限",
+  news_PermissionError: "檢查時發生錯誤",
+  news_ViewChannel: "檢視頻道",
+  news_SendMessages: "發送訊息",
+  news_PermissionTip: "請確保機器人擁有「檢視頻道」和「發送訊息」權限。",
+  news_BindCurrentSuccess:
+    "✅ **設定已更新**\n已綁定當前頻道 <#<channelId>> 接收通知。",
+
+  // Gacha Canvas Extras
+  gacha_log_canvas_GameNickname: "遊戲內名稱: <name>",
+  gacha_log_canvas_Pulls_Suffix: " 抽",
+  gacha_log_canvas_Total_Prefix: "總計 ",
 };
 
 export default langs;

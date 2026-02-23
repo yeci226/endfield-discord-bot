@@ -86,9 +86,8 @@ export async function ensureAccountBinding(
   const now = Date.now();
   const oldLastRefresh = account.lastRefresh || 0;
 
-  // Fast-path: If verified within last 5 minutes, skip Step 1 network call
-  // unless we specifically want to fix a failure (account.invalid)
-  const isRecent = now - oldLastRefresh < 5 * 60 * 1000;
+  // Fast-path: If verified within last 2 hours, skip Step 1 network call
+  const isRecent = now - oldLastRefresh < 2 * 60 * 60 * 1000;
   if (!account.invalid && account.roles?.length > 0 && isRecent) {
     return false;
   }
@@ -145,6 +144,10 @@ export async function ensureAccountBinding(
         const endfield = bindings?.find((b: any) => b.appCode === "endfield");
         if (endfield && endfield.bindingList) {
           bindingList = endfield.bindingList;
+          // IMPORTANT: If we are already in an onStale loop, Step 2 success might be a false positive
+          // if the target endpoint (card/detail) still fails.
+          // However, ensureAccountBinding doesn't know the target endpoint.
+          // We'll mark it as rolesRestored but let Step 3 handle it if called again.
           rolesRestored = true;
           logger.success(`[Step 2] Success! Refreshed salt works.`);
         }
@@ -155,6 +158,9 @@ export async function ensureAccountBinding(
       logger.warn(`[Step 2] refreshSkToken returned null.`);
     }
   }
+
+  // FORCE Step 3 if we are here and still haven't found Endfield bindings OR if Step 2 failed
+  // Sometimes binding list is empty even if cred/salt works if the session is partially dead.
 
   // Step 3: Refresh Master Cookie (ACCOUNT_TOKEN) if still failed
   if (!rolesRestored && account.cookie) {

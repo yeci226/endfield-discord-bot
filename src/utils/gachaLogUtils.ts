@@ -16,6 +16,27 @@ export interface GachaRecord {
   isFree: boolean;
   [key: string]: any;
 }
+export interface GachaLeaderboardEntry {
+  uid: string;
+  nickname: string;
+  displayName?: string; // Discord display name
+  gameNickname?: string;
+  avatarUrl?: string; // Discord avatar
+  lastUpdate: number;
+  total: number;
+  nonFreeTotal: number;
+  freeTotal: number;
+  poolNames?: Record<string, string>; // poolId -> poolName mapping
+  stats: Record<
+    string,
+    {
+      total: number;
+      sixStarCount: number;
+      fiveStarCount: number;
+      probability: number;
+    }
+  >;
+}
 
 export interface GachaLogData {
   characterList: GachaRecord[];
@@ -25,6 +46,7 @@ export interface GachaLogData {
     lang: string;
     serverId?: string;
     nickname?: string;
+    avatarUrl?: string; // Store avatar URL in log data too
     export_timestamp: number;
   };
 }
@@ -42,6 +64,18 @@ const STANDARD_SIX_STARS = [
   "chr_0026_lastrite",
   "chr_0029_pograni",
 ];
+
+export function isPullFree(record: any): boolean {
+  if (!record) return false;
+  return (
+    record.isFree === true ||
+    record.is_free === 1 ||
+    record.is_free === true ||
+    record.is_free === "1" ||
+    record.isFree === "true" ||
+    record.isFree === 1
+  );
+}
 
 export async function getPoolMetadata(
   db: CustomDatabase,
@@ -88,6 +122,7 @@ export async function fetchAndMergeGachaLog(
   onProgress?: (message: string) => void,
   targetUid?: string,
   locale?: string,
+  avatarUrl?: string,
 ) {
   const url = new URL(urlStr);
   const token =
@@ -153,6 +188,7 @@ export async function fetchAndMergeGachaLog(
       if (list && list.length > 0) {
         for (const item of list) {
           item.poolType = poolType;
+          item.isFree = isPullFree(item);
           characterList.push(item);
         }
         lastSeqId = list[list.length - 1].seqId;
@@ -199,6 +235,7 @@ export async function fetchAndMergeGachaLog(
         if (list && list.length > 0) {
           for (const item of list) {
             item.poolType = "WeaponPool";
+            item.isFree = isPullFree(item);
             weaponList.push(item);
           }
           lastSeqId = list[list.length - 1].seqId;
@@ -237,11 +274,20 @@ export async function fetchAndMergeGachaLog(
       uid,
       lang,
       serverId,
+      nickname: existingData.info.nickname || undefined, // Preserve existing nickname
+      avatarUrl: avatarUrl || existingData.info.avatarUrl,
       export_timestamp: Date.now(),
     },
   };
 
   await db.set(dbKey, updatedData);
+
+  // Update leaderboard
+  try {
+    await updateLeaderboard(db, uid, updatedData);
+  } catch (e) {
+    console.error(`[Leaderboard] Failed to update for ${uid}:`, e);
+  }
 
   return {
     code: 0,
@@ -250,6 +296,151 @@ export async function fetchAndMergeGachaLog(
     totalWeapon: newWeaponList.length,
     data: updatedData,
   };
+}
+
+export async function updateLeaderboard(
+  db: CustomDatabase,
+  uid: string,
+  data: GachaLogData,
+) {
+  const stats = await getGachaStats(db, data);
+  const leaderboard =
+    (await db.get<Record<string, GachaLeaderboardEntry>>(
+      "GACHA_LEADERBOARD_ENTRIES",
+    )) || {};
+
+  const entry: GachaLeaderboardEntry = {
+    uid,
+    nickname: data.info.nickname || uid,
+    gameNickname: data.info.nickname,
+    avatarUrl: data.info.avatarUrl,
+    lastUpdate: Date.now(),
+    total: stats.char.total + stats.weapon.total,
+    nonFreeTotal: stats.char.nonFreeTotal + stats.weapon.nonFreeTotal,
+    freeTotal: stats.char.freeTotal + stats.weapon.freeTotal,
+    stats: {},
+    poolNames: {},
+  };
+
+  // Collect poolId -> poolName from all records
+  const newPoolNames: Record<string, string> = {};
+  for (const rec of [...data.characterList, ...data.weaponList]) {
+    if (rec.poolId && rec.poolName) {
+      newPoolNames[rec.poolId] = rec.poolName;
+      if (entry.poolNames) entry.poolNames[rec.poolId] = rec.poolName;
+    }
+  }
+
+  // Merge into global pool name dictionary (shared across all users)
+  const globalPoolNames =
+    (await db.get<Record<string, string>>("GACHA_POOL_NAMES")) || {};
+  const mergedPoolNames = { ...globalPoolNames, ...newPoolNames };
+  await db.set("GACHA_POOL_NAMES", mergedPoolNames);
+
+  const processGroup = (gId: string, s: any) => {
+    if (!s) return;
+    const total = Number(s.nonFreeTotal || 0);
+    const six = Number(s.sixStarCount || 0);
+    const five = Number(s.fiveStarCount || 0);
+    entry.stats[gId] = {
+      total,
+      sixStarCount: six,
+      fiveStarCount: five,
+      probability: total > 0 ? six / total : 0,
+    };
+  };
+
+  for (const gId of Object.keys(stats.char.summary)) {
+    processGroup(gId, stats.char.summary[gId]);
+  }
+  for (const gId of Object.keys(stats.weapon.summary)) {
+    processGroup(gId, stats.weapon.summary[gId]);
+  }
+
+  // Add category shared stats to leaderboard entry
+  processGroup("SpecialShared", stats.char.summary["SpecialShared"]);
+  processGroup("StandardShared", stats.char.StandardShared);
+  processGroup("WeaponShared", stats.weapon.WeaponShared);
+
+  // Calculate TOTAL using the new explicit total metrics
+  const totalNonFree = stats.char.nonFreeTotal + stats.weapon.nonFreeTotal;
+  const totalFree = stats.char.freeTotal + stats.weapon.freeTotal;
+  const totalAll = stats.char.total + stats.weapon.total;
+
+  const totalSix =
+    Object.values(stats.char.summary).reduce(
+      (a, b) => a + Number((b as any).sixStarCount || 0),
+      0,
+    ) +
+    Object.values(stats.weapon.summary).reduce(
+      (a, b) => a + Number((b as any).sixStarCount || 0),
+      0,
+    );
+  const totalFive =
+    Object.values(stats.char.summary).reduce(
+      (a, b) => a + Number((b as any).fiveStarCount || 0),
+      0,
+    ) +
+    Object.values(stats.weapon.summary).reduce(
+      (a, b) => a + Number((b as any).fiveStarCount || 0),
+      0,
+    );
+
+  entry.stats["TOTAL"] = {
+    total: Number(totalNonFree || 0),
+    sixStarCount: Number(totalSix || 0),
+    fiveStarCount: Number(totalFive || 0),
+    probability: totalNonFree > 0 ? Number(totalSix || 0) / totalNonFree : 0,
+  };
+
+  // Also compute per-poolId stats from raw records (for sub-pool leaderboard)
+  // This handles cases where getPityGroupId merges pools (e.g. SpecialShared)
+  const buildPerPoolStats = (list: GachaRecord[]) => {
+    const grouped: Record<string, GachaRecord[]> = {};
+    for (const rec of list) {
+      if (!rec.poolId) continue;
+      if (!grouped[rec.poolId]) grouped[rec.poolId] = [];
+      grouped[rec.poolId].push(rec);
+    }
+    for (const [pid, recs] of Object.entries(grouped)) {
+      const nonFree = recs.filter((r) => !r.isFree);
+      const six = nonFree.filter((r) => r.rarity >= 6).length;
+      const five = nonFree.filter((r) => r.rarity >= 5 && r.rarity < 6).length;
+      const total = nonFree.length;
+      if (!entry.stats[pid] || entry.stats[pid].total === 0) {
+        entry.stats[pid] = {
+          total,
+          sixStarCount: six,
+          fiveStarCount: five,
+          probability: total > 0 ? six / total : 0,
+        };
+      }
+    }
+  };
+  buildPerPoolStats(data.characterList);
+  buildPerPoolStats(data.weaponList);
+
+  leaderboard[uid] = entry;
+  await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+}
+
+/**
+ * Retrospectively sync all existing gacha logs in the database to the leaderboard
+ */
+export async function syncExistingLogsToLeaderboard(db: CustomDatabase) {
+  const allLogs = await db.findByPrefix<GachaLogData>("GACHA_LOG_");
+  console.log(
+    `[Leaderboard Sync] Found ${allLogs.length} existing logs to sync.`,
+  );
+
+  for (const log of allLogs) {
+    const uid = log.id.replace("GACHA_LOG_", "");
+    try {
+      await updateLeaderboard(db, uid, log.value);
+    } catch (e) {
+      console.error(`[Leaderboard Sync] Failed to sync ${uid}:`, e);
+    }
+  }
 }
 
 export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
@@ -314,7 +505,17 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
      */
     const summary: Record<
       string,
-      { currentPity: number; featuredPity: number; total: number }
+      {
+        currentPity: number;
+        featuredPity: number;
+        total: number;
+        nonFreeTotal: number;
+        freeTotal: number;
+        sixStarCount: number;
+        fiveStarCount: number;
+        sixStarPullCount: number; // Only from non-free pulls
+        fiveStarPullCount: number; // Only from non-free pulls
+      }
     > = {};
     const poolList = new Map<string, string>(); // poolId -> poolName
 
@@ -327,6 +528,12 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
       const poolTotalCounters = new Map<string, number>(); // poolId -> non-free total
       const hasFeaturedMap = new Map<string, boolean>(); // poolId -> has obtained featured
       let totalCounter = 0;
+      let nonFreeTotalCounter = 0;
+      let freeTotalCounter = 0;
+      const poolFreeTotalCounters = new Map<string, number>(); // poolId -> free total count
+      const poolSixStarPullCounters = new Map<string, number>(); // poolId -> non-free 6* count
+      const poolFeaturedSixCounters = new Map<string, number>(); // poolId -> non-free featured 6* count
+      let currentFreeBlock: any = null;
 
       for (const record of reversed) {
         if (record.poolId && record.poolName) {
@@ -335,19 +542,43 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
 
         const pId = record.poolId || "unknown";
         // Endfield milestone gifts (isFree) are separate and don't count towards pity counters
-        const isActuallyFree = record.isFree === true;
+        const isActuallyFree = isPullFree(record);
 
+        if (isActuallyFree) {
+          if (!currentFreeBlock) {
+            currentFreeBlock = {
+              isExpeditedBlock: true,
+              count: 0,
+              poolId: pId,
+              seqId: record.seqId,
+              gachaTs: record.gachaTs,
+              rarity: 0,
+            };
+          }
+          currentFreeBlock.count++;
+        } else {
+          if (currentFreeBlock) {
+            allHistory.push(currentFreeBlock);
+            currentFreeBlock = null;
+          }
+        }
+
+        totalCounter++; // Global Counter for this group (True Total)
         if (!isActuallyFree) {
           pitySix++;
           pityLabel++;
           featuredPity++;
           const curFeaturedCount = (featuredCounters.get(pId) || 0) + 1;
           featuredCounters.set(pId, curFeaturedCount);
-        }
 
-        totalCounter++;
-        const curPoolTotal = (poolTotalCounters.get(pId) || 0) + 1;
-        poolTotalCounters.set(pId, curPoolTotal);
+          const curPoolTotal = (poolTotalCounters.get(pId) || 0) + 1;
+          poolTotalCounters.set(pId, curPoolTotal);
+          nonFreeTotalCounter++;
+        } else {
+          const curPoolFree = (poolFreeTotalCounters.get(pId) || 0) + 1;
+          poolFreeTotalCounters.set(pId, curPoolFree);
+          freeTotalCounter++;
+        }
 
         if (record.rarity >= 4) {
           let name = record.charName || record.weaponName;
@@ -364,7 +595,12 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           let isFeatured = false;
           const rarityNum = Number(record.rarity || 0);
 
-          if (rarityNum >= 6 && record.poolType?.includes("Special")) {
+          if (
+            rarityNum >= 6 &&
+            (record.poolType?.includes("Special") ||
+              record.poolType?.includes("WeaponPool") ||
+              record.poolName?.includes("特選"))
+          ) {
             // Priority 1: Match by ID
             const recordCid = String(record.charId || "").replace("icon_", "");
 
@@ -407,7 +643,35 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
                   isOffRate = true;
                 }
               } else {
-                // Priority 3: Standard List Fallback
+                // Priority 3: Name match in pool title fallback
+                if (
+                  record.poolName &&
+                  (record.poolName.includes(name || "") ||
+                    (record.charName &&
+                      record.poolName.includes(record.charName)))
+                ) {
+                  isFeatured = true;
+                } else if (STANDARD_SIX_STARS.includes(recordCid)) {
+                  // Priority 4: Standard List Fallback
+                  isOffRate = true;
+                } else {
+                  isFeatured = true;
+                }
+              }
+
+              // Final Fallback for featured status in Limited Pools
+              if (
+                !isFeatured &&
+                !isOffRate &&
+                rarityNum >= 6 &&
+                (record.poolType?.includes("Special") ||
+                  record.poolType?.includes("WeaponPool") ||
+                  record.poolName?.includes("特選"))
+              ) {
+                const recordCid = String(record.charId || "").replace(
+                  "icon_",
+                  "",
+                );
                 if (STANDARD_SIX_STARS.includes(recordCid)) {
                   isOffRate = true;
                 } else {
@@ -423,7 +687,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             pityCount: pityLabel,
             featuredPityCount: featuredPity, // This represents distance from last featured
             totalCount: totalCounter,
-            poolTotalCount: curPoolTotal, // Use the specific pool total
+            poolTotalCount: poolTotalCounters.get(pId) || 0, // Use non-free pool total
             pitySixCount: pitySix,
             pityGroupId: gId,
             isFeatured,
@@ -435,8 +699,16 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             if (rarityNum >= 6) {
               pitySix = 0;
               pityLabel = 0;
+              poolSixStarPullCounters.set(
+                pId,
+                (poolSixStarPullCounters.get(pId) || 0) + 1,
+              );
               if (isFeatured) {
                 featuredPity = 0;
+                poolFeaturedSixCounters.set(
+                  pId,
+                  (poolFeaturedSixCounters.get(pId) || 0) + 1,
+                );
                 // Non-shared 120: Reset pool-specific featured pity
                 featuredCounters.set(pId, 0);
                 hasFeaturedMap.set(pId, true);
@@ -448,12 +720,29 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         }
       }
 
+      if (currentFreeBlock) {
+        allHistory.push(currentFreeBlock);
+      }
+
       summary[gId] = {
         currentPity: pitySix,
         featuredPity: featuredPity,
-        total: totalCounter,
+        total: totalCounter, // True Total (spent + free)
+        nonFreeTotal: nonFreeTotalCounter, // Just spent
+        freeTotal: freeTotalCounter, // Just expedited
+        sixStarCount: records.filter((r) => r.rarity >= 6).length,
+        fiveStarCount: records.filter((r) => r.rarity >= 5 && r.rarity < 6)
+          .length,
+        sixStarPullCount: records.filter((r) => r.rarity >= 6 && !isPullFree(r))
+          .length,
+        fiveStarPullCount: records.filter(
+          (r) => r.rarity >= 5 && r.rarity < 6 && !isPullFree(r),
+        ).length,
         featuredPityMap: Object.fromEntries(featuredCounters),
         poolTotalMap: Object.fromEntries(poolTotalCounters),
+        poolFreeTotalMap: Object.fromEntries(poolFreeTotalCounters),
+        poolSixStarPullMap: Object.fromEntries(poolSixStarPullCounters),
+        poolFeaturedSixMap: Object.fromEntries(poolFeaturedSixCounters),
         hasFeaturedMap: Object.fromEntries(hasFeaturedMap),
       } as any;
     }
@@ -504,22 +793,120 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         return b.ts.localeCompare(a.ts);
       });
 
-    const totalNonFree = Object.values(summary).reduce(
-      (sum, s) => sum + s.total,
+    const globalTotal = Object.values(summary).reduce(
+      (sum, s) => sum + (s.total || 0),
+      0,
+    );
+    const globalNonFree = Object.values(summary).reduce(
+      (sum, s) => sum + (s.nonFreeTotal || 0),
+      0,
+    );
+    const globalFree = Object.values(summary).reduce(
+      (sum, s) => sum + (s.freeTotal || 0),
       0,
     );
 
     return {
       history: allHistory,
       summary,
-      total: totalNonFree,
-      pools: sortedPools.map((p) => ({
-        id: p.id,
-        name: p.name,
-        type: p.type,
-        startTs: p.startTs,
-        endTs: p.endTs,
-      })),
+      total: globalTotal,
+      nonFreeTotal: globalNonFree,
+      freeTotal: globalFree,
+      pools: sortedPools.map((p) => {
+        // Find if this specific pool had free pulls
+        let freeCount = 0;
+        let poolTotal = 0;
+        for (const s of Object.values(summary)) {
+          const sObj = s as any;
+          if (sObj.poolFreeTotalMap && sObj.poolFreeTotalMap[p.id]) {
+            freeCount += sObj.poolFreeTotalMap[p.id];
+          }
+          if (sObj.poolTotalMap && sObj.poolTotalMap[p.id]) {
+            poolTotal += sObj.poolTotalMap[p.id];
+          }
+        }
+
+        return {
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          startTs: p.startTs,
+          endTs: p.endTs,
+          total: poolTotal, // Current non-free total
+          freeCount,
+          sixStarPullCount:
+            Object.values(summary).reduce(
+              (sum, s) => sum + ((s as any).poolSixStarPullMap?.[p.id] || 0),
+              0,
+            ) || 0,
+          featuredSixCount:
+            Object.values(summary).reduce(
+              (sum, s) => sum + ((s as any).poolFeaturedSixMap?.[p.id] || 0),
+              0,
+            ) || 0,
+        };
+      }),
+      StandardShared: {
+        total: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.total || 0), 0),
+        nonFreeTotal: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.nonFreeTotal || 0), 0),
+        sixStarCount: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.sixStarCount || 0), 0),
+        fiveStarCount: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.fiveStarCount || 0), 0),
+        sixStarPullCount: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.sixStarPullCount || 0), 0),
+        fiveStarPullCount: Object.values(summary)
+          .filter((_, i) => Object.keys(summary)[i].startsWith("Standard_"))
+          .reduce((sum, s) => sum + (s.fiveStarPullCount || 0), 0),
+      },
+      WeaponShared: {
+        total:
+          type === "weapon"
+            ? Object.values(summary).reduce((sum, s) => sum + (s.total || 0), 0)
+            : 0,
+        nonFreeTotal:
+          type === "weapon"
+            ? Object.values(summary).reduce(
+                (sum, s) => sum + (s.nonFreeTotal || 0),
+                0,
+              )
+            : 0,
+        sixStarCount:
+          type === "weapon"
+            ? Object.values(summary).reduce(
+                (sum, s) => sum + (s.sixStarCount || 0),
+                0,
+              )
+            : 0,
+        fiveStarCount:
+          type === "weapon"
+            ? Object.values(summary).reduce(
+                (sum, s) => sum + (s.fiveStarCount || 0),
+                0,
+              )
+            : 0,
+        sixStarPullCount:
+          type === "weapon"
+            ? Object.values(summary).reduce(
+                (sum, s) => sum + (s.sixStarPullCount || 0),
+                0,
+              )
+            : 0,
+        fiveStarPullCount:
+          type === "weapon"
+            ? Object.values(summary).reduce(
+                (sum, s) => sum + (s.fiveStarPullCount || 0),
+                0,
+              )
+            : 0,
+      },
     };
   };
 

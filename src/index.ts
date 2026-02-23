@@ -8,6 +8,8 @@ import { VerificationClient } from "./web/VerificationClient";
 import { CharacterWikiService } from "./services/CharacterWikiService";
 import { WebManager } from "./web/WebManager";
 import dotenv from "dotenv";
+import { WebhookClient } from "discord.js";
+import { Logger } from "./utils/Logger";
 
 dotenv.config();
 
@@ -37,8 +39,6 @@ dotenv.config();
   }
 
   // Process Error Handling
-  const { WebhookClient } = require("discord.js");
-  const { Logger } = require("./utils/Logger");
   const logger = new Logger("Process");
   const webhook = process.env.ERRWEBHOOK
     ? new WebhookClient({ url: process.env.ERRWEBHOOK })

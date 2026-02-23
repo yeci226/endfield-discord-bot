@@ -5,6 +5,15 @@ import { Logger } from "./Logger";
 
 const logger = new Logger("SkportAPI");
 
+let cachedDeviceId: string | null = null;
+
+function getDeviceId(): string {
+  if (cachedDeviceId) return cachedDeviceId;
+  // Format: 32-char hex (standard for Skland/Skport)
+  cachedDeviceId = crypto.randomBytes(16).toString("hex");
+  return cachedDeviceId!;
+}
+
 export async function getCardDetail(
   roleId: string,
   serverId: string,
@@ -373,11 +382,11 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   return {
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-    Accept: "application/json, text/plain, */*",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    Accept: "*/*",
     "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6",
     "sec-ch-ua":
-      '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+      '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
@@ -385,11 +394,14 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "sec-fetch-site": "cross-site",
     cred: cred,
     platform: "3",
-    vName: "1.0.0",
     "sk-language": formatSkLanguage(locale),
     timestamp: timestamp,
+    vname: "1.0.0",
+    did: getDeviceId(),
+    dId: getDeviceId(),
     Origin: "https://game.skport.com",
     Referer: "https://game.skport.com/",
+    priority: "u=1, i",
   };
 }
 
@@ -418,6 +430,7 @@ export function generateSignV2(
   const salt = providedSalt || process.env.SKPORT_SALT_V2 || "";
   // Construct JSON header string (mimicking specific order and no spaces)
   // Standard Skland V2 signature expects platform, timestamp, dId, vName in this order
+  // NOTE: Even if header is 'vname', JSON string MUST use 'vName'
   const headerJson = `{"platform":"${platform}","timestamp":"${timestamp}","dId":"${dId}","vName":"${vName}"}`;
 
   const s = `${path}${content}${timestamp}${headerJson}`;
@@ -433,25 +446,13 @@ export async function refreshSkToken(
   platform: string = "3",
 ): Promise<string | null> {
   const url = "https://zonai.skport.com/web/v1/auth/refresh";
-  const headers = {
-    platform,
-    vName: "1.0.0",
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    Accept: "application/json, text/plain, */*",
-    cred: cred,
-    Origin: "https://game.skport.com",
-    Referer: "https://game.skport.com/",
-  };
+  const res = await makeRequest<any>("GET", url, {
+    cred,
+    params: { platform },
+  });
 
-  try {
-    const response = await axios.get(url, { headers });
-    const json = response.data;
-    if (json && json.code === 0 && json.data?.token) {
-      return json.data.token;
-    }
-  } catch (error: any) {
-    logger.error(`[Skport] refreshSkToken failed: ${error.message}`);
+  if (res && (res.code === 0 || res.status === 0) && res.data?.token) {
+    return res.data.token;
   }
   return null;
 }
@@ -568,12 +569,18 @@ export async function makeRequest<T>(
     const commonHeaders = getCommonHeaders(options.cred, options.locale);
     const headers: any = { ...commonHeaders, ...options.headers };
 
-    // Clean up undefined headers
+    // Handle Gryphline specific headers
+    if (url.includes("gryphline.com")) {
+      headers["x-language"] = mapLocaleToLang(options.locale);
+    }
+
+    // Clean up undefined or empty headers
     Object.keys(headers).forEach((key) => {
-      if (headers[key] === undefined) delete headers[key];
+      if (headers[key] === undefined || headers[key] === "")
+        delete headers[key];
     });
 
-    if (method === "POST" && options.data !== undefined) {
+    if (method === "POST") {
       headers["Content-Type"] = "application/json";
     }
 
@@ -620,7 +627,7 @@ export async function makeRequest<T>(
           signContent,
           headers.timestamp,
           headers.platform,
-          headers.vName || headers.vname || "1.0.0",
+          headers.vname || "1.0.0",
           dId,
           options.salt,
         )
@@ -643,10 +650,19 @@ export async function makeRequest<T>(
       if (resp?.status !== 404) {
         if (resp?.status === 401) {
           logger.warn(`[401 Unauthorized] URL: ${url}`);
-          // Return an object that mirrors the structure expected by the stale check
           return { code: 10000, status: 401, ...(resp?.data || {}) };
+        } else if (resp?.status === 403) {
+          logger.error(
+            `[403 Forbidden] URL: ${url} - Identity blocked or WAF triggered.`,
+          );
+          return {
+            code: -1,
+            status: 403,
+            isBlocked: true,
+            ...(resp?.data || {}),
+          };
         } else {
-          logger.error(`Error requesting ${url}: ${error.message}`);
+          logger.error(`Error requesting ${url}: ${error}`);
         }
       }
       return resp?.data || null;
@@ -656,11 +672,21 @@ export async function makeRequest<T>(
   let result: any = await execute();
 
   // Automatic retry on stale token (code 10000 or 401 status)
+  // Ensure we don't retry if we got a 403 block
   const isStale = result && (result.code === 10000 || result.status === 401);
-  if (isStale && options.onStale) {
+  const isBlocked = result && result.status === 403;
+
+  if (
+    isStale &&
+    !isBlocked &&
+    options.onStale &&
+    !(options as any)._isRetrying
+  ) {
     logger.info(
       `Stale token (Code ${result.code}, HTTP ${result.status}) detected. Attempting refresh...`,
     );
+    // Mark as retrying to prevent infinite recursion
+    (options as any)._isRetrying = true;
     const refreshed = await options.onStale(options);
     if (refreshed) {
       logger.info(`Refresh successful. Retrying request to ${url}...`);
@@ -836,13 +862,7 @@ export async function getGamePlayerBinding(
   options: any = {},
 ): Promise<GameBinding[] | null> {
   const url = "https://zonai.skport.com/api/v1/game/player/binding";
-  const headers: any = {
-    Referer: "https://game.skport.com/",
-    Origin: "https://game.skport.com",
-    vname: "1.0.0",
-    platform: "3",
-    "Content-Type": "application/json",
-  };
+  const headers: any = {};
   if (cookie) headers.Cookie = cookie;
 
   const res = await makeRequest<{
@@ -892,7 +912,6 @@ export async function getAttendanceList(
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
     "sk-game-role": gameRole,
-    Referer: "https://game.skport.com/",
   };
   if (cookie) headers.Cookie = cookie;
 
@@ -922,6 +941,10 @@ export async function getAttendanceRecords(
   const headers: any = {
     "sk-game-role": gameRole,
     Referer: "https://game.skport.com/",
+    Origin: "https://game.skport.com",
+    vname: "1.0.0",
+    vName: undefined,
+    priority: "u=1, i",
   };
   if (cookie) headers.Cookie = cookie;
 
@@ -946,7 +969,6 @@ export async function executeAttendance(
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
   const headers: any = {
     "sk-game-role": gameRole,
-    Referer: "https://game.skport.com/",
   };
   if (cookie) headers.Cookie = cookie;
 
