@@ -232,8 +232,6 @@ const langs: Record<string, any> = {
   gacha_log_stats_RecentHighRarity: "最近高稀有度紀錄",
   gacha_log_load_InvalidUrl:
     "❌ **無效的網址**\n請確保您貼上的是正確的抽卡紀錄網址。",
-  gacha_log_load_TokenExpired:
-    "❌ **專屬網址已失效**\n此抽卡網址的安全憑證已過期。請回遊戲內重新打開任意一個抽卡紀錄，並按教學重新獲取代碼填入。",
   gacha_log_load_Error:
     "❌ **獲取資料失敗**\n請檢查網址是否正確或稍後再試。原因：<error>",
   gacha_log_NoData: "❌ **找不到數據**\n使用者 <user> 尚未載入過任何抽卡紀錄。",

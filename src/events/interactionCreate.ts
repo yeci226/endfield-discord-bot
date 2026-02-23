@@ -331,8 +331,7 @@ const event: Event = {
       if (command && command.autocomplete) {
         try {
           await command.autocomplete(client, interaction, client.db);
-        } catch (error: any) {
-          if (error.code === 10062 || error.code === 40060) return;
+        } catch (error) {
           console.error("Error handling autocomplete interaction:", error);
         }
       }

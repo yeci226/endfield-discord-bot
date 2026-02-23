@@ -391,7 +391,7 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
-    "sec-fetch-site": "cross-site",
+    "sec-fetch-site": "same-site",
     cred: cred,
     platform: "3",
     "sk-language": formatSkLanguage(locale),
@@ -558,8 +558,8 @@ export async function makeRequest<T>(
   } = {},
 ): Promise<T | null> {
   const execute = async () => {
-    // Automatically inject 'lang' parameter if locale is provided
-    if (options.locale) {
+    // Automatically inject 'lang' parameter if locale is provided (GET requests only)
+    if (options.locale && method === "GET") {
       if (!options.params) options.params = {};
       if (!options.params.lang) {
         options.params.lang = mapLocaleToLang(options.locale);

@@ -146,20 +146,28 @@ export class AutoDailyService {
       }[] = [];
 
       const processedRoles = new Set<string>();
+
       const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
 
       for (let i = 0; i < accounts.length; i++) {
-        let account = accounts[i];
+        const account = accounts[i];
+        if (account.invalid) {
+          this.logger.warn(
+            `Skipping invalid account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
+          );
+          results.push({
+            roleName: `${account.info?.nickname || "Unknown"} (Account Invalid)`,
+            rewardName: "",
+            rewardIcon: "",
+            totalDays: 0,
+            status: tr("TokenExpired"),
+          });
+          failCount++;
+          continue;
+        }
 
         await ensureAccountBinding(account, userId, this.client.db, tr.lang);
-
-        // the account object might have been cloned/changed inside DB, let's refresh our reference
-        const freshAccounts = await getAccounts(this.client.db, userId);
-        const freshAccount = freshAccounts.find(
-          (a: any) => a.info.id === account.info.id,
-        );
-        if (freshAccount) account = freshAccount;
 
         const roles = account.roles;
         if (!roles || roles.length === 0) continue;
@@ -176,36 +184,24 @@ export class AutoDailyService {
             if (processedRoles.has(gameRoleStr)) continue;
             processedRoles.add(gameRoleStr);
 
-            let res: any;
-            try {
-              res = await withAutoRefresh(
-                this.client,
-                userId,
-                account,
-                (c: string, s: string, opt: any) =>
-                  processRoleAttendance(
-                    role,
-                    gameId,
-                    account.cookie,
-                    tr.lang,
-                    c,
-                    s,
-                    true,
-                    tr,
-                    opt,
-                  ),
-                tr.lang,
-              );
-            } catch (e: any) {
-              if (e.message === "TokenExpired") {
-                res = {
-                  error: true,
-                  message: tr("TokenExpired"),
-                };
-              } else {
-                throw e; // Bubble up unexpected errors
-              }
-            }
+            const res: any = await withAutoRefresh(
+              this.client,
+              userId,
+              account,
+              (c: string, s: string, opt: any) =>
+                processRoleAttendance(
+                  role,
+                  gameId,
+                  account.cookie,
+                  tr.lang,
+                  c,
+                  s,
+                  true,
+                  tr,
+                  opt,
+                ),
+              tr.lang,
+            );
 
             if (res) {
               if (res.signedNow) successCount++;
@@ -220,14 +216,10 @@ export class AutoDailyService {
                 rewardName: displayedReward,
                 rewardIcon: res.rewardIcon,
                 firstRewardName: res.firstRewardName,
-                totalDays: res.totalDays || 0,
-                status: res.error
-                  ? `⚠️ ${res.message || tr("Error")}`
-                  : res.signedNow
-                    ? tr("daily_Success")
-                    : res.hasToday
-                      ? tr("daily_StatusAlready")
-                      : tr("daily_Failed"),
+                totalDays: res.totalDays,
+                status: res.signedNow
+                  ? tr("daily_Success")
+                  : tr("daily_StatusAlready"),
               });
             }
           }
@@ -238,29 +230,16 @@ export class AutoDailyService {
       const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
       await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
-      if (
-        config.notify &&
-        (successCount > 0 || alreadySignedCount > 0 || failCount > 0)
-      ) {
+      if (config.notify && (successCount > 0 || alreadySignedCount > 0)) {
         const container = new ContainerBuilder();
         for (const res of results) {
-          let content = `# **${res.roleName}** - ${res.status}`;
-
-          if (
-            res.rewardName &&
-            res.rewardName !== tr("None") &&
-            res.rewardName !== ""
-          ) {
-            content += `\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
-          }
+          let content = `# **${res.roleName}** - ${res.status}\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
 
           if (res.firstRewardName) {
             content += `\n### ${tr("daily_FirstReward")}: \`${res.firstRewardName}\``;
           }
 
-          if (res.totalDays > 0) {
-            content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
-          }
+          content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
 
           const textDisplay = new TextDisplayBuilder().setContent(content);
 
