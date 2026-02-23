@@ -72,6 +72,7 @@ export async function ensureAccountBinding(
   userId: string,
   db: CustomDatabase,
   lang: string,
+  forceRefresh: boolean = false,
 ): Promise<boolean> {
   // Clear invalid flag and attempt full validation.
   // We don't early return here because we need to handle proactive checks and 401s.
@@ -88,7 +89,12 @@ export async function ensureAccountBinding(
 
   // Fast-path: If verified within last 2 hours, skip Step 1 network call
   const isRecent = now - oldLastRefresh < 2 * 60 * 60 * 1000;
-  if (!account.invalid && account.roles?.length > 0 && isRecent) {
+  if (
+    !forceRefresh &&
+    !account.invalid &&
+    account.roles?.length > 0 &&
+    isRecent
+  ) {
     return false;
   }
 
@@ -103,8 +109,8 @@ export async function ensureAccountBinding(
     );
   }
 
-  // Step 1: Try with existing credentials (fastest)
-  if (!rolesRestored && account.cred && account.salt) {
+  // Step 1: Try with existing credentials (fastest), unless forceRefresh is true
+  if (!forceRefresh && !rolesRestored && account.cred && account.salt) {
     try {
       logger.info(
         `[Step 1] Attempting role check with existing credentials for ${account.info?.id}...`,
@@ -301,6 +307,7 @@ export async function withAutoRefresh<T>(
       userId,
       client.db,
       locale,
+      true, // forceRefresh
     );
     if (wasModified && !account.invalid) {
       options.cred = account.cred;

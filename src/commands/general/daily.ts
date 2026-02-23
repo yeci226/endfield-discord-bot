@@ -166,9 +166,16 @@ const command: Command = {
     const processedRoles = new Set<string>();
 
     for (let i = 0; i < accounts.length; i++) {
-      const account = accounts[i];
+      let account = accounts[i];
       // AUTO-MIGRATION & REBIND LOGIC - ensures account.roles is updated if possible
       await ensureAccountBinding(account, userId, db, t.lang);
+
+      // the account object might have been cloned/changed inside DB, let's refresh our reference
+      const freshAccounts = await getAccounts(db, userId);
+      const freshAccount = freshAccounts.find(
+        (a: any) => a.info.id === account.info.id,
+      );
+      if (freshAccount) account = freshAccount;
 
       // Use potentially updated roles
       const roles = account.roles;
@@ -221,7 +228,12 @@ const command: Command = {
           if (!res) continue;
 
           let statusText = "";
-          if (res.hasToday || res.signedNow) {
+          if (res.error) {
+            statusText = `## ⚠️ ${t("Error")}\n### \`${res.message || t("UnknownError")}\``;
+            if (res.totalDays > 0) {
+              statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
+            }
+          } else if (res.hasToday || res.signedNow) {
             statusText = `## ${t("daily_Success")}\n### ${t("daily_TodayReward")}: \`${res.rewardName}\``;
             if (res.firstRewardName) {
               statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
@@ -233,9 +245,6 @@ const command: Command = {
               statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
             }
             statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
-            if (isClaim && !res.signedNow) {
-              statusText += `\n⚠️ ${t("Error")}: \`${res.message || t("UnknownError")}\``;
-            }
           }
 
           const textDisplay = new TextDisplayBuilder().setContent(
@@ -376,9 +385,17 @@ async function handleStatus(
   const processedRoles = new Set<string>();
   const rows = [];
 
-  for (const account of accounts) {
+  for (let i = 0; i < accounts.length; i++) {
+    let account = accounts[i];
     if (account.invalid) continue;
     await ensureAccountBinding(account, userId, db, t.lang);
+
+    // Refresh memory reference
+    const freshAccounts = await getAccounts(db, userId);
+    const freshAccount = freshAccounts.find(
+      (a: any) => a.info.id === account.info.id,
+    );
+    if (freshAccount) account = freshAccount;
 
     const roles = account.roles;
     if (!roles || roles.length === 0) continue;

@@ -124,7 +124,13 @@ export async function fetchAndMergeGachaLog(
   locale?: string,
   avatarUrl?: string,
 ) {
-  const url = new URL(urlStr);
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+  } catch (e) {
+    throw new Error("Invalid URL: Missing token or server_id");
+  }
+
   const token =
     url.searchParams.get("token") || url.searchParams.get("u8_token");
   const lang = locale
@@ -181,6 +187,7 @@ export async function fetchAndMergeGachaLog(
 
       const data = res.data;
       if (data.code !== 0) {
+        if (data.code === 10000) throw new Error("Gacha URL Token Expired");
         throw new Error(data.message || "API Error");
       }
 
@@ -229,7 +236,10 @@ export async function fetchAndMergeGachaLog(
         });
 
         const data = res.data;
-        if (data.code !== 0) break;
+        if (data.code !== 0) {
+          if (data.code === 10000) throw new Error("Gacha URL Token Expired");
+          break;
+        }
 
         const list = data.data.list as GachaRecord[];
         if (list && list.length > 0) {

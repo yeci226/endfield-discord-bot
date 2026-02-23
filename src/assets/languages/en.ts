@@ -233,7 +233,9 @@ const langs: Record<string, any> = {
   gacha_log_stats_WeaponPool: "Weapon Application",
   gacha_log_stats_RecentHighRarity: "Recent High-Rarity Pulls",
   gacha_log_load_InvalidUrl:
-    "❌ **Invalid URL**\nPlease make sure you pasted the correct Gacha Record URL.",
+    "❌ **Invalid URL**\nPlease make sure you pasted a valid gacha record URL.",
+  gacha_log_load_TokenExpired:
+    "❌ **Gacha URL Expired**\nThe security token in this gacha URL has expired. Please open any gacha record in the game again, and follow the steps to get a fresh URL.",
   gacha_log_load_Error:
     "❌ **Failed to fetch records**\nPlease check the URL or try again later. Reason: <error>",
   gacha_log_NoData:

@@ -152,8 +152,10 @@ export async function processRoleAttendance(
       rewardName: rewardName,
       rewardIcon: rewardIcon,
       firstRewardName: firstRewardName,
-      error: !status.hasToday && !signedNow && isClaim,
-      message: claimResult?.message,
+      error:
+        (isClaim && !signedNow && !status.hasToday) ||
+        (claimResult && claimResult.code !== 0 && claimResult.code !== 10001),
+      message: claimResult ? claimResult.message : undefined,
     };
   } catch (error: any) {
     logger.error(`Error for role ${role.roleId}: ${error.message}`);

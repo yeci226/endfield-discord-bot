@@ -34,7 +34,7 @@ dotenv.config();
     verifyClient.start();
     client.newsService.start();
     client.autoDailyService.start();
-    client.monitorService.start();
+    // client.monitorService.start();
     // client.wikiService.start();
   }
 

@@ -146,13 +146,14 @@ export async function drawGachaLeaderboard(
     );
   }
 
-  const top20 = validEntries.slice(0, 20);
+  const topUsersCount = 10;
+  const topUsers = validEntries.slice(0, topUsersCount);
   const myEntry = validEntries.find((e) => e.uid === currentUserId);
   const myRankIdx = validEntries.findIndex((e) => e.uid === currentUserId);
 
   // Dynamic Height calculation
-  let listCount = top20.length;
-  if (myEntry && myRankIdx >= 20) {
+  let listCount = topUsers.length;
+  if (myEntry && myRankIdx >= topUsersCount) {
     listCount += 1.5; // Space for separator and self rank
   }
   const minHeight = 1143;
@@ -298,23 +299,23 @@ export async function drawGachaLeaderboard(
 
   // Ranking List
   const listY = headerH + 20;
-  for (let i = 0; i < top20.length; i++) {
+  for (let i = 0; i < topUsers.length; i++) {
     await drawRankItem(
       ctx,
-      top20[i],
+      topUsers[i],
       i + 1,
       padding,
       listY + i * itemH,
       width - padding * 2,
       itemH,
-      currentUserId === top20[i].uid,
+      currentUserId === topUsers[i].uid,
       tr,
     );
   }
 
   // Draw Separator and Self Rank if needed
-  if (myEntry && myRankIdx >= 20) {
-    const sepY = listY + top20.length * itemH + 40;
+  if (myEntry && myRankIdx >= topUsersCount) {
+    const sepY = listY + topUsers.length * itemH + 40;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
     ctx.setLineDash([15, 10]);
     ctx.beginPath();

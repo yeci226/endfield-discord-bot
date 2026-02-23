@@ -791,10 +791,12 @@ const command: Command = {
           }
         } catch (error: any) {
           console.error("Gacha load error:", error);
-          const errorMsg =
-            error.message === "Invalid URL: Missing token or server_id"
-              ? tr("gacha_log_load_InvalidUrl")
-              : tr("gacha_log_load_Error", { error: error.message });
+          let errorMsg = tr("gacha_log_load_Error", { error: error.message });
+          if (error.message === "Invalid URL: Missing token or server_id") {
+            errorMsg = tr("gacha_log_load_InvalidUrl");
+          } else if (error.message === "Gacha URL Token Expired") {
+            errorMsg = tr("gacha_log_load_TokenExpired");
+          }
 
           await interaction.editReply({
             content: errorMsg,
