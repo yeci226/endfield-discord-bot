@@ -318,6 +318,18 @@ const langs: Record<string, any> = {
   gacha_log_canvas_GameNickname: "In-game Name: <name>",
   gacha_log_canvas_Pulls_Suffix: " Pulls",
   gacha_log_canvas_Total_Prefix: "Total ",
+  gacha_log_canvas_GuestAccount: "Unbound Game Account",
+  gacha_log_migrate_Prompt:
+    "Found guest backup data. Please select which bound account to merge the data into:",
+  gacha_log_migrate_Success:
+    "✅ **Merge Successful**\nGuest data merged into account **<nickname> (<uid>)**.",
+  gacha_log_migrate_AutoSuccess:
+    "✅ **Auto-Merge Successful**\nFound bound account. Guest data has been automatically merged into **<nickname>**.",
+  gacha_log_recover_Prompt:
+    "⚠️ **Stranded Records Detected**\nThe system found a gacha record stored under an incorrect ID (likely due to a previous system bug). Would you like to recover this data and merge it into your current account?",
+  gacha_log_recover_Button: "Recover Stranded Data",
+  gacha_log_recover_Success:
+    "✅ **Recovery Successful**\nLost data has been successfully restored to account **<nickname>**.",
 };
 
 export default langs;

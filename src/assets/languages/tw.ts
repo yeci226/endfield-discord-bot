@@ -310,6 +310,18 @@ const langs: Record<string, any> = {
   gacha_log_canvas_GameNickname: "遊戲內名稱: <name>",
   gacha_log_canvas_Pulls_Suffix: " 抽",
   gacha_log_canvas_Total_Prefix: "總計 ",
+  gacha_log_canvas_GuestAccount: "未綁定遊戲帳號",
+  gacha_log_migrate_Prompt:
+    "檢測到您有訪客備份數據，請選擇要將數據合併到哪個正式帳號：",
+  gacha_log_migrate_Success:
+    "✅ **數據合併成功**\n已將訪客數據合併至帳號 **<nickname> (<uid>)**。",
+  gacha_log_migrate_AutoSuccess:
+    "✅ **自動合併成功**\n檢測到您已綁定帳號，已自動將訪客數據合併至 **<nickname>**。",
+  gacha_log_recover_Prompt:
+    "⚠️ **偵測到異常遺留紀錄**\n系統發現您有一份存儲在錯誤 ID 下的抽卡紀錄（可能是由先前的系統錯誤導致）。是否要嘗試救回這些數據並合併到目前帳號？",
+  gacha_log_recover_Button: "救回遺失數據",
+  gacha_log_recover_Success:
+    "✅ **數據救回成功**\n已成功將遺失數據恢復至帳號 **<nickname>**。",
 };
 
 export default langs;

@@ -160,6 +160,14 @@ export async function drawGachaLeaderboard(
   const calculatedHeight = headerH + listCount * itemH + footerPadding;
   const height = Math.max(minHeight, calculatedHeight);
 
+  // Find all displayNames that appear more than once to decide whether to show Account #index
+  const nameCounts: Record<string, number> = {};
+  validEntries.forEach((e) => {
+    if (e.displayName) {
+      nameCounts[e.displayName] = (nameCounts[e.displayName] || 0) + 1;
+    }
+  });
+
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
 
@@ -310,6 +318,7 @@ export async function drawGachaLeaderboard(
       itemH,
       currentUserId === topUsers[i].uid,
       tr,
+      nameCounts,
     );
   }
 
@@ -334,6 +343,7 @@ export async function drawGachaLeaderboard(
       itemH,
       true,
       tr,
+      nameCounts,
     );
   }
 
@@ -350,6 +360,7 @@ async function drawRankItem(
   h: number,
   isSelf: boolean,
   tr: any,
+  nameCounts: Record<string, number> = {},
 ) {
   ctx.save();
 
@@ -468,9 +479,12 @@ async function drawRankItem(
   ctx.fillStyle = "#fff";
   ctx.font = "bold 36px NotoSansTCBold";
   const nameX = avatarX + avatarSize + 30;
+  // Discord Display Name (Clean)
+  const topLabel = entry.displayName || entry.nickname || "Unknown";
+
   await fillTextWithStar(
     ctx,
-    String(entry.displayName || entry.nickname || "Unknown"),
+    topLabel,
     nameX,
     centerY - 15,
     36,
@@ -480,13 +494,23 @@ async function drawRankItem(
 
   ctx.font = "24px NotoSans";
   ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+
+  // Bottom Label: Prepend (Account #Index) if user has multiple accounts
+  const hasMultiple = entry.displayName && nameCounts[entry.displayName] > 1;
+  const indexPrefix =
+    hasMultiple && entry.accountIndex ? `(#${entry.accountIndex}) ` : "";
+
+  const bottomLabel =
+    indexPrefix +
+    (entry.gameNickname
+      ? tr("gacha_log_canvas_GameNickname", { name: entry.gameNickname })
+      : entry.uid && entry.uid.startsWith("EF_GUEST_")
+        ? tr("gacha_log_canvas_GuestAccount")
+        : entry.nickname || (entry.uid ? `UID: ${entry.uid}` : "Unknown"));
+
   await fillTextWithStar(
     ctx,
-    String(
-      entry.gameNickname
-        ? tr("gacha_log_canvas_GameNickname", { name: entry.gameNickname })
-        : entry.nickname || (entry.uid ? `UID: ${entry.uid}` : "Unknown"),
-    ),
+    bottomLabel,
     nameX,
     centerY + 25,
     24,
@@ -507,7 +531,7 @@ async function drawRankItem(
   const probability = Number(entry.currentStat?.probability || 0);
   const probStr = (probability * 100).toFixed(2) + "%";
 
-  ctx.fillText(probStr, statX, centerY - 15);
+  ctx.fillText(probStr, statX, centerY);
 
   // Stat row rendering
   {

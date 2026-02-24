@@ -1,6 +1,7 @@
 import axios from "axios";
 import { CustomDatabase } from "./Database";
 import { mapLocaleToLang } from "./skportApi";
+import moment from "moment";
 
 export interface GachaRecord {
   seqId: string;
@@ -26,6 +27,7 @@ export interface GachaLeaderboardEntry {
   total: number;
   nonFreeTotal: number;
   freeTotal: number;
+  accountIndex?: number; // 1-indexed account position
   poolNames?: Record<string, string>; // poolId -> poolName mapping
   stats: Record<
     string,
@@ -123,6 +125,9 @@ export async function fetchAndMergeGachaLog(
   targetUid?: string,
   locale?: string,
   avatarUrl?: string,
+  displayName?: string,
+  accountIndex?: number,
+  gameNickname?: string,
 ) {
   const url = new URL(urlStr);
   const token =
@@ -274,7 +279,12 @@ export async function fetchAndMergeGachaLog(
       uid,
       lang,
       serverId,
-      nickname: existingData.info.nickname || undefined, // Preserve existing nickname
+      nickname:
+        gameNickname && gameNickname !== uid
+          ? gameNickname
+          : existingData.info.nickname && existingData.info.nickname !== uid
+            ? existingData.info.nickname
+            : undefined,
       avatarUrl: avatarUrl || existingData.info.avatarUrl,
       export_timestamp: Date.now(),
     },
@@ -284,7 +294,14 @@ export async function fetchAndMergeGachaLog(
 
   // Update leaderboard
   try {
-    await updateLeaderboard(db, uid, updatedData);
+    await updateLeaderboard(
+      db,
+      uid,
+      updatedData,
+      displayName,
+      accountIndex,
+      gameNickname,
+    );
   } catch (e) {
     console.error(`[Leaderboard] Failed to update for ${uid}:`, e);
   }
@@ -298,10 +315,107 @@ export async function fetchAndMergeGachaLog(
   };
 }
 
+/**
+ * Migrates data from a guest UID to a target UID (real account).
+ * Merges records and updates the leaderboard.
+ */
+export async function migrateGachaLog(
+  db: CustomDatabase,
+  sourceUid: string,
+  targetUid: string,
+  displayName?: string,
+  accountIndex?: number,
+  gameNickname?: string,
+) {
+  const sourceKey = `GACHA_LOG_${sourceUid}`;
+  const targetKey = `GACHA_LOG_${targetUid}`;
+
+  const sourceData = await db.get<GachaLogData>(sourceKey);
+  if (!sourceData) return null;
+
+  const targetData = (await db.get<GachaLogData>(targetKey)) || {
+    characterList: [],
+    weaponList: [],
+    info: { uid: targetUid, lang: sourceData.info.lang, export_timestamp: 0 },
+  };
+
+  // Merge logic (same as in fetchAndMergeGachaLog)
+  const charMap = new Map<string, GachaRecord>();
+  const weaponMap = new Map<string, GachaRecord>();
+
+  targetData.characterList.forEach((r) => charMap.set(String(r.seqId), r));
+  targetData.weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
+
+  sourceData.characterList.forEach((r) => charMap.set(String(r.seqId), r));
+  sourceData.weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
+
+  const newCharList = Array.from(charMap.values()).sort(
+    (a, b) => Number(b.seqId) - Number(a.seqId),
+  );
+  const newWeaponList = Array.from(weaponMap.values()).sort(
+    (a, b) => Number(b.seqId) - Number(a.seqId),
+  );
+
+  const updatedData: GachaLogData = {
+    characterList: newCharList,
+    weaponList: newWeaponList,
+    info: {
+      ...targetData.info,
+      nickname:
+        targetData.info.nickname && targetData.info.nickname !== targetUid
+          ? targetData.info.nickname
+          : sourceData.info.nickname && sourceData.info.nickname !== targetUid
+            ? sourceData.info.nickname
+            : undefined,
+      avatarUrl: targetData.info.avatarUrl || sourceData.info.avatarUrl,
+      export_timestamp: Math.max(
+        targetData.info.export_timestamp || 0,
+        sourceData.info.export_timestamp || 0,
+      ),
+    },
+  };
+
+  await db.set(targetKey, updatedData);
+  await db.delete(sourceKey);
+
+  // Update leaderboard for target
+  try {
+    await updateLeaderboard(
+      db,
+      targetUid,
+      updatedData,
+      displayName,
+      accountIndex,
+      gameNickname || updatedData.info.nickname,
+    );
+  } catch (e) {
+    console.error(`[Leaderboard] Failed to update for ${targetUid}:`, e);
+  }
+
+  // Remove source from leaderboard
+  try {
+    const lb =
+      (await db.get<Record<string, GachaLeaderboardEntry>>(
+        "GACHA_LEADERBOARD_ENTRIES",
+      )) || {};
+    if (lb[sourceUid]) {
+      delete lb[sourceUid];
+      await db.set("GACHA_LEADERBOARD_ENTRIES", lb);
+    }
+  } catch (e) {
+    console.error(`[Leaderboard] Failed to remove guest log ${sourceUid}:`, e);
+  }
+
+  return updatedData;
+}
+
 export async function updateLeaderboard(
   db: CustomDatabase,
   uid: string,
   data: GachaLogData,
+  displayName?: string,
+  accountIndex?: number,
+  gameNickname?: string,
 ) {
   const stats = await getGachaStats(db, data);
   const leaderboard =
@@ -311,13 +425,27 @@ export async function updateLeaderboard(
 
   const entry: GachaLeaderboardEntry = {
     uid,
-    nickname: data.info.nickname || uid,
-    gameNickname: data.info.nickname,
+    nickname:
+      gameNickname && gameNickname !== uid
+        ? gameNickname
+        : data.info.nickname && data.info.nickname !== uid
+          ? data.info.nickname
+          : uid === "GUEST"
+            ? "GUEST"
+            : uid,
+    displayName: displayName,
+    gameNickname:
+      gameNickname && gameNickname !== uid
+        ? gameNickname
+        : data.info.nickname && data.info.nickname !== uid
+          ? data.info.nickname
+          : undefined,
     avatarUrl: data.info.avatarUrl,
     lastUpdate: Date.now(),
     total: stats.char.total + stats.weapon.total,
     nonFreeTotal: stats.char.nonFreeTotal + stats.weapon.nonFreeTotal,
     freeTotal: stats.char.freeTotal + stats.weapon.freeTotal,
+    accountIndex: accountIndex,
     stats: {},
     poolNames: {},
   };
@@ -422,6 +550,50 @@ export async function updateLeaderboard(
 
   leaderboard[uid] = entry;
   await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+}
+
+/**
+ * Clear gacha log for a specific UID, optionally within a time range.
+ * @param startTime ISO string or YYYY-MM-DD
+ * @param endTime ISO string or YYYY-MM-DD
+ */
+export async function clearGachaLog(
+  db: CustomDatabase,
+  uid: string,
+  startTime?: string,
+  endTime?: string,
+) {
+  const dbKey = `GACHA_LOG_${uid}`;
+  const data = await db.get<GachaLogData>(dbKey);
+
+  if (!data) return false;
+
+  const start = startTime ? moment(startTime).valueOf() : 0;
+  const end = endTime ? moment(endTime).valueOf() : Infinity;
+
+  const filterFn = (r: GachaRecord) => {
+    const ts = moment(r.gachaTs).valueOf();
+    return ts < start || ts > end;
+  };
+
+  data.characterList = data.characterList.filter(filterFn);
+  data.weaponList = data.weaponList.filter(filterFn);
+
+  if (data.characterList.length === 0 && data.weaponList.length === 0) {
+    await db.delete(dbKey);
+    // Remove from leaderboard too
+    const leaderboard =
+      (await db.get<Record<string, GachaLeaderboardEntry>>(
+        "GACHA_LEADERBOARD_ENTRIES",
+      )) || {};
+    delete leaderboard[uid];
+    await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+  } else {
+    await db.set(dbKey, data);
+    await updateLeaderboard(db, uid, data);
+  }
+
+  return true;
 }
 
 /**
