@@ -257,6 +257,8 @@ const langs: Record<string, any> = {
   gacha_log_canvas_NoData: "未有資料",
   gacha_log_view_SelectPool: "選擇特定期數查看詳細記錄",
   gacha_log_view_Overview: "顯示總覽 (不選擇特定池)",
+  gacha_log_load_CreateNewGuest: "🆕 建立新的訪客紀錄槽位",
+  gacha_log_load_NewGuestName: "Guest (New)",
 
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",

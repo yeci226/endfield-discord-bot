@@ -261,6 +261,8 @@ const langs: Record<string, any> = {
   gacha_log_canvas_NoData: "No Data",
   gacha_log_view_SelectPool: "Select specific pool for details",
   gacha_log_view_Overview: "Show Overview (All Pools)",
+  gacha_log_load_CreateNewGuest: "🆕 Create New Guest Slot",
+  gacha_log_load_NewGuestName: "Guest (New)",
 
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",

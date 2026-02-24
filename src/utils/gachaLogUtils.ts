@@ -548,7 +548,13 @@ export async function updateLeaderboard(
   buildPerPoolStats(data.characterList);
   buildPerPoolStats(data.weaponList);
 
-  leaderboard[uid] = entry;
+  if (!uid.startsWith("EF_GUEST_") && uid !== "EF_undefined") {
+    leaderboard[uid] = entry;
+  } else if (leaderboard[uid]) {
+    // If it was already in the leaderboard somehow, remove it
+    delete leaderboard[uid];
+  }
+
   await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
 }
 
