@@ -280,9 +280,8 @@ async function handleSetup(
   const notify = interaction.options.getBoolean("notify");
   const notifyMethod = interaction.options.getString("notify_method");
 
-  // Load existing or default
-  const dailyData = ((await db.get("autoDaily")) as Record<string, any>) || {};
-  const userConfig = dailyData[userId] || {
+  // Load existing or default - Using granular keys
+  const userConfig = (await db.get(`autoDaily.${userId}`)) || {
     time: 13,
     auto_balance: false,
     notify: true,
@@ -320,8 +319,7 @@ async function handleSetup(
   // Always update channelId to current where command is run
   userConfig.channelId = interaction.channelId;
 
-  dailyData[userId] = userConfig;
-  await db.set("autoDaily", dailyData);
+  await db.set(`autoDaily.${userId}`, userConfig);
 
   const { createTranslator, toI18nLang } = require("../../utils/i18n");
   const userLang =

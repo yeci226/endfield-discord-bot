@@ -40,12 +40,11 @@ export class AutoDailyService {
     this.logger = new Logger("AutoDaily");
   }
 
-  public start() {
+  public async start() {
     if (this.interval) return;
 
-    // Check every minute to see if we hit the top of the hour (or close to it)
-    // For simplicity, we can check every 1 minute and if minute == 0, run process.
-    // Or better, calculate delay to next hour.
+    // Immediately run check for current hour to catch missed tasks during restart
+    await this.runHourlyCheck();
 
     this.scheduleNextRun();
     this.logger.success("Service started.");
@@ -86,18 +85,15 @@ export class AutoDailyService {
         `Running checks for hour ${currentHour}:00 (Asia/Taipei)`,
       );
 
-      const dailyData =
-        ((await this.client.db.get("autoDaily")) as Record<
-          string,
-          AutoDailyConfig
-        >) || {};
+      // Migrate to prefixed keys
+      const dailyUsers =
+        await this.client.db.findByPrefix<AutoDailyConfig>("autoDaily.");
 
-      const userIds = Object.keys(dailyData);
       const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
 
       const eligibleUsers = [];
-      for (const userId of userIds) {
-        const config = dailyData[userId];
+      for (const { id, value: config } of dailyUsers) {
+        const userId = id.replace("autoDaily.", "");
         if (config.time !== currentHour) continue;
 
         // Skip if already processed today
@@ -105,17 +101,16 @@ export class AutoDailyService {
           `${userId}.lastAutoDaily`,
         );
         if (lastProcessed === today) {
-          // Skipping noisy user logs to keep it clean
           continue;
         }
 
-        eligibleUsers.push(userId);
+        eligibleUsers.push({ userId, config });
       }
 
       this.logger.info(`Found ${eligibleUsers.length} users for this hour.`);
 
-      for (const userId of eligibleUsers) {
-        await this.processUser(userId, dailyData[userId]);
+      for (const { userId, config } of eligibleUsers) {
+        await this.processUser(userId, config);
       }
     } catch (error) {
       this.logger.error(
@@ -313,14 +308,11 @@ export class AutoDailyService {
 
   // Helper for auto-balance logic
   public async getBalancedHour(): Promise<number> {
-    const dailyData =
-      ((await this.client.db.get("autoDaily")) as Record<
-        string,
-        AutoDailyConfig
-      >) || {};
+    const dailyUsers =
+      await this.client.db.findByPrefix<AutoDailyConfig>("autoDaily.");
     const hourCounts = new Array(24).fill(0);
 
-    Object.values(dailyData).forEach((conf) => {
+    dailyUsers.forEach(({ value: conf }) => {
       if (conf.time >= 0 && conf.time < 24) {
         hourCounts[conf.time]++;
       }
