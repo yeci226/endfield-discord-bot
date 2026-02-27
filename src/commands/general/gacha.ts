@@ -698,19 +698,21 @@ const command: Command = {
         );
       components.push(sortRow);
 
-      // Get game UID and pool names for canvas
-      const accounts2 = await getAccounts(db, interaction.user.id);
-      const firstRole2 = accounts2?.[0]?.roles?.[0]?.roles?.[0];
-      const firstBinding2 = accounts2?.[0]?.roles?.[0];
-      const gameUid2Raw =
-        firstRole2?.roleId || firstRole2?.uid || firstBinding2?.uid;
-      const gameUid2 = gameUid2Raw ? `EF_${gameUid2Raw}` : interaction.user.id;
+      // Get all game UIDs for the current user to highlight in leaderboard
+      const allPossibleRoles2 = await getAllPossibleUserRoles(
+        interaction.user.id,
+        db,
+      );
+      const currentUserUids = allPossibleRoles2.map((r) => r.uid);
+      if (currentUserUids.length === 0) {
+        currentUserUids.push(interaction.user.id); // Fallback to discord ID if no tracking data
+      }
       const poolNamesDict: Record<string, string> =
         (await db.get<Record<string, string>>("GACHA_POOL_NAMES")) || {};
 
       const image = await drawGachaLeaderboard(
         entries,
-        gameUid2,
+        currentUserUids,
         poolId,
         sortType,
         tr,
@@ -1051,13 +1053,22 @@ const command: Command = {
             const allRoles = await getAllPossibleUserRoles(userId, db);
 
             if (allRoles.length > 0) {
-              targetUid = allRoles[0].uid;
-            } else {
-              // Fallback: see if there are any gacha logs for this user (e.g., guest logs)
+              // Try to find the first bound role that actually has gacha log data
+              for (const role of allRoles) {
+                const hasData = await db.get(`GACHA_LOG_${role.uid}`);
+                if (hasData) {
+                  targetUid = role.uid;
+                  break;
+                }
+              }
+            }
+
+            // If no bound account has data, check for guest logs associated with this user
+            if (!targetUid) {
               const gachaLogs =
                 await db.findByPrefix<GachaLogData>("GACHA_LOG_");
               const userLogs = gachaLogs
-                .filter((log) => log.id.includes(userId))
+                .filter((log) => log.id.includes(userId)) // e.g. EF_GUEST_<userId>_...
                 .sort(
                   (a, b) =>
                     (b.value.info.export_timestamp || 0) -
@@ -1066,10 +1077,13 @@ const command: Command = {
 
               if (userLogs.length > 0) {
                 targetUid = userLogs[0].id.replace("GACHA_LOG_", "");
+              } else if (allRoles.length > 0) {
+                // If they have bound accounts but NO data anywhere
+                targetUid = allRoles[0].uid;
               } else {
-                // If neither bound nor guest logs exist
+                // No bound accounts, no guest logs
                 await interaction.editReply({
-                  content: tr("AccountNotFoundUser", {
+                  content: tr("gacha_log_NoData", {
                     user: targetUser.toString(),
                   }),
                 });

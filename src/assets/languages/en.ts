@@ -263,6 +263,8 @@ const langs: Record<string, any> = {
   gacha_log_view_Overview: "Show Overview (All Pools)",
   gacha_log_load_CreateNewGuest: "🆕 Create New Guest Slot",
   gacha_log_load_NewGuestName: "Guest (New)",
+  gacha_log_load_SelectAccount:
+    "Select which account to import the records into:",
 
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",

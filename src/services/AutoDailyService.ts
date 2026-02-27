@@ -130,6 +130,7 @@ export class AutoDailyService {
       let successCount = 0;
       let alreadySignedCount = 0;
       let failCount = 0;
+      this.logger.info(`Starting auto-daily processing for user ${userId}`);
       const results: {
         roleName: string;
         rewardName: string;
@@ -138,6 +139,7 @@ export class AutoDailyService {
         firstRewardIcon?: string;
         totalDays: number;
         status: string;
+        isError?: boolean;
       }[] = [];
 
       const processedRoles = new Set<string>();
@@ -152,89 +154,146 @@ export class AutoDailyService {
             `Skipping invalid account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
           );
           results.push({
-            roleName: `${account.info?.nickname || "Unknown"} (Account Invalid)`,
+            roleName: `${account.info?.nickname || "Unknown"}`,
             rewardName: "",
             rewardIcon: "",
             totalDays: 0,
             status: tr("TokenExpired"),
+            isError: true,
           });
           failCount++;
           continue;
         }
 
-        await ensureAccountBinding(account, userId, this.client.db, tr.lang);
+        try {
+          await ensureAccountBinding(account, userId, this.client.db, tr.lang);
 
-        const roles = account.roles;
-        if (!roles || roles.length === 0) continue;
+          const roles = account.roles;
+          if (!roles || roles.length === 0) {
+            results.push({
+              roleName: `${account.info?.nickname || "Unknown"}`,
+              rewardName: "",
+              rewardIcon: "",
+              totalDays: 0,
+              status: tr("Error") || "No roles found",
+              isError: true,
+            });
+            failCount++;
+            continue;
+          }
 
-        for (const binding of roles) {
-          for (const role of binding.roles) {
-            const gameId = binding.gameId || 3;
-            const gameRoleStr = formatSkGameRole(
-              gameId,
-              role.roleId,
-              role.serverId,
-            );
+          for (const binding of roles) {
+            for (const role of binding.roles) {
+              const gameId = binding.gameId || 3;
+              const gameRoleStr = formatSkGameRole(
+                gameId,
+                role.roleId,
+                role.serverId,
+              );
 
-            if (processedRoles.has(gameRoleStr)) continue;
-            processedRoles.add(gameRoleStr);
+              if (processedRoles.has(gameRoleStr)) continue;
+              processedRoles.add(gameRoleStr);
 
-            const res: any = await withAutoRefresh(
-              this.client,
-              userId,
-              account,
-              (c: string, s: string, opt: any) =>
-                processRoleAttendance(
-                  role,
-                  gameId,
-                  account.cookie,
+              try {
+                const res: any = await withAutoRefresh(
+                  this.client,
+                  userId,
+                  account,
+                  (c: string, s: string, opt: any) =>
+                    processRoleAttendance(
+                      role,
+                      gameId,
+                      account.cookie,
+                      tr.lang,
+                      c,
+                      s,
+                      true,
+                      tr,
+                      opt,
+                    ),
                   tr.lang,
-                  c,
-                  s,
-                  true,
-                  tr,
-                  opt,
-                ),
-              tr.lang,
-            );
+                );
 
-            if (res) {
-              if (res.signedNow) successCount++;
-              else if (res.hasToday) alreadySignedCount++;
-              else if (res.error) failCount++;
+                if (res) {
+                  if (res.signedNow) successCount++;
+                  else if (res.hasToday) alreadySignedCount++;
+                  else if (res.error) failCount++;
 
-              // Support multi-line rewards from Python logic
-              const displayedReward = res.rewardName || tr("None");
+                  // Support multi-line rewards from Python logic
+                  const displayedReward = res.rewardName || tr("None");
 
-              results.push({
-                roleName: `${res.nickname} (Lv.${res.level})`,
-                rewardName: displayedReward,
-                rewardIcon: res.rewardIcon,
-                firstRewardName: res.firstRewardName,
-                totalDays: res.totalDays,
-                status: res.signedNow
-                  ? tr("daily_Success")
-                  : tr("daily_StatusAlready"),
-              });
+                  results.push({
+                    roleName: `${res.nickname} (Lv.${res.level})`,
+                    rewardName: displayedReward,
+                    rewardIcon: res.rewardIcon,
+                    firstRewardName: res.firstRewardName,
+                    totalDays: res.totalDays,
+                    status: res.signedNow
+                      ? tr("daily_Success")
+                      : tr("daily_StatusAlready"),
+                    isError: !!res.error && !res.signedNow && !res.hasToday,
+                  });
+
+                  this.logger.info(
+                    `User ${userId} - Role ${res.nickname} (${res.uid}): ${res.signedNow ? "SUCCESS" : res.hasToday ? "ALREADY SIGNED" : "ERROR"}` +
+                      (res.signedNow ? ` (Reward: ${displayedReward})` : ""),
+                  );
+                }
+              } catch (roleError) {
+                this.logger.error(
+                  `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
+                );
+                results.push({
+                  roleName: `${role.nickname || "Unknown"}`,
+                  rewardName: "",
+                  rewardIcon: "",
+                  totalDays: 0,
+                  status: tr("Error"),
+                  isError: true,
+                });
+                failCount++;
+              }
             }
           }
+        } catch (accError) {
+          this.logger.error(
+            `Error processing account ${account.info?.id} for user ${userId}: ${accError}`,
+          );
+          results.push({
+            roleName: `${account.info?.nickname || "Unknown"}`,
+            rewardName: "",
+            rewardIcon: "",
+            totalDays: 0,
+            status: tr("Error"),
+            isError: true,
+          });
+          failCount++;
         }
       }
+
+      this.logger.info(
+        `Finished auto-daily for user ${userId}. Result: ${successCount} success, ${alreadySignedCount} already signed, ${failCount} failed.`,
+      );
 
       // Mark as processed for today
       const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
       await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
-      if (config.notify && (successCount > 0 || alreadySignedCount > 0)) {
+      if (config.notify && results.length > 0) {
         const container = new ContainerBuilder();
         for (const res of results) {
-          let content = `# **${res.roleName}** - ${res.status}\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
+          const statusPrefix = res.isError ? "❌" : "✅";
+          let content = `# **${statusPrefix} ${res.roleName}** - ${res.status}`;
 
-          if (res.firstRewardName) {
-            content += `\n### ${tr("daily_FirstReward")}: \`${res.firstRewardName}\``;
+          if (!res.isError) {
+            content += `\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
+
+            if (res.firstRewardName) {
+              content += `\n### ${tr("daily_FirstReward")}: \`${res.firstRewardName}\``;
+            }
+
+            content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
           }
-
-          content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
 
           const textDisplay = new TextDisplayBuilder().setContent(content);
 
@@ -264,9 +323,17 @@ export class AutoDailyService {
             async (c: any, context: any) => {
               try {
                 if (context.notifyMethod === "dm") {
-                  const user = c.users.cache.get(context.userId);
+                  let user = c.users.cache.get(context.userId);
+                  if (!user) {
+                    try {
+                      user = await c.users.fetch(context.userId);
+                    } catch (e) {
+                      return false;
+                    }
+                  }
                   if (user) {
-                    await user.send(context.payload);
+                    const dmChannel = await user.createDM();
+                    await dmChannel.send(context.payload);
                     return true;
                   }
                 } else if (
@@ -344,9 +411,17 @@ export class AutoDailyService {
         async (c: any, context: any) => {
           try {
             if (context.notifyMethod === "dm") {
-              const user = c.users.cache.get(context.userId);
+              let user = c.users.cache.get(context.userId);
+              if (!user) {
+                try {
+                  user = await c.users.fetch(context.userId);
+                } catch (e) {
+                  return false;
+                }
+              }
               if (user) {
-                await user.send(context.payload);
+                const dmChannel = await user.createDM();
+                await dmChannel.send(context.payload);
                 return true;
               }
             } else if (

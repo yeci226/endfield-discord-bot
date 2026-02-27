@@ -118,7 +118,7 @@ function roundRect(
 
 export async function drawGachaLeaderboard(
   entries: GachaLeaderboardEntry[],
-  currentUserId: string,
+  currentUserIds: string[],
   poolId: string, // "TOTAL", "SpecialShared", etc.
   sortType: "pulls" | "luck",
   tr: any,
@@ -130,8 +130,19 @@ export async function drawGachaLeaderboard(
   const headerH = 500;
   const footerPadding = 100;
 
+  // Deduplicate before filtering
+  const seen = new Set<string>();
+  const deduplicatedEntries = entries.filter((e) => {
+    const stat = e.stats[poolId];
+    if (!stat) return true;
+    const hash = `${stat.total}_${stat.sixStarCount}_${stat.fiveStarCount}_${e.nickname}_${e.displayName}_${e.avatarUrl}`;
+    if (seen.has(hash)) return false;
+    seen.add(hash);
+    return true;
+  });
+
   // Filter and Sort Entries for this poolId
-  const validEntries = entries
+  const validEntries = deduplicatedEntries
     .filter((e) => e.stats[poolId] && e.stats[poolId].total > 0)
     .map((e) => ({
       ...e,
@@ -148,13 +159,18 @@ export async function drawGachaLeaderboard(
 
   const topUsersCount = 10;
   const topUsers = validEntries.slice(0, topUsersCount);
-  const myEntry = validEntries.find((e) => e.uid === currentUserId);
-  const myRankIdx = validEntries.findIndex((e) => e.uid === currentUserId);
+  const myEntries = validEntries
+    .map((e, idx) => ({ entry: e, rankIdx: idx }))
+    .filter((e) => currentUserIds.includes(e.entry.uid));
+
+  const myEntriesOutsideTop10 = myEntries.filter(
+    (e) => e.rankIdx >= topUsersCount,
+  );
 
   // Dynamic Height calculation
   let listCount = topUsers.length;
-  if (myEntry && myRankIdx >= topUsersCount) {
-    listCount += 1.5; // Space for separator and self rank
+  if (myEntriesOutsideTop10.length > 0) {
+    listCount += 0.5 + myEntriesOutsideTop10.length; // Space for separator and self ranks
   }
   const minHeight = 1143;
   const calculatedHeight = headerH + listCount * itemH + footerPadding;
@@ -316,15 +332,15 @@ export async function drawGachaLeaderboard(
       listY + i * itemH,
       width - padding * 2,
       itemH,
-      currentUserId === topUsers[i].uid,
+      currentUserIds.includes(topUsers[i].uid),
       tr,
       nameCounts,
     );
   }
 
-  // Draw Separator and Self Rank if needed
-  if (myEntry && myRankIdx >= topUsersCount) {
-    const sepY = listY + topUsers.length * itemH + 40;
+  // Draw Separator and Self Ranks if needed
+  if (myEntriesOutsideTop10.length > 0) {
+    const sepY = listY + topUsers.length * itemH + 20;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
     ctx.setLineDash([15, 10]);
     ctx.beginPath();
@@ -333,18 +349,21 @@ export async function drawGachaLeaderboard(
     ctx.stroke();
     ctx.setLineDash([]);
 
-    await drawRankItem(
-      ctx,
-      myEntry,
-      myRankIdx + 1,
-      padding,
-      sepY + 40,
-      width - padding * 2,
-      itemH,
-      true,
-      tr,
-      nameCounts,
-    );
+    for (let i = 0; i < myEntriesOutsideTop10.length; i++) {
+      const myItem = myEntriesOutsideTop10[i];
+      await drawRankItem(
+        ctx,
+        myItem.entry,
+        myItem.rankIdx + 1,
+        padding,
+        sepY + 20 + i * itemH,
+        width - padding * 2,
+        itemH,
+        true,
+        tr,
+        nameCounts,
+      );
+    }
   }
 
   return canvas.toBuffer("image/png");
@@ -377,7 +396,9 @@ async function drawRankItem(
   const rankX = x + 70;
   const centerY = y + (h - cardPadding) / 2;
 
-  if (rank <= 3) {
+  const rankText = entry.uid?.includes("GUEST") ? "X" : String(rank);
+
+  if (rank <= 3 && !entry.uid?.includes("GUEST")) {
     const colors = ["#FFD700", "#C0C0C0", "#CD7F32"];
     ctx.fillStyle = colors[rank - 1];
     ctx.font = "italic bold 60px NotoSansTCBold";
@@ -385,7 +406,7 @@ async function drawRankItem(
     ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
     ctx.font = "bold 40px NotoSansTCBold";
   }
-  ctx.fillText(String(rank), rankX, centerY);
+  ctx.fillText(rankText, rankX, centerY);
 
   // Avatar
   const avatarSize = 80;

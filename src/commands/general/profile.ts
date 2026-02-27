@@ -117,7 +117,7 @@ const command: Command = {
           flags: (isEphemeral ? MessageFlags.Ephemeral : 1 << 15) as any,
         })
         .catch(() => {});
-    } else if (interaction.isStringSelectMenu()) {
+    } else if (interaction.isStringSelectMenu() || interaction.isButton()) {
       await interaction.deferUpdate().catch(() => {});
     }
 
@@ -165,9 +165,16 @@ const command: Command = {
         }
 
         if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
+          console.error(
+            "[Profile] API failed or returned error (subcommand):",
+            cardRes,
+          );
+          const errorMsg =
+            cardRes?.code === 10000
+              ? tr("TokenExpired")
+              : `${tr("UnknownError")} (API Code: ${cardRes?.code ?? "NULL"}, Status: ${cardRes?.status ?? "NULL"})`;
           await interaction.followUp({
-            content:
-              cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
+            content: errorMsg,
             flags: MessageFlags.Ephemeral,
           });
           return;
@@ -178,8 +185,31 @@ const command: Command = {
           db,
           targetUserId,
         );
-        const buffer = await drawDashboard(detail, tr, template);
+
+        let buffer: Buffer;
+        try {
+          buffer = await drawDashboard(detail, tr, template);
+        } catch (drawErr: any) {
+          console.error("[Profile] Dashboard drawing failed:", drawErr);
+          await interaction.followUp({
+            content:
+              tr("Error") +
+              " (Draw Failure: " +
+              (drawErr.message || "Unknown") +
+              ")",
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
         const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
+
+        if (!interaction.message || !interaction.message.components[0]) {
+          await interaction.followUp({
+            content: tr("UnknownError"),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
 
         const selectMenu = StringSelectMenuBuilder.from(
           (interaction.message.components[0] as any).components[0] as any,
@@ -192,14 +222,16 @@ const command: Command = {
           })),
         );
 
-        await interaction.editReply({
-          files: [attachment],
-          components: [
-            new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-              selectMenu,
-            ),
-          ],
-        });
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            files: [attachment],
+            components: [
+              new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+                selectMenu,
+              ),
+            ],
+          });
+        }
         return;
       }
 
@@ -250,15 +282,29 @@ const command: Command = {
           ...(enums?.equipProperties || []),
           ...(enums?.equipAbilities || []),
         ];
-        const buffer = await drawCharacterDetail(
-          selectedChar,
-          tr,
-          equipEnums,
-          charIdx + 1,
-        );
+        let buffer: Buffer;
+        try {
+          buffer = await drawCharacterDetail(
+            selectedChar,
+            tr,
+            equipEnums,
+            charIdx + 1,
+          );
+        } catch (drawErr) {
+          console.error("Character detail drawing failed:", drawErr);
+          throw drawErr;
+        }
         const attachment = new AttachmentBuilder(buffer, {
           name: "detail.png",
         });
+
+        if (!interaction.message || !interaction.message.components[0]) {
+          await interaction.followUp({
+            content: tr("UnknownError"),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
 
         const selectMenu = StringSelectMenuBuilder.from(
           (interaction.message.components[0] as any).components[0] as any,
@@ -274,14 +320,16 @@ const command: Command = {
           ]);
         }
 
-        await interaction.editReply({
-          files: [attachment],
-          components: [
-            new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-              selectMenu,
-            ),
-          ],
-        });
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({
+            files: [attachment],
+            components: [
+              new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+                selectMenu,
+              ),
+            ],
+          });
+        }
       } catch (e) {
         console.error("Error generating detail:", e);
         await interaction.followUp({
@@ -502,8 +550,11 @@ const command: Command = {
     }
 
     if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
+      console.error("[Profile] API failed or returned error (main):", cardRes);
       const errorMsg =
-        cardRes?.code === 10000 ? tr("TokenExpired") : tr("Error");
+        cardRes?.code === 10000
+          ? tr("TokenExpired")
+          : `${tr("Error")} (API Code: ${cardRes?.code ?? "NULL"}, Status: ${cardRes?.status ?? "NULL"})`;
       if (!(interaction.deferred && (interaction as any).ephemeral)) {
         try {
           await interaction.deleteReply();
@@ -525,7 +576,20 @@ const command: Command = {
       db,
       targetUserId,
     );
-    const buffer = await drawDashboard(detail, tr, template);
+    let buffer: Buffer;
+    try {
+      buffer = await drawDashboard(detail, tr, template);
+    } catch (drawErr: any) {
+      console.error("[Profile] Dashboard drawing failed (main):", drawErr);
+      await interaction.editReply({
+        content:
+          tr("Error") +
+          " (Draw Failure: " +
+          (drawErr.message || "Unknown") +
+          ")",
+      });
+      return;
+    }
     const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
 
     const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${targetUserId}`;
@@ -533,12 +597,18 @@ const command: Command = {
       .setCustomId(customId)
       .setPlaceholder(tr("profile_SelectCharacter"))
       .addOptions(
-        detail.chars.slice(0, 25).map((char: any) => ({
-          label: char.charData.name,
-          description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
-          value: char.id,
+        (detail.chars || []).slice(0, 25).map((char: any) => ({
+          label: char.charData?.name || "??",
+          description: `Lv.${char.level || 1} | ${char.charData?.profession?.value || ""}`,
+          value: char.id || "empty",
         })),
       );
+
+    if (detail.chars?.length === 0) {
+      (selectMenu as any).addOptions([
+        { label: "No Characters Found", value: "none", disabled: true },
+      ]);
+    }
 
     await interaction.editReply({
       files: [attachment],

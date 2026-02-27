@@ -777,17 +777,31 @@ export async function verifyToken(cookie: string, locale?: string) {
   const match = cleanToken.match(/ACCOUNT_TOKEN=([^;\s]+)/);
   if (match) {
     cleanToken = match[1];
+  } else if (cleanToken.includes("ACCOUNT_TOKEN=")) {
+    // Handling cases where it might be slightly malformed but contains the key
+    const parts = cleanToken.split("ACCOUNT_TOKEN=");
+    if (parts.length > 1) {
+      cleanToken = parts[1].split(";")[0];
+    }
   } else if (cleanToken.includes("=")) {
-    // If it has '=' but no ACCOUNT_TOKEN, it might be an invalid cookie or another key
-    // We try to find any value that looks like a token if ACCOUNT_TOKEN is missing
-    const parts = cleanToken.split(";")[0].split("=");
-    if (parts.length > 1) cleanToken = parts[1];
+    // If it has '=' but no ACCOUNT_TOKEN, it's likely an invalid cookie string for our purposes
+    // We should only use it if we are sure it's meant to be the raw token
+    // For safety, if it looks like a full cookie but lacks ACCOUNT_TOKEN, we log it
+    if (cleanToken.includes(";")) {
+      logger.warn(
+        `Potential invalid cookie provided to verifyToken: ${cleanToken}`,
+      );
+      // Try to take the first part if it's not a known WAF cookie
+      const firstPart = cleanToken.split(";")[0];
+      if (!firstPart.startsWith("acw_tc=")) {
+        cleanToken = firstPart.split("=")[1] || firstPart;
+      }
+    }
   }
 
-  // Ensure we have a decoded version if it was already encoded
+  // Ensure we have a decoded version
   try {
     const decoded = decodeURIComponent(cleanToken);
-    // Only use decoded if it's different (to handle potential double encoding issues)
     if (decoded !== cleanToken) cleanToken = decoded;
   } catch (e) {}
 

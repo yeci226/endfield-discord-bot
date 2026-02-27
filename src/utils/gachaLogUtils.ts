@@ -376,7 +376,9 @@ export async function migrateGachaLog(
   };
 
   await db.set(targetKey, updatedData);
-  await db.delete(sourceKey);
+  if (sourceKey !== targetKey) {
+    await db.delete(sourceKey);
+  }
 
   // Update leaderboard for target
   try {
@@ -398,7 +400,7 @@ export async function migrateGachaLog(
       (await db.get<Record<string, GachaLeaderboardEntry>>(
         "GACHA_LEADERBOARD_ENTRIES",
       )) || {};
-    if (lb[sourceUid]) {
+    if (sourceUid !== targetUid && lb[sourceUid]) {
       delete lb[sourceUid];
       await db.set("GACHA_LEADERBOARD_ENTRIES", lb);
     }
@@ -574,11 +576,19 @@ export async function clearGachaLog(
 
   if (!data) return false;
 
-  const start = startTime ? moment(startTime).valueOf() : 0;
-  const end = endTime ? moment(endTime).valueOf() : Infinity;
+  const start = startTime
+    ? moment(/^\d+$/.test(startTime) ? Number(startTime) : startTime).valueOf()
+    : 0;
+  const end = endTime
+    ? moment(/^\d+$/.test(endTime) ? Number(endTime) : endTime).valueOf()
+    : Infinity;
 
   const filterFn = (r: GachaRecord) => {
-    const ts = moment(r.gachaTs).valueOf();
+    const rawTs = r.gachaTs;
+    const ts =
+      typeof rawTs === "string" && /^\d+$/.test(rawTs)
+        ? moment(Number(rawTs)).valueOf()
+        : moment(rawTs).valueOf();
     return ts < start || ts > end;
   };
 
@@ -935,11 +945,17 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         let startTs = "";
         let endTs = "";
         if (poolRecords.length > 0) {
-          // list is sorted oldest to newest? The user mentioned allHistory is sorted newest first later.
-          // Let's sort just to be safe.
-          const sortedRecs = [...poolRecords].sort((a, b) =>
-            a.gachaTs.localeCompare(b.gachaTs),
-          );
+          const sortedRecs = [...poolRecords].sort((a, b) => {
+            const tsA =
+              typeof a.gachaTs === "string" && /^\d+$/.test(a.gachaTs)
+                ? Number(a.gachaTs)
+                : moment(a.gachaTs).valueOf();
+            const tsB =
+              typeof b.gachaTs === "string" && /^\d+$/.test(b.gachaTs)
+                ? Number(b.gachaTs)
+                : moment(b.gachaTs).valueOf();
+            return tsA - tsB;
+          });
           startTs = sortedRecs[0].gachaTs;
           endTs = sortedRecs[sortedRecs.length - 1].gachaTs;
         }

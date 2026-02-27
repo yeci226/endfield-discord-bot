@@ -259,6 +259,7 @@ const langs: Record<string, any> = {
   gacha_log_view_Overview: "顯示總覽 (不選擇特定池)",
   gacha_log_load_CreateNewGuest: "🆕 建立新的訪客紀錄槽位",
   gacha_log_load_NewGuestName: "Guest (New)",
+  gacha_log_load_SelectAccount: "請選擇要將紀錄匯入至哪個帳號：",
 
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",

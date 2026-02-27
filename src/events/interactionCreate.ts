@@ -32,6 +32,16 @@ const event: Event = {
 
       try {
         await command.execute(client, interaction, tr, client.db);
+        const sub = (
+          interaction as ChatInputCommandInteraction
+        ).options.getSubcommand(false);
+        const group = (
+          interaction as ChatInputCommandInteraction
+        ).options.getSubcommandGroup(false);
+        const cmdStr = `${command.data.name}${group ? ` ${group}` : ""}${sub ? ` ${sub}` : ""}`;
+        logger.info(
+          `Command ${cmdStr} executed by ${interaction.user.tag} (${interaction.user.id}) in ${interaction.guild?.name ?? "DM"} (${interaction.guildId ?? "DM"})`,
+        );
 
         if (webhook) {
           webhook.send({
@@ -81,15 +91,19 @@ const event: Event = {
               await interaction.deleteReply().catch(() => {});
             }
           } catch {}
-          await interaction.followUp({
-            content: tr("Error"),
-            flags: MessageFlags.Ephemeral,
-          });
+          await interaction
+            .followUp({
+              content: tr("Error"),
+              flags: MessageFlags.Ephemeral,
+            })
+            .catch(() => {});
         } else {
-          await interaction.reply({
-            content: tr("Error"),
-            flags: MessageFlags.Ephemeral,
-          });
+          await interaction
+            .reply({
+              content: tr("Error"),
+              flags: MessageFlags.Ephemeral,
+            })
+            .catch(() => {});
         }
       }
     } else if (interaction.isStringSelectMenu()) {
@@ -106,10 +120,12 @@ const event: Event = {
             `Error handling select menu interaction: ${error.message}`,
           );
           if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({
-              content: tr("Error"),
-              flags: MessageFlags.Ephemeral,
-            });
+            await interaction
+              .followUp({
+                content: tr("Error"),
+                flags: MessageFlags.Ephemeral,
+              })
+              .catch(() => {});
           } else {
             // Try to find a way to reply if not already
             try {

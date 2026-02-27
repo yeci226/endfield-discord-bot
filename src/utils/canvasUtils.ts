@@ -99,60 +99,56 @@ export async function drawDashboard(
 
   // 1. Background
   try {
-    const bgUrl = template.background.url;
-    const bg = bgUrl.startsWith("http")
-      ? await fetchImage(bgUrl)
-      : await loadLocalImage(bgUrl);
+    const bgUrl = template.background?.url;
+    if (bgUrl) {
+      const bg = bgUrl.startsWith("http")
+        ? await fetchImage(bgUrl).catch(() => null)
+        : await loadLocalImage(bgUrl).catch(() => null);
 
-    // 1.1 Handle Background Fill Color
-    if (template.background.fillColor) {
-      ctx.fillStyle = template.background.fillColor;
-      ctx.fillRect(0, 0, width, height);
-    }
+      if (bg) {
+        // 1.1 Handle Background Fill Color
+        if (template.background.fillColor) {
+          ctx.fillStyle = template.background.fillColor;
+          ctx.fillRect(0, 0, width, height);
+        }
 
-    // Main Background Drawing
-    const bgRatio = bg.width / bg.height;
-    const canvasRatio = width / height;
+        // Main Background Drawing
+        const bgRatio = bg.width / bg.height;
+        const canvasRatio = width / height;
 
-    let drawW, drawH, offsetX, offsetY;
+        let drawW, drawH, offsetX, offsetY;
 
-    if (template.background.scale !== undefined) {
-      // Use custom transform if valid
-      const scale = template.background.scale;
-      drawW = bg.width * scale;
-      drawH = bg.height * scale;
-      // Frontend saves center coordinates (originX: center, originY: center)
-      // Backend drawImage expects top-left coordinates
-      // But wait! Creating the offset relative to center of canvas?
-      // No, frontend usually sends X/Y relative to canvas top-left if origin is top-left.
-      // But fabric default origin is center->center.
-      // Let's assume standard top-left mapping for now or use the previous fix.
-      const bgX = template.background.x || 0;
-      const bgY = template.background.y || 0;
-      // Conversion from Center Origin to Top-Left
-      offsetX = bgX - drawW / 2;
-      offsetY = bgY - drawH / 2;
-
-      ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
-    } else {
-      // Default 'Cover' logic
-      if (bgRatio > canvasRatio) {
-        // Background is relatively wider -> match height
-        drawH = height;
-        drawW = height * bgRatio;
-        offsetX = (width - drawW) / 2;
-        offsetY = 0;
+        if (template.background.scale !== undefined) {
+          const scale = template.background.scale;
+          drawW = bg.width * scale;
+          drawH = bg.height * scale;
+          const bgX = template.background.x || 0;
+          const bgY = template.background.y || 0;
+          offsetX = bgX - drawW / 2;
+          offsetY = bgY - drawH / 2;
+          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+        } else {
+          if (bgRatio > canvasRatio) {
+            drawH = height;
+            drawW = height * bgRatio;
+            offsetX = (width - drawW) / 2;
+            offsetY = 0;
+          } else {
+            drawW = width;
+            drawH = width / bgRatio;
+            offsetX = 0;
+            offsetY = (height - drawH) / 2;
+          }
+          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+        }
       } else {
-        // Background is relatively taller -> match width
-        drawW = width;
-        drawH = width / bgRatio;
-        offsetX = 0;
-        offsetY = (height - drawH) / 2;
+        throw new Error("Failed to load background image");
       }
-      ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+    } else {
+      throw new Error("No background URL provided");
     }
   } catch (e) {
-    ctx.fillStyle = "#1e1e1e";
+    ctx.fillStyle = template.background?.fillColor || "#1e1e1e";
     ctx.fillRect(0, 0, width, height);
   }
 
@@ -769,13 +765,31 @@ export async function fetchImage(
   // 2. Fetch remote
   try {
     let response;
+    const headers = {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      Accept:
+        "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    };
+
     try {
-      response = await axios.get(url, { responseType: "arraybuffer" });
+      response = await axios.get(url, {
+        headers,
+        responseType: "arraybuffer",
+        timeout: 10000,
+      });
     } catch (e) {
       // Fallback: If .png fails, try .webp if it's not already webp
       if (url.endsWith(".png")) {
         const webpUrl = url.replace(".png", ".webp");
-        response = await axios.get(webpUrl, { responseType: "arraybuffer" });
+        response = await axios.get(webpUrl, {
+          headers,
+          responseType: "arraybuffer",
+          timeout: 10000,
+        });
       } else {
         throw e;
       }
@@ -789,8 +803,10 @@ export async function fetchImage(
     const img = await loadImage(buffer);
     imageCache.set(url, img);
     return img;
-  } catch (e) {
-    console.error(`Failed to fetch image: ${url}`, e);
+  } catch (e: any) {
+    console.error(
+      `Failed to fetch image: ${url}. Status: ${e.response?.status}. Error: ${e.message}`,
+    );
     throw e;
   }
 }
