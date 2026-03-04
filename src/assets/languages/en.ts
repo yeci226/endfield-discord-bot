@@ -135,7 +135,7 @@ const langs: Record<string, any> = {
   profile_Editor_Prop_FontSize: "Font Size",
   profile_Editor_SelectToEdit: "Select element to adjust",
   profile_Editor_WebLinkDesc:
-    "Click the button below to open the web-based profile editor. This link is valid for 15 minutes. If it expires, please use the command again.",
+    "Click the button below to open the web-based profile editor. This link is valid for 30 minutes. If it expires, please use the command again.",
   profile_Editor_Button: "Open Web Editor",
   profile_Editor_BGModal_Title: "Change Background",
   profile_Editor_BGModal_URL: "Image URL",

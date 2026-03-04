@@ -201,7 +201,7 @@ const command: Command = {
           });
           return;
         }
-        const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
+        const attachment = new AttachmentBuilder(buffer, { name: "card.webp" });
 
         if (!interaction.message || !interaction.message.components[0]) {
           await interaction.followUp({
@@ -287,6 +287,7 @@ const command: Command = {
           buffer = await drawCharacterDetail(
             selectedChar,
             tr,
+            detail,
             equipEnums,
             charIdx + 1,
           );
@@ -295,7 +296,7 @@ const command: Command = {
           throw drawErr;
         }
         const attachment = new AttachmentBuilder(buffer, {
-          name: "detail.png",
+          name: "detail.webp",
         });
 
         if (!interaction.message || !interaction.message.components[0]) {
@@ -418,10 +419,10 @@ const command: Command = {
           Math.random().toString(36).substring(2, 15) +
           Math.random().toString(36).substring(2, 15);
 
-        // Save token to DB with expiry (e.g. 15 mins)
+        // Save token to DB with expiry (e.g. 30 mins)
         await db.set(`profile_edit_token:${token}`, {
           userId,
-          expiresAt: Date.now() + 15 * 60 * 1000,
+          expiresAt: Date.now() + 30 * 60 * 1000,
         });
 
         const baseUrl =
@@ -590,7 +591,7 @@ const command: Command = {
       });
       return;
     }
-    const attachment = new AttachmentBuilder(buffer, { name: "card.png" });
+    const attachment = new AttachmentBuilder(buffer, { name: "card.webp" });
 
     const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${targetUserId}`;
     const selectMenu = new StringSelectMenuBuilder()

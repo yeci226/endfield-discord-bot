@@ -366,7 +366,7 @@ export async function drawGachaLeaderboard(
     }
   }
 
-  return canvas.toBuffer("image/png");
+  return canvas.toBuffer("image/webp", 90);
 }
 
 async function drawRankItem(

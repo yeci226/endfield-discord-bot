@@ -9,7 +9,7 @@ export class ProfileTemplateService {
     authorId: "system",
     background: {
       url: "bg.08c7f0.png",
-      overlay: "rgba(0, 0, 0, 0.4)",
+      overlay: 0.3,
     },
     canvas: {
       width: 2400,
@@ -26,9 +26,9 @@ export class ProfileTemplateService {
         radius: 30,
         visible: true,
       },
-      // Name: padding + avatarSize + 40 = 300, padding + 90 = 170
-      name: { x: 300, y: 170, fontSize: 80, bold: true, visible: true },
-      // Badge: padding + avatarSize + 40 = 300, padding + 150 = 230
+      // Name: Aligned with avatar top area
+      name: { x: 300, y: 130, fontSize: 80, bold: true, visible: true },
+      // Badge: Below name
       badge: { x: 300, y: 225, fontSize: 36, visible: true },
       // Stats Grid: y = 320
       // itemWidth = (2400 - 160 - 90) / 4 = 537.5
@@ -59,12 +59,12 @@ export class ProfileTemplateService {
         height: 180,
         visible: true,
       },
-      // Operators Title: y = realTimeY + sectionH + 140 = 670 + 180 + 140 = 990
-      operatorsTitle: { x: 80, y: 990, fontSize: 50, visible: true },
-      // Operators Grid: y = 1020 (charGridY)
+      // Operators Title: y = 950
+      operatorsTitle: { x: 80, y: 950, fontSize: 50, visible: true },
+      // Operators Grid: y = 980
       operatorsGrid: {
         x: 80,
-        y: 1020,
+        y: 980,
         cols: 10,
         gap: 15,
         charWidth: 210,

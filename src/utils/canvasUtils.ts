@@ -1,9 +1,11 @@
-import {
+﻿import {
   createCanvas,
   loadImage,
   GlobalFonts,
   CanvasRenderingContext2D,
+  SKRSContext2D,
   Image,
+  Path2D,
 } from "@napi-rs/canvas";
 import path from "path";
 import fs from "fs";
@@ -24,6 +26,14 @@ GlobalFonts.registerFromPath(
 GlobalFonts.registerFromPath(
   path.join(fontDir, "Noto-Sans-TC-700.woff2"),
   "NotoSansTCBold",
+);
+GlobalFonts.registerFromPath(
+  path.join(fontDir, "Orbitron-400.ttf"),
+  "Orbitron",
+);
+GlobalFonts.registerFromPath(
+  path.join(fontDir, "Orbitron-700.ttf"),
+  "OrbitronBold",
 );
 
 const ASSETS_DIR = path.join(__dirname, "../assets");
@@ -153,13 +163,96 @@ export async function drawDashboard(
   }
 
   // Overlay
-  if (template.background.overlay) {
-    ctx.fillStyle = template.background.overlay;
-    ctx.fillRect(0, 0, width, height);
+  if (template.background.overlay !== undefined) {
+    let alpha = 0;
+    if (typeof template.background.overlay === "number") {
+      alpha = template.background.overlay;
+    } else if (typeof template.background.overlay === "string") {
+      if (template.background.overlay.includes("rgba")) {
+        const match = template.background.overlay.match(
+          /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/,
+        );
+        if (match) alpha = parseFloat(match[1]);
+        else alpha = 0.3;
+      } else {
+        alpha = parseFloat(template.background.overlay);
+      }
+    }
+
+    if (!isNaN(alpha) && alpha > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+      ctx.fillRect(0, 0, width, height);
+    }
   }
 
+  const hasFabric = !!(
+    template.fabricJson &&
+    template.fabricJson.objects &&
+    template.fabricJson.objects.length > 0
+  );
+  const skipIfFabric = (key: string) => {
+    if (!hasFabric) return false;
+    try {
+      const fabric =
+        typeof template.fabricJson === "string"
+          ? JSON.parse(template.fabricJson)
+          : template.fabricJson;
+      const objs = fabric.objects;
+      if (!objs || !Array.isArray(objs)) return false;
+
+      // Section to Sub-key Mapping
+      // If any of these sub-keys exist, we skip the whole hardcoded section.
+      const sectionMapping: Record<string, string[]> = {
+        avatar: ["avatar"],
+        name: ["name"],
+        badge: ["badge"],
+        statsGrid: [
+          "statsGrid",
+          "stat_worldLevel",
+          "stat_charNum",
+          "stat_weaponNum",
+          "stat_docNum",
+        ],
+        missionBox: [
+          "missionBox",
+          "mission_bg",
+          "mission_content",
+          "mission_title",
+        ],
+        authLevelBox: ["authLevelBox", "auth_bg", "auth_val", "auth_label"],
+        realtimeTitle: ["realtimeTitle", "realtime_text", "title_text"],
+        // NOTE: staminaBox and operatorsGrid are intentionally NOT listed here.
+        // Their rendering is too complex (dynamic dot, recovery pill, white card bg, avatars, etc.)
+        // for drawFabricObjects to reproduce, so we always use hardcoded rendering.
+        activityBpBox: [
+          "activityBpBox",
+          "activity_bg",
+          "act_daily_val",
+          "act_bp_val",
+        ],
+        operatorsTitle: ["operatorsTitle", "operators_title"],
+      };
+
+      const keysToSearch = sectionMapping[key] || [key];
+
+      const findInObjects = (items: any[]): boolean => {
+        for (const it of items) {
+          const itKey = it.data?.key || it.data?.id || it.name;
+          if (keysToSearch.includes(itKey)) return true;
+          if (it.type === "group" && it.objects) {
+            if (findInObjects(it.objects)) return true;
+          }
+        }
+        return false;
+      };
+      return findInObjects(objs);
+    } catch (e) {
+      return false;
+    }
+  };
+
   // Header (Avatar + Info)
-  if (el.avatar.visible) {
+  if (el.avatar.visible && !skipIfFabric("avatar")) {
     const avatarSize = el.avatar.width || 180;
     // Draw Avatar
     ctx.save();
@@ -191,22 +284,24 @@ export async function drawDashboard(
   }
 
   // Name
-  if (el.name.visible) {
+  if (el.name.visible && !skipIfFabric("name")) {
     ctx.fillStyle = el.name.color || "#ffffff";
     const nameMaxW = width - el.name.x - padding; // Approximate
-    fillDynamicText(
-      ctx,
-      base.name,
+    ctx.font = `${el.name.bold !== false ? "bold " : ""}${el.name.fontSize || 80}px NotoSans`;
+    ctx.fillText(
+      replacePlaceholders(base.name, {
+        base,
+        dungeon: detail.dungeon,
+        dailyMission: detail.dailyMission,
+        bpSystem: detail.bpSystem,
+      }),
       el.name.x,
-      el.name.y,
-      nameMaxW,
-      el.name.fontSize || 80,
-      el.name.bold !== false,
+      el.name.y + (el.name.fontSize || 80),
     );
   }
 
   // Badge / Info Text
-  if (el.badge.visible) {
+  if (el.badge.visible && !skipIfFabric("badge")) {
     ctx.font = `${el.badge.fontSize || 32}px NotoSans`;
     ctx.fillStyle = el.badge.color || "#aaaaaa";
     const awakeDate = moment(parseInt(base.createTime) * 1000).format(
@@ -225,9 +320,10 @@ export async function drawDashboard(
         ctx,
         badgeText,
         el.badge.x,
-        el.badge.y,
+        el.badge.y + (el.badge.fontSize || 32),
         infoMaxW,
         el.badge.fontSize || 32,
+        detail,
         false,
       );
 
@@ -239,12 +335,21 @@ export async function drawDashboard(
     } else {
       // CN/TW
       ctx.font = `${el.badge.fontSize || 36}px NotoSans`;
-      ctx.fillText(`${badgeText} | ${base.serverName}`, el.badge.x, el.badge.y);
+      ctx.fillText(
+        replacePlaceholders(`${badgeText} | ${base.serverName}`, {
+          base,
+          dungeon: detail.dungeon,
+          dailyMission: detail.dailyMission,
+          bpSystem: detail.bpSystem,
+        }),
+        el.badge.x,
+        el.badge.y + (el.badge.fontSize || 36),
+      );
     }
   }
 
   // 3. Stats Grid
-  if (el.statsGrid.visible) {
+  if (el.statsGrid.visible && !skipIfFabric("statsGrid")) {
     const itemW = el.statsGrid.itemWidth || 537.5;
     const itemH = el.statsGrid.height || 140;
     const gap = el.statsGrid.gap || 30;
@@ -262,7 +367,7 @@ export async function drawDashboard(
       roundRect(ctx, x, el.statsGrid.y, itemW, itemH, 20, true);
 
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.font = "56px NotoSansTCBold";
       ctx.textAlign = "center";
       ctx.fillText(stat.value, x + itemW / 2, el.statsGrid.y + 65);
 
@@ -276,7 +381,7 @@ export async function drawDashboard(
   // 3.5. Mission & Level
 
   // Mission Box
-  if (el.missionBox.visible) {
+  if (el.missionBox.visible && !skipIfFabric("missionBox")) {
     const mlY = el.missionBox.y;
     const mlH = el.missionBox.height || 160;
     const missionW = el.missionBox.width || 1558;
@@ -286,22 +391,30 @@ export async function drawDashboard(
 
     if (base.mainMission) {
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 60px NotoSansTCBold";
+      ctx.font = "60px NotoSansTCBold";
       ctx.textAlign = "left";
       ctx.fillText(
-        base.mainMission.description,
+        replacePlaceholders(base.mainMission.description, {
+          base,
+          dungeon: detail.dungeon,
+          dailyMission: detail.dailyMission,
+          bpSystem: detail.bpSystem,
+        }),
         el.missionBox.x + 40,
-        mlY + 70,
+        mlY + 30 + 60, // Original baseline logic
       );
-
       ctx.fillStyle = "#aaaaaa";
       ctx.font = "32px NotoSans";
-      ctx.fillText(tr("canvas_MainMission"), el.missionBox.x + 40, mlY + 120);
+      ctx.fillText(
+        tr("canvas_MainMission"),
+        el.missionBox.x + 40,
+        mlY + 100 + 32,
+      );
     }
   }
 
   // Level Box
-  if (el.authLevelBox.visible) {
+  if (el.authLevelBox.visible && !skipIfFabric("authLevelBox")) {
     const authX = el.authLevelBox.x;
     const authY = el.authLevelBox.y;
     const authW = el.authLevelBox.width || 662;
@@ -311,71 +424,87 @@ export async function drawDashboard(
     roundRect(ctx, authX, authY, authW, authH, 20, true);
 
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 80px NotoSansTCBold";
+    ctx.font = "80px NotoSansTCBold";
     ctx.textAlign = "center";
-    ctx.fillText(base.level.toString(), authX + authW / 2, authY + 80);
-
+    ctx.fillText(
+      replacePlaceholders(base.level.toString(), {
+        base,
+        dungeon: detail.dungeon,
+        dailyMission: detail.dailyMission,
+        bpSystem: detail.bpSystem,
+      }),
+      authX + authW / 2,
+      authY + 25 + 80,
+    );
     ctx.fillStyle = "#aaaaaa";
     ctx.font = "32px NotoSans";
-    ctx.fillText(tr("canvas_AuthLevel"), authX + authW / 2, authY + 130);
+    ctx.fillText(tr("canvas_AuthLevel"), authX + authW / 2, authY + 105 + 32);
     ctx.textAlign = "left";
   }
 
   // 4. Real-time Data Title
-  if (el.realtimeTitle.visible) {
+  if (el.realtimeTitle.visible && !skipIfFabric("realtimeTitle")) {
     const rtY = el.realtimeTitle.y;
     const rtX = el.realtimeTitle.x; // 150
 
+    ctx.save();
+    if (el.realtimeTitle.angle)
+      ctx.rotate((el.realtimeTitle.angle * Math.PI) / 180);
+    if (el.realtimeTitle.scaleX || el.realtimeTitle.scaleY)
+      ctx.scale(el.realtimeTitle.scaleX || 1, el.realtimeTitle.scaleY || 1);
+
     // Default style based on original
     ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${el.realtimeTitle.fontSize || 50}px NotoSansTCBold`;
-    // The old code drew rects relative to "padding".
-    // Need to adjust to new dynamic X if possible, or stick to padding logic if X is close to padding?
-    // Old logic: text at padding + 70 (150). Rects at padding.
-    // So if el.realtimeTitle.x is 150, the rects should be at x - 70 = 80?
-    const decorX = rtX - 70; // 80 (Padding)
+    ctx.font = `${el.realtimeTitle.fontSize || 50}px NotoSansTCBold`;
+    const decorX = rtX;
 
-    ctx.fillText(tr("canvas_RealtimeData"), rtX, rtY + 40);
+    // Editor: group is at X, text at group + 70
+    ctx.fillText(tr("canvas_RealtimeData"), rtX + 70, rtY + 40);
 
-    // Rects
+    // Rects aligned with editor's group local [0, 20, 40]
     ctx.fillRect(decorX, rtY + 10, 12, 35);
     ctx.fillRect(decorX + 20, rtY - 5, 12, 50);
     ctx.fillRect(decorX + 40, rtY + 15, 12, 25);
+    ctx.restore();
   }
 
   const { dungeon, dailyMission, bpSystem } = detail;
 
   // Stamina Box (Left)
-  if (el.staminaBox.visible && dungeon) {
+  if (el.staminaBox.visible && dungeon && !skipIfFabric("staminaBox")) {
     const staX = el.staminaBox.x;
     const staY = el.staminaBox.y;
     const staW = el.staminaBox.width || 750;
     const staH = el.staminaBox.height || 180;
+
+    ctx.save();
+    if (el.staminaBox.angle) ctx.rotate((el.staminaBox.angle * Math.PI) / 180);
+    if (el.staminaBox.scaleX || el.staminaBox.scaleY)
+      ctx.scale(el.staminaBox.scaleX || 1, el.staminaBox.scaleY || 1);
 
     ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
     roundRect(ctx, staX, staY, staW, staH, 20, true);
 
     ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 70px NotoSansTCBold";
-    const curStamina = dungeon.curStamina;
-    // Y from top: staY + 80? Original was realTimeY + 160.
-    // realTimeY = 670. staY = 750. Diff = 80. So realTimeY + 160 = staY + 80.
-    ctx.fillText(curStamina, staX + 40, staY + 80);
-    const curWidth = ctx.measureText(curStamina).width;
-
-    ctx.fillStyle = "#aaaaaa";
+    ctx.font = "75px NotoSansTCBold"; // Editor uses 75
+    const curStamina = replacePlaceholders(dungeon.curStamina.toString(), {
+      base,
+      dungeon: detail.dungeon,
+      dailyMission: detail.dailyMission,
+      bpSystem: detail.bpSystem,
+    });
+    ctx.fillText(curStamina, staX + 40, staY + 25 + 75);
+    // Editor uses a fixed offset of 75 for the "/" part
+    const slashX = staX + 40 + 75 + 15;
+    ctx.fillStyle = "#666666"; // Editor uses #666
     ctx.font = "36px NotoSans";
-    ctx.fillText(
-      `/ ${dungeon.maxStamina}`,
-      staX + 40 + curWidth + 15,
-      staY + 80,
-    );
+    ctx.fillText(`/ ${dungeon.maxStamina}`, slashX, staY + 55 + 36);
 
     // Recovery Time Logics
     const now = Math.floor(Date.now() / 1000);
     const maxTs = parseInt(dungeon.maxTs);
-    let recoveryText = "已完全恢復";
+    let recoveryText = "未獲取到恢復時間";
     let diff = 0;
     if (
       maxTs > now &&
@@ -396,14 +525,26 @@ export async function drawDashboard(
     const dotColor = `hsl(${hue}, 100%, 50%)`;
 
     // Dimensions
-    ctx.font = "30px NotoSans";
-    const recTextW = ctx.measureText(recoveryText).width;
     const dotR = 8;
     const dotGap = 12;
     const pillPaddingX = 20;
     const pillPaddingY = 12;
-    const pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
-    const pillH = 30 + pillPaddingY * 2;
+    const maxPillW = staW * 0.55; // Cap pill width to ~55% of stamina box
+
+    let pillFontSize = 30;
+    ctx.font = `${pillFontSize}px NotoSans`;
+    let recTextW = ctx.measureText(recoveryText).width;
+    let pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
+
+    // Shrink font if pill overflows
+    while (pillW > maxPillW && pillFontSize > 18) {
+      pillFontSize -= 2;
+      ctx.font = `${pillFontSize}px NotoSans`;
+      recTextW = ctx.measureText(recoveryText).width;
+      pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
+    }
+
+    const pillH = pillFontSize + pillPaddingY * 2;
 
     const pillX = staX + staW - pillW - 30; // Right aligned
     const pillY = staY + 30; // approx
@@ -422,21 +563,26 @@ export async function drawDashboard(
     // Draw Text
     ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(recoveryText, dotX + dotR + dotGap, pillY + pillH / 2 + 11);
+    ctx.font = `${pillFontSize}px NotoSans`;
+    ctx.fillText(
+      recoveryText,
+      dotX + dotR + dotGap,
+      pillY + pillH / 2 + Math.round(pillFontSize / 3),
+    );
 
     // Labels
     ctx.textAlign = "left";
-    ctx.fillStyle = "#aaaaaa";
+    ctx.fillStyle = "#888888"; // Editor uses #888
     ctx.font = "24px NotoSans";
-    const labelY = staY + 130;
-    ctx.fillText(tr("canvas_Stamina"), staX + 40, labelY);
+    ctx.fillText(tr("canvas_Stamina"), staX + 40, staY + 110 + 24);
     ctx.textAlign = "right";
-    ctx.fillText(tr("canvas_RecoveryTime"), staX + staW - 30, labelY);
+    ctx.fillText(tr("canvas_RecoveryTime"), staX + staW - 30, staY + 110 + 24);
     ctx.textAlign = "left";
+    ctx.restore();
   }
 
   // Activity Box (Right)
-  if (el.activityBpBox.visible) {
+  if (el.activityBpBox.visible && !skipIfFabric("activityBpBox")) {
     const actX = el.activityBpBox.x;
     const actY = el.activityBpBox.y;
     const actW = el.activityBpBox.width || 1450;
@@ -444,55 +590,71 @@ export async function drawDashboard(
     const halfW = actW / 2;
     const centerY = actY + actH / 2;
 
+    ctx.save();
+    if (el.activityBpBox.angle)
+      ctx.rotate((el.activityBpBox.angle * Math.PI) / 180);
+    if (el.activityBpBox.scaleX || el.activityBpBox.scaleY)
+      ctx.scale(el.activityBpBox.scaleX || 1, el.activityBpBox.scaleY || 1);
+
     ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
     roundRect(ctx, actX, actY, actW, actH, 20, true);
 
     if (dailyMission) {
       ctx.textAlign = "center";
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.font = "60px NotoSansTCBold";
       ctx.fillText(
         `${dailyMission.dailyActivation}/${dailyMission.maxDailyActivation}`,
         actX + halfW / 2,
-        centerY + 10,
+        actY + 35 + 60,
       );
-      ctx.fillStyle = "#aaaaaa";
+      ctx.fillStyle = "#888888"; // Editor uses #888
       ctx.font = "28px NotoSans";
-      ctx.fillText(tr("canvas_Activity"), actX + halfW / 2, centerY + 55);
+      ctx.fillText(tr("canvas_Activity"), actX + halfW / 2, actY + 100 + 28);
     }
 
     if (bpSystem) {
       ctx.textAlign = "center";
       ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 56px NotoSansTCBold";
+      ctx.font = "60px NotoSansTCBold";
       ctx.fillText(
         `${bpSystem.curLevel}/${bpSystem.maxLevel}`,
         actX + halfW + halfW / 2,
-        centerY + 10,
+        actY + 35 + 60,
       );
-      ctx.fillStyle = "#aaaaaa";
+      ctx.fillStyle = "#888888";
       ctx.font = "28px NotoSans";
-      ctx.fillText(tr("canvas_BP"), actX + halfW + halfW / 2, centerY + 55);
+      ctx.fillText(tr("canvas_BP"), actX + halfW + halfW / 2, actY + 100 + 28);
     }
     ctx.textAlign = "left";
+    ctx.restore();
   }
 
   // Operators Title
-  if (el.operatorsTitle.visible) {
-    ctx.textAlign = "left";
+  if (el.operatorsTitle.visible && !skipIfFabric("operatorsTitle")) {
+    ctx.save();
     ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${el.operatorsTitle.fontSize || 50}px NotoSansTCBold`;
+    ctx.font = `${el.operatorsTitle.fontSize || 50}px NotoSansTCBold`;
+    // Align with editor's NotoSansTC (default is centered or relative to group)
+    // In editor, operators title is just a text at x, y
     ctx.fillText(
       tr("canvas_Operators"),
       el.operatorsTitle.x,
-      el.operatorsTitle.y,
+      el.operatorsTitle.y + (el.operatorsTitle.fontSize || 50), // Approx baseline
     );
+    ctx.restore();
   }
 
   // Operators Grid
-  if (el.operatorsGrid.visible) {
+  if (el.operatorsGrid.visible && !skipIfFabric("operatorsGrid")) {
     const gridX = el.operatorsGrid.x;
     const gridY = el.operatorsGrid.y;
+
+    ctx.save();
+    if (el.operatorsGrid.angle)
+      ctx.rotate((el.operatorsGrid.angle * Math.PI) / 180);
+    if (el.operatorsGrid.scaleX || el.operatorsGrid.scaleY)
+      ctx.scale(el.operatorsGrid.scaleX || 1, el.operatorsGrid.scaleY || 1);
 
     // Asset Preloading
     const charAssetsPromises = chars.map(async (char) => {
@@ -637,7 +799,7 @@ export async function drawDashboard(
       ctx.fillText("Lv.", x + 10, y + charImageSize - 18);
       const lvPrefixWidth = ctx.measureText("Lv.").width;
 
-      ctx.font = "bold 28px NotoSansTCBold";
+      ctx.font = "28px NotoSansTCBold";
       ctx.strokeText(
         levelText,
         x + 10 + lvPrefixWidth + 2,
@@ -703,38 +865,229 @@ export async function drawDashboard(
         y + charImageSize + 35,
       );
     }
+    ctx.restore();
   }
 
   // Fabric Objects support (for User Edited Stuff)
   if (template.fabricJson && template.fabricJson.objects) {
-    // NOTE: This usually replaces the entire drawing logic if present,
-    // but for "User Editing" we usually want to draw the *fabric objects* ON TOP
-    // or instead of the hardcoded stuff.
-    // However, the current logic in previous steps was: "If fabricJson exists, draw ONLY fabricJson".
-    // This is because fabricJson represents the *entire* state of the canvas including background and elements.
-    // So if the user has saved a layout, we should rely on fabricJson.
-    // BUT, my `drawOperatorsGrid` here is manual canvas drawing.
-    // If the user *edits* the grid in frontend, it is saved as a custom object or as properties?
-    // The frontend uses "operatorsGrid" element properties.
-    // If fabricJson is present, it means the user saved a custom layout.
-    // The previous code had:
-    /*
-      if (template.fabricJson && template.fabricJson.objects) {
-         await drawFabricObjects(template.fabricJson.objects);
-         return canvas.toBuffer("image/png");
-      }
-      */
-    // I should restore this capability to support the "Editor" part of the request.
-    // I'll add the helper function `drawFabricObjects` and the check at the end.
-    // UNLESS the user wants the ability to edit specific elements while keeping others default?
-    // Typically, once you save in editor, you get a full fabricJson.
-    // So I'll add the fabric drawing helper and check at the end (or beginning of fallback).
-    // Wait, if I draw manual canvas calls FIRST, and then check fabricJson, do I overwrite?
-    // If fabricJson exists, we should probably output THAT instead of the manual drawing.
-    // So I'll add the block for fabricJson.
+    await drawFabricObjects(ctx, template.fabricJson.objects);
   }
 
-  return canvas.toBuffer("image/png");
+  return canvas.toBuffer("image/webp", 90);
+}
+
+async function drawFabricObjects(
+  ctx: SKRSContext2D,
+  objects: any[],
+  parent: any = null,
+) {
+  for (const obj of objects) {
+    if (obj.visible === false) continue;
+    if (obj.data?.key === "system_overlay") continue;
+
+    ctx.save();
+
+    // Fabric.js Group handling:
+    // If we are in a group, the coordinates (left, top) of child objects are relative to the group's CENTER.
+    const originX = obj.originX || "left";
+    const originY = obj.originY || "top";
+
+    ctx.translate(obj.left, obj.top);
+
+    ctx.rotate((obj.angle * Math.PI) / 180);
+    ctx.scale(obj.scaleX || 1, obj.scaleY || 1);
+    ctx.globalAlpha =
+      (obj.opacity !== undefined ? obj.opacity : 1) * (ctx.globalAlpha || 1);
+
+    // Adjust for origins
+    let offsetX = 0;
+    let offsetY = 0;
+
+    // Correct translation for Fabric.js logic:
+    // If it's a child of a group, we are already translated to the object's relative center.
+    // If it's a top-level object, left/top is usually the top-left corner UNLESS originX/Y is center.
+    if (originX === "center") offsetX = -obj.width / 2;
+    if (originY === "center") offsetY = -obj.height / 2;
+
+    // Handle nested scaling and translation for children of groups
+    if (parent) {
+      // In a group, objects are positioned relative to the center of the group
+      // No extra move needed if skipFabric logic is followed correctly,
+      // but we must ENSURE we don't double-translate if the origin is already handled.
+    }
+
+    switch (obj.type) {
+      case "group":
+        if (obj.objects) {
+          // In Fabric, children of a group are relative to the group's center.
+          // Since we translated to obj.left/top, we must check if that was the top-left or center.
+          ctx.save();
+          if (originX === "left") ctx.translate(obj.width / 2, 0);
+          if (originY === "top") ctx.translate(0, obj.height / 2);
+
+          await drawFabricObjects(ctx, obj.objects, obj);
+          ctx.restore();
+        }
+        break;
+
+      case "rect":
+        ctx.fillStyle = obj.fill || "transparent";
+        if (obj.rx || obj.ry) {
+          roundRect(
+            ctx,
+            offsetX,
+            offsetY,
+            obj.width,
+            obj.height,
+            obj.rx || obj.ry,
+            true,
+          );
+        } else {
+          ctx.fillRect(offsetX, offsetY, obj.width, obj.height);
+        }
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          if (obj.rx || obj.ry) {
+            roundRect(
+              ctx,
+              offsetX,
+              offsetY,
+              obj.width,
+              obj.height,
+              obj.rx || obj.ry,
+              false,
+            );
+          } else {
+            ctx.strokeRect(offsetX, offsetY, obj.width, obj.height);
+          }
+        }
+        break;
+
+      case "text":
+      case "i-text":
+      case "itext":
+      case "textbox":
+        ctx.fillStyle = obj.fill || "white";
+        // Map common fonts
+        let fontFamily = "NotoSans";
+        let weightStr = "";
+
+        if (obj.fontFamily?.includes("Orbitron")) {
+          if (obj.fontWeight === "bold" || obj.fontWeight > 500) {
+            fontFamily = "OrbitronBold";
+            weightStr = ""; // Don't add 'bold' if using Bold face
+          } else {
+            fontFamily = "Orbitron";
+          }
+        } else if (obj.fontFamily?.includes("Noto Sans TC")) {
+          if (obj.fontWeight === "bold" || obj.fontWeight > 500) {
+            fontFamily = "NotoSansTCBold";
+            weightStr = "";
+          } else {
+            fontFamily = "NotoSans";
+          }
+        } else {
+          weightStr = obj.fontWeight === "bold" ? "bold " : "";
+        }
+
+        ctx.font = `${weightStr}${obj.fontSize}px ${fontFamily}`;
+        ctx.textAlign =
+          obj.originX === "center"
+            ? "center"
+            : obj.originX === "right"
+              ? "right"
+              : "left";
+        ctx.textBaseline =
+          obj.originY === "center"
+            ? "middle"
+            : obj.originY === "bottom"
+              ? "bottom"
+              : "top";
+
+        // Logic fix: Since we already translated to the anchor point (obj.left, obj.top),
+        // we draw at (0,0) relative to that anchor.
+        // Fabric origin alignment handles the rest.
+        const renderedText = replacePlaceholders(
+          obj.text || "",
+          parent?.data?.detail || {},
+        );
+        ctx.fillText(renderedText, 0, 0);
+
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          ctx.strokeText(renderedText, 0, 0);
+        }
+        break;
+
+      case "line":
+        ctx.strokeStyle = obj.stroke || "white";
+        ctx.lineWidth = obj.strokeWidth || 1;
+        ctx.beginPath();
+        ctx.moveTo(obj.x1 - obj.width / 2, obj.y1 - obj.height / 2);
+        ctx.lineTo(obj.x2 - obj.width / 2, obj.y2 - obj.height / 2);
+        ctx.stroke();
+        break;
+
+      case "image":
+        const imgSrc = obj.src || obj.data?.src;
+        if (imgSrc) {
+          try {
+            const isProxy = imgSrc.includes("/api/proxy?url=");
+            let img;
+            if (isProxy) {
+              const realUrl = decodeURIComponent(imgSrc.split("url=")[1]);
+              img = await fetchImage(realUrl);
+            } else {
+              const imgUrl = imgSrc.startsWith("/")
+                ? imgSrc.substring(1)
+                : imgSrc;
+              img = imgSrc.startsWith("http")
+                ? await fetchImage(imgSrc)
+                : await loadLocalImage(imgUrl);
+            }
+
+            if (img) {
+              ctx.drawImage(img, offsetX, offsetY, obj.width, obj.height);
+            }
+          } catch (e) {}
+        }
+        break;
+
+        if (obj.path) {
+          ctx.save();
+          // Logic fix for Operator Cards:
+          // Paths (especially complex ones like the card frame) need to be drawn relative to their top-left
+          // if originX/Y is top/left, or centered if originX/Y is center.
+          // Since we already translated to (obj.left, obj.top), we use offsetX/Y here.
+          ctx.translate(offsetX, offsetY);
+
+          ctx.fillStyle = obj.fill || "transparent";
+          ctx.strokeStyle = obj.stroke || "transparent";
+          ctx.lineWidth = obj.strokeWidth || 0;
+
+          const p = new Path2D(
+            obj.path.map((seg: any) => seg.join(" ")).join(" "),
+          );
+          if (obj.fill && obj.fill !== "transparent") ctx.fill(p);
+          if (obj.stroke && obj.stroke !== "transparent") ctx.stroke(p);
+          ctx.restore();
+        }
+        break;
+    }
+
+    ctx.restore();
+  }
+}
+
+async function loadLocalImage(relPath: string) {
+  if (imageCache.has(relPath)) return imageCache.get(relPath)!;
+  const fullPath = path.join(ASSETS_DIR, relPath);
+  if (!fs.existsSync(fullPath)) return null;
+  const img = await loadImage(fs.readFileSync(fullPath));
+  imageCache.set(relPath, img);
+  return img;
 }
 
 export async function fetchImage(
@@ -812,7 +1165,7 @@ export async function fetchImage(
 }
 
 function roundRect(
-  ctx: CanvasRenderingContext2D,
+  ctx: SKRSContext2D,
   x: number,
   y: number,
   w: number,
@@ -857,30 +1210,69 @@ function parseEffectString(effectStr: string, params: any): string {
   return res;
 }
 
+function replacePlaceholders(text: string, detail: any): string {
+  if (!text.includes("{")) return text;
+
+  const b = detail.base || {};
+  const d = detail.dungeon || {};
+  const m = b.mainMission || {};
+  const act = detail.dailyMission || {};
+  const bp = detail.bpSystem || {};
+
+  const placeholders: Record<string, any> = {
+    "{uid}": b.roleId || "",
+    "{name}": b.name || "",
+    "{server}": b.serverName || "",
+    "{exploreLevel}": b.worldLevel || 0,
+    "{charNum}": b.charNum || 0,
+    "{weaponNum}": b.weaponNum || 0,
+    "{docNum}": b.docNum || 0,
+    "{staminaCur}": d.curStamina || 0,
+    "{staminaMax}": d.maxStamina || 240,
+    "{authLevel}": b.level || 1,
+    "{mainMission}": m.description || "",
+    "{actDaily}": act.dailyActivation || 0,
+    "{actDailyMax}": act.maxDailyActivation || 100,
+    "{bpLevel}": bp.curLevel || 1,
+    "{bpMaxLevel}": bp.maxLevel || 50,
+  };
+
+  let result = text;
+  for (const [key, val] of Object.entries(placeholders)) {
+    result = result.split(key).join(String(val));
+  }
+  return result;
+}
+
 function fillDynamicText(
-  ctx: CanvasRenderingContext2D,
+  ctx: SKRSContext2D,
   text: string,
   x: number,
   y: number,
   maxWidth: number,
   baseFontSize: number,
-  bold: boolean = true,
+  detail: any,
+  bold: boolean,
 ) {
   let fontSize = baseFontSize;
-  ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
+  ctx.font = `${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
   let textWidth = ctx.measureText(text).width;
 
   while (textWidth > maxWidth && fontSize > 20) {
     fontSize -= 2;
-    ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
+    ctx.font = `${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
     textWidth = ctx.measureText(text).width;
   }
 
-  ctx.fillText(text, x, y, maxWidth);
+  const oldBaseline = ctx.textBaseline;
+  ctx.textBaseline = "top";
+  const renderedText = replacePlaceholders(text, detail);
+  ctx.fillText(renderedText, x, y, maxWidth);
+  ctx.textBaseline = oldBaseline;
 }
 
 function wrapText(
-  ctx: CanvasRenderingContext2D,
+  ctx: SKRSContext2D,
   text: string,
   x: number,
   y: number,
@@ -937,6 +1329,7 @@ function wrapText(
 export async function drawCharacterDetail(
   char: any,
   tr: any,
+  detail: any,
   enums: any[] = [],
   charIndex: number = 1,
 ): Promise<Buffer> {
@@ -1061,7 +1454,7 @@ export async function drawCharacterDetail(
   ctx.font = "bold 80px NotoSansTCBold";
   ctx.letterSpacing = "4px";
   ctx.fillText(
-    `ENDFIELD INDUSTRIES — ${charIndex.toString().padStart(2, "0")}`,
+    `ENDFIELD INDUSTRIES -- ${charIndex.toString().padStart(2, "0")}`,
     0,
     0,
   );
@@ -1133,8 +1526,9 @@ export async function drawCharacterDetail(
       infoY + 60,
       nameMaxWidth,
       80,
+      detail,
+      true,
     );
-
     const charRarity = parseInt(char.charData.rarity?.value) || 0;
     const charStarS = 40;
     for (let i = 0; i < charRarity; i++) {
@@ -1180,7 +1574,7 @@ export async function drawCharacterDetail(
     ctx.font = "44px NotoSans";
     ctx.fillText(labelText, startX + numW + 10, infoY + 70);
 
-    // 菁英化顯示 (Phase Indicator) - 1.png + bg.png (Refined v2)
+    // ?蹓橘?謖嚗?(Phase Indicator) - 1.png + bg.png (Refined v2)
     const phase = Number(char.evolvePhase) || 0;
     if (phase > 0) {
       try {
@@ -1534,6 +1928,8 @@ export async function drawCharacterDetail(
         rowCenterY + nudge,
         nameMaxWidth,
         baseNameSize,
+        detail,
+        true,
       );
 
       ctx.font = `bold ${baseNameSize}px NotoSansTCBold`;
@@ -1697,5 +2093,5 @@ export async function drawCharacterDetail(
     await drawEquipCard(e, ex, ey, colW2, itemH_R, e.hideSkill);
   }
 
-  return canvas.toBuffer("image/png");
+  return canvas.toBuffer("image/webp", 90);
 }

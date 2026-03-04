@@ -73,5 +73,19 @@ export class ExtendedClient extends Client {
     this.logger.success(
       `Client logged in. Shards: ${getInfo().SHARD_LIST.join(", ")}`,
     );
+
+    // Memory monitoring
+    setInterval(
+      () => {
+        const used = process.memoryUsage();
+        const heapUsedMB = (used.heapUsed / 1024 / 1024).toFixed(2);
+        const heapTotalMB = (used.heapTotal / 1024 / 1024).toFixed(2);
+        const rssMB = (used.rss / 1024 / 1024).toFixed(2);
+        this.logger.info(
+          `Memory Status: Heap Used: ${heapUsedMB} MB / Total: ${heapTotalMB} MB | RSS: ${rssMB} MB`,
+        );
+      },
+      15 * 60 * 1000,
+    ); // Every 15 minutes
   }
 }

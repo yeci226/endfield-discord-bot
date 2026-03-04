@@ -7,6 +7,8 @@ export interface ProfileElement {
   color?: string;
   visible?: boolean;
   angle?: number;
+  scaleX?: number;
+  scaleY?: number;
   shadowOffset?: number;
   shadowBlur?: number;
   stroke?: string;
@@ -19,7 +21,7 @@ export interface ProfileTemplate {
   authorId?: string;
   background: {
     url: string; // "bg.08c7f0.png" or "https://..."
-    overlay?: string; // "rgba(0,0,0,0.4)"
+    overlay?: number | string; // 0.3 or "rgba(0,0,0,0.4)"
     x?: number;
     y?: number;
     scale?: number;

@@ -416,7 +416,7 @@ const command: Command = {
         page,
       );
       const attachment = new AttachmentBuilder(image, {
-        name: "gacha_stats.png",
+        name: "gacha_stats.webp",
       });
 
       // Build pagination buttons only for detailed mode
@@ -720,7 +720,7 @@ const command: Command = {
       );
 
       const attachment = new AttachmentBuilder(image, {
-        name: "gacha_leaderboard.png",
+        name: "gacha_leaderboard.webp",
       });
 
       await interaction.editReply({

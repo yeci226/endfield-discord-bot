@@ -587,8 +587,10 @@ export async function clearGachaLog(
     const rawTs = r.gachaTs;
     const ts =
       typeof rawTs === "string" && /^\d+$/.test(rawTs)
-        ? moment(Number(rawTs)).valueOf()
-        : moment(rawTs).valueOf();
+        ? Number(rawTs)
+        : /^\d+$/.test(String(rawTs))
+          ? Number(rawTs)
+          : moment(rawTs).valueOf();
     return ts < start || ts > end;
   };
 
@@ -616,15 +618,18 @@ export async function clearGachaLog(
  * Retrospectively sync all existing gacha logs in the database to the leaderboard
  */
 export async function syncExistingLogsToLeaderboard(db: CustomDatabase) {
-  const allLogs = await db.findByPrefix<GachaLogData>("GACHA_LOG_");
+  const logIds = await db.findIdsByPrefix("GACHA_LOG_");
   console.log(
-    `[Leaderboard Sync] Found ${allLogs.length} existing logs to sync.`,
+    `[Leaderboard Sync] Found ${logIds.length} existing logs to sync.`,
   );
 
-  for (const log of allLogs) {
-    const uid = log.id.replace("GACHA_LOG_", "");
+  for (const id of logIds) {
+    const uid = id.replace("GACHA_LOG_", "");
     try {
-      await updateLeaderboard(db, uid, log.value);
+      const data = await db.get<GachaLogData>(id);
+      if (data) {
+        await updateLeaderboard(db, uid, data);
+      }
     } catch (e) {
       console.error(`[Leaderboard Sync] Failed to sync ${uid}:`, e);
     }

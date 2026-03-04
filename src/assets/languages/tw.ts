@@ -115,7 +115,7 @@ const langs: Record<string, any> = {
   profile_Config_Share: "分享目前的面版",
   profile_Config_Reset: "重設為預設面版",
   profile_Editor_WebLinkDesc:
-    "點擊下方按鈕開啟網頁版名片編輯器。此連結 15 分鐘內有效，若過期請再次使用指令。",
+    "點擊下方按鈕開啟網頁版名片編輯器。此連結 30 分鐘內有效，若過期請再次使用指令。",
   profile_Editor_Button: "開啟網頁編輯器 Open Editor",
   profile_Config_Success: "設定已更新！",
   profile_Config_InvalidUUID: "無效的 UUID",

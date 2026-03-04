@@ -826,6 +826,12 @@ export async function verifyToken(cookie: string, locale?: string) {
   })();
 
   if (!basicResult || basicResult.status !== 0) {
+    // If it's a 400 error, it likely means the token itself is invalid (e.g. passed a cookie string or JSON)
+    if (basicResult?.status === 400) {
+      logger.warn(
+        `Gryphline API 400 for token: ${cleanToken.substring(0, 10)}...`,
+      );
+    }
     return basicResult; // Error or null
   }
 

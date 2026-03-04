@@ -1274,7 +1274,7 @@ export async function drawGachaStats(
     }
   }
 
-  return canvas.toBuffer("image/png");
+  return canvas.toBuffer("image/webp", 90);
 }
 
 function fillDynamicText(

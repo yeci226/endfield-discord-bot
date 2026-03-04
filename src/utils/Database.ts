@@ -85,4 +85,15 @@ export class CustomDatabase {
       value: JSON.parse(row.json),
     }));
   }
+
+  /**
+   * Find entries with a specific ID prefix and return only IDs
+   * @param prefix The prefix to search for
+   */
+  public async findIdsByPrefix(prefix: string): Promise<string[]> {
+    const rows = this.db
+      .prepare("SELECT ID FROM json WHERE ID LIKE ?")
+      .all(`${prefix}%`) as Array<{ ID: string }>;
+    return rows.map((row) => row.ID);
+  }
 }

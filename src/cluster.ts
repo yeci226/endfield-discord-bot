@@ -26,11 +26,12 @@ const manager = new ClusterManager(
   join(__dirname, isDev ? "index.ts" : "index.js"),
   {
     totalClusters: "auto",
-    shardsPerClusters: 2,
     totalShards: "auto",
     mode: "process", // or 'worker'
     token: token,
-    execArgv: isDev ? ["-r", "ts-node/register"] : [],
+    execArgv: isDev
+      ? ["-r", "ts-node/register", "--max-old-space-size=2048"]
+      : ["--max-old-space-size=2048"],
   },
 );
 
