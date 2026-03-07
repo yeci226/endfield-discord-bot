@@ -5,6 +5,4 @@
 /json.sqlite*
 /wiki_debug.log
 /src/assets/illustrators/*
-/src/web/WebManager.ts
-/src/web/VerificationClient.ts
 /src/assets/cache/*
