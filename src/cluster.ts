@@ -51,8 +51,47 @@ manager.extend(
 
 const logger = new Logger("Cluster Manager");
 
-manager.on("clusterCreate", (cluster) =>
-  logger.info(`Launched Cluster ${cluster.id}`),
-);
+manager.on("clusterCreate", (cluster) => {
+  cluster.on("ready", () => {
+    logger.info(`Launched Cluster ${cluster.id}`);
+    setInterval(
+      () => {
+        const memory = process.memoryUsage();
+        logger.info(
+          `[Cluster #${cluster.id}] RSS: ${(memory.rss / 1024 / 1024).toFixed(2)}MB, Heap: ${(memory.heapUsed / 1024 / 1024).toFixed(2)}MB`,
+        );
+      },
+      1000 * 60 * 10,
+    );
+  });
 
-manager.spawn({ timeout: -1 });
+  cluster.on("reconnecting", () => {
+    logger.info(`Reconnecting Cluster #${cluster.id}`);
+  });
+
+  cluster.on("death", () => {
+    logger.info(`Restarting Cluster ${cluster.id}`);
+    manager.recluster?.start();
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  try {
+    logger.error(`Uncaught Exception: ${error}`);
+  } catch {}
+});
+
+process.on("unhandledRejection", (reason) => {
+  try {
+    logger.error(`Unhandled Rejection: ${reason}`);
+  } catch {}
+});
+
+(async () => {
+  try {
+    await manager.spawn({ timeout: -1 });
+  } catch (error) {
+    logger.error(`Failed to spawn clusters: ${error}`);
+    process.exit(1);
+  }
+})();

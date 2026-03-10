@@ -1,3 +1,4 @@
+
 import { ExtendedClient } from "./structures/Client";
 import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
@@ -10,6 +11,7 @@ import { WebManager } from "./web/WebManager";
 import dotenv from "dotenv";
 import { WebhookClient } from "discord.js";
 import { Logger } from "./utils/Logger";
+import OptimizationManager from "./optimizations/index";
 
 dotenv.config();
 
@@ -24,11 +26,99 @@ dotenv.config();
   await loadEvents(client);
   client.start();
 
+  // ====================================
+  // 初始化優化功能
+  // ====================================
+  const optimizations = new OptimizationManager(client, client.db);
+  await optimizations.initialize();
+  (client as any).optimizations = optimizations.getManager();
+
   // Initialize WebManager and VerificationClient (will start later based on cluster)
   const webManager = new WebManager(client);
   const verifyClient = new VerificationClient(client);
 
   // 只有在 Cluster 0 啟動全域服務
+
+    // Process Error Handling
+    const logger = new Logger("Process");
+    const webhook = process.env.ERRWEBHOOK
+      ? new WebhookClient({ url: process.env.ERRWEBHOOK })
+      : null;
+
+  // ====================================
+  // 設置統計數據推送到 personalWeb
+  // ====================================
+  if (client.cluster.id === 0 && optimizations.commandUsageTracker) {
+    const STATS_API = process.env.STATS_API_URL;
+    const STATS_API_TOKEN = process.env.STATS_API_TOKEN;
+
+    if (!STATS_API) {
+      logger.error("STATS_API_URL is not set, stats push is disabled");
+    } else {
+      setInterval(async () => {
+        try {
+          const stats = optimizations.commandUsageTracker?.getStats();
+          if (stats && Object.keys(stats).length > 0) {
+            // 計算聚合統計
+            const totalCommands = Object.values(stats as Record<string, any>).reduce(
+              (sum: number, cmd: any) => sum + (cmd.count || 0),
+              0
+            );
+            const totalErrors = Object.values(stats as Record<string, any>).reduce(
+              (sum: number, cmd: any) => sum + (cmd.errors || 0),
+              0
+            );
+
+            const headers: Record<string, string> = {
+              "Content-Type": "application/json",
+            };
+            if (STATS_API_TOKEN) {
+              headers.Authorization = `Bearer ${STATS_API_TOKEN}`;
+            }
+
+            await fetch(STATS_API, {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                botId: "endfield",
+                botName: "Endfield",
+                timestamp: Date.now(),
+                stats: {
+                  totalCommands24h: totalCommands,
+                  totalErrors24h: totalErrors,
+                  topCommands: Object.entries(stats as Record<string, any>)
+                    .map(([name, data]: [string, any]) => ({
+                      name,
+                      count: data.count || 0,
+                      avgTimeMs: data.count > 0
+                        ? Math.round(data.totalExecutionMs / data.count)
+                        : 0,
+                      errors: data.errors || 0,
+                    }))
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 10),
+                  byCommand: Object.entries(stats as Record<string, any>).map(
+                    ([name, data]: [string, any]) => ({
+                      name,
+                      count: data.count || 0,
+                      errors: data.errors || 0,
+                      avgTimeMs: data.count > 0
+                        ? Math.round(data.totalExecutionMs / data.count)
+                        : 0,
+                    })
+                  ),
+                },
+              }),
+            }).catch((err) => {
+              logger.error(`Failed to push stats: ${err.message}`);
+            });
+          }
+        } catch (error) {
+          logger.error(`Error pushing stats: ${(error as Error).message}`);
+        }
+      }, 60_000); // 每 60 秒推送一次
+    }
+  }
   if (client.cluster.id === 0) {
     webManager.start();
     verifyClient.start();
@@ -37,12 +127,6 @@ dotenv.config();
     // client.monitorService.start();
     // client.wikiService.start();
   }
-
-  // Process Error Handling
-  const logger = new Logger("Process");
-  const webhook = process.env.ERRWEBHOOK
-    ? new WebhookClient({ url: process.env.ERRWEBHOOK })
-    : null;
 
   process.on("unhandledRejection", async (reason: any, promise) => {
     logger.error(`Unhandled Rejection: ${reason}`);

@@ -12,18 +12,29 @@ import {
 import { Event } from "../interfaces/Event";
 import { Logger } from "../utils/Logger";
 import { createTranslator, toI18nLang } from "../utils/i18n";
+import {
+  getCommandAckPlan,
+  ensureDeferredReply,
+  replyOrFollowUp,
+  TtlCache,
+  fireAndForget,
+} from "@bot/shared";
 
 const webhook = process.env.CMDWEBHOOK
   ? new WebhookClient({ url: process.env.CMDWEBHOOK })
   : null;
 const logger = new Logger("Interaction");
+const localeCache = new TtlCache<string, string>(120000, 10000);
 
 const event: Event = {
   name: Events.InteractionCreate,
   execute: async (client, interaction) => {
-    const userLang =
-      (await client.db.get(`${interaction.user.id}.locale`)) ||
-      toI18nLang(interaction.locale);
+    const cachedLocale = await localeCache.getOrSetAsync(
+      interaction.user.id,
+      async () => (await client.db.get(`${interaction.user.id}.locale`)) || "",
+    );
+    const userLang = cachedLocale || toI18nLang(interaction.locale);
+    localeCache.set(interaction.user.id, userLang);
     const tr = createTranslator(userLang);
 
     if (interaction.isChatInputCommand()) {
@@ -31,59 +42,142 @@ const event: Event = {
       if (!command) return;
 
       try {
-        await command.execute(client, interaction, tr, client.db);
+        const commandName = command.data.name;
+        const userId = interaction.user.id;
+        const startTime = Date.now();
+
+        // ========================================
+        // 1. 速率限制檢查
+        // ========================================
+        const optimizations = (client as any).optimizations;
+        if (optimizations?.rateLimiter) {
+          const rateLimitCheck = optimizations.rateLimiter.check(userId);
+          if (!rateLimitCheck.allowed) {
+            const retryAfter = rateLimitCheck.retryAfter || 1;
+            return replyOrFollowUp(interaction, {
+              content: `⏱️ You're doing that too fast! Please retry after ${retryAfter}s.`,
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+        }
+
+        // ========================================
+        // 2. 安全確認已 Defer
+        // ========================================
+        const ackPlan = getCommandAckPlan(command, { defaultEphemeral: true });
+        if (ackPlan.shouldDefer) {
+          await ensureDeferredReply(interaction, ackPlan.ephemeral);
+        }
+
+        // ========================================
+        // 3. 帶超時的命令執行（有重試機制）
+        // ========================================
+        if (optimizations?.commandExecutor) {
+          await optimizations.commandExecutor.execute(
+            commandName,
+            async () => {
+              return command.execute(client, interaction, tr, client.db);
+            },
+            {
+              timeoutMs: 30_000,
+              maxRetries: 1,
+            }
+          );
+        } else {
+          await command.execute(client, interaction, tr, client.db);
+        }
+
+        // ========================================
+        // 4. 記錄執行和統計
+        // ========================================
+        const executionMs = Date.now() - startTime;
         const sub = (
           interaction as ChatInputCommandInteraction
         ).options.getSubcommand(false);
         const group = (
           interaction as ChatInputCommandInteraction
         ).options.getSubcommandGroup(false);
-        const cmdStr = `${command.data.name}${group ? ` ${group}` : ""}${sub ? ` ${sub}` : ""}`;
+        const cmdStr = `${commandName}${group ? ` ${group}` : ""}${sub ? ` ${sub}` : ""}`;
         logger.info(
-          `Command ${cmdStr} executed by ${interaction.user.tag} (${interaction.user.id}) in ${interaction.guild?.name ?? "DM"} (${interaction.guildId ?? "DM"})`,
+          `Command ${cmdStr} executed by ${interaction.user.tag} (${userId}) in ${interaction.guild?.name ?? "DM"} (${interaction.guildId ?? "DM"}) - took ${executionMs}ms`,
         );
 
+        // 追蹤命令使用統計
+        if (optimizations?.commandUsageTracker) {
+          optimizations.commandUsageTracker.track(commandName, executionMs);
+        }
+
+        // ========================================
+        // 5. 發送 Webhook 日誌
+        // ========================================
         if (webhook) {
-          webhook.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTimestamp()
-                .setAuthor({
-                  iconURL: interaction.user.displayAvatarURL({
-                    size: 4096,
+          fireAndForget(
+            webhook.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTimestamp()
+                  .setAuthor({
+                    iconURL: interaction.user.displayAvatarURL({
+                      size: 4096,
+                    }),
+                    name: `${interaction.user.username} - ${interaction.user.id}`,
+                  })
+                  .setThumbnail(
+                    interaction.guild?.iconURL({
+                      size: 4096,
+                    }) || null,
+                  )
+                  .setDescription(
+                    `\`\`\`${interaction.guild?.name ?? "Direct Message"} - ${interaction.guild?.id ?? interaction.user.id}\`\`\``,
+                  )
+                  .addFields({
+                    name: commandName,
+                    value: `${
+                      (
+                        interaction as ChatInputCommandInteraction
+                      ).options.getSubcommand(false)
+                        ? `> ${(interaction as ChatInputCommandInteraction).options.getSubcommand(false)}`
+                        : "\u200b"
+                    }`,
+                    inline: true,
                   }),
-                  name: `${interaction.user.username} - ${interaction.user.id}`,
-                })
-                .setThumbnail(
-                  interaction.guild?.iconURL({
-                    size: 4096,
-                  }) || null,
-                )
-                .setDescription(
-                  `\`\`\`${interaction.guild?.name ?? "Direct Message"} - ${interaction.guild?.id ?? interaction.user.id}\`\`\``,
-                )
-                .addFields({
-                  name: command.data.name,
-                  value: `${
-                    (
-                      interaction as ChatInputCommandInteraction
-                    ).options.getSubcommand(false)
-                      ? `> ${(interaction as ChatInputCommandInteraction).options.getSubcommand(false)}`
-                      : "\u200b"
-                  }`,
-                  inline: true,
-                }),
-            ],
-          });
+              ],
+            }),
+            logger,
+          );
         }
       } catch (error: any) {
+        // ========================================
+        // 強化的錯誤處理
+        // ========================================
         if (error.code === 10062 || error.code === 40060) {
           // Interaction expired or already handled, ignore
           return;
         }
+
+        const optimizations = (client as any).optimizations;
+        const commandName = (client.commands as any).get(interaction.commandName)?.data?.name || "unknown";
+
         logger.error(
           `Command execution error: ${error.message}${error.stack ? `\n${error.stack}` : ""}`,
         );
+
+        // 追蹤錯誤統計
+        if (optimizations?.commandUsageTracker) {
+          optimizations.commandUsageTracker.trackError(commandName);
+        }
+
+        // 通過 EnhancedErrorHandler 處理
+        if (optimizations?.errorHandler) {
+          await optimizations.errorHandler.handle(error, {
+            source: "CommandExecution",
+            commandName,
+            userId: interaction.user.id,
+            guildId: interaction.guildId,
+          });
+        }
+
+        // 回覆用戶
         if (interaction.replied || interaction.deferred) {
           try {
             // If it was a public defer, delete it to hide the "Loading..." from others
@@ -98,12 +192,10 @@ const event: Event = {
             })
             .catch(() => {});
         } else {
-          await interaction
-            .reply({
-              content: tr("Error"),
-              flags: MessageFlags.Ephemeral,
-            })
-            .catch(() => {});
+          await replyOrFollowUp(interaction, {
+            content: tr("Error"),
+            flags: MessageFlags.Ephemeral,
+          }).catch(() => {});
         }
       }
     } else if (interaction.isStringSelectMenu()) {

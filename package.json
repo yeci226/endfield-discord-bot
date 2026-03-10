@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@bot/shared": "workspace:*",
     "@napi-rs/canvas": "^0.1.94",
     "axios": "^1.13.5",
     "better-sqlite3": "^12.6.2",
