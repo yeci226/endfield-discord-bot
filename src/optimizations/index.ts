@@ -12,7 +12,7 @@ import {
   MessageCache,
   EnhancedErrorHandler,
   ConnectionPool,
-} from "@bot/shared";
+} from "../utils/sharedCompat";
 
 const logger = new Logger("Optimization");
 
