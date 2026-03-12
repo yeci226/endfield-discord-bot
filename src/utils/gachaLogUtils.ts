@@ -3,6 +3,15 @@ import { CustomDatabase } from "./Database";
 import { mapLocaleToLang } from "./skportApi";
 import moment from "moment";
 
+export class GachaApiError extends Error {
+  apiCode: number;
+  constructor(message: string, apiCode: number) {
+    super(message);
+    this.name = "GachaApiError";
+    this.apiCode = apiCode;
+  }
+}
+
 export interface GachaRecord {
   seqId: string;
   charId?: string;
@@ -186,7 +195,7 @@ export async function fetchAndMergeGachaLog(
 
       const data = res.data;
       if (data.code !== 0) {
-        throw new Error(data.message || "API Error");
+        throw new GachaApiError(data.msg || data.message || "API Error", data.code);
       }
 
       const list = data.data.list as GachaRecord[];

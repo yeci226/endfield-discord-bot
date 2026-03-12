@@ -1,8 +1,7 @@
-﻿import {
+import {
   createCanvas,
   loadImage,
   GlobalFonts,
-  CanvasRenderingContext2D,
   SKRSContext2D,
   Image,
   Path2D,
@@ -13,7 +12,6 @@ import axios from "axios";
 import { CardDetail } from "./skportApi";
 import { ProfileTemplate } from "../interfaces/ProfileTemplate";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
-import { EnumService } from "../services/EnumService";
 import moment from "moment";
 import crypto from "crypto";
 
@@ -26,6 +24,10 @@ GlobalFonts.registerFromPath(
 GlobalFonts.registerFromPath(
   path.join(fontDir, "Noto-Sans-TC-700.woff2"),
   "NotoSansTCBold",
+);
+GlobalFonts.registerFromPath(
+  path.join(fontDir, "Noto-Sans-500.woff2"),
+  "NotoSansLatin",
 );
 GlobalFonts.registerFromPath(
   path.join(fontDir, "Orbitron-400.ttf"),
@@ -468,7 +470,7 @@ export async function drawDashboard(
     ctx.restore();
   }
 
-  const { dungeon, dailyMission, bpSystem } = detail;
+  const { dungeon, dailyMission, weeklyMission, bpSystem } = detail;
 
   // Stamina Box (Left)
   if (el.staminaBox.visible && dungeon && !skipIfFabric("staminaBox")) {
@@ -581,14 +583,12 @@ export async function drawDashboard(
     ctx.restore();
   }
 
-  // Activity Box (Right)
+  // Activity Box (Right) — 3-column: number on top, label below
   if (el.activityBpBox.visible && !skipIfFabric("activityBpBox")) {
     const actX = el.activityBpBox.x;
     const actY = el.activityBpBox.y;
     const actW = el.activityBpBox.width || 1450;
     const actH = el.activityBpBox.height || 180;
-    const halfW = actW / 2;
-    const centerY = actY + actH / 2;
 
     ctx.save();
     if (el.activityBpBox.angle)
@@ -599,35 +599,241 @@ export async function drawDashboard(
     ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
     roundRect(ctx, actX, actY, actW, actH, 20, true);
 
-    if (dailyMission) {
-      ctx.textAlign = "center";
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "60px NotoSansTCBold";
-      ctx.fillText(
-        `${dailyMission.dailyActivation}/${dailyMission.maxDailyActivation}`,
-        actX + halfW / 2,
-        actY + 35 + 60,
-      );
-      ctx.fillStyle = "#888888"; // Editor uses #888
-      ctx.font = "28px NotoSans";
-      ctx.fillText(tr("canvas_Activity"), actX + halfW / 2, actY + 100 + 28);
-    }
+    const cols: { label: string; value: string }[] = [];
+    if (dailyMission)
+      cols.push({
+        label: tr("canvas_Activity"),
+        value: `${dailyMission.dailyActivation}/${dailyMission.maxDailyActivation}`,
+      });
+    if (weeklyMission)
+      cols.push({
+        label: tr("canvas_WeeklyMission"),
+        value: `${weeklyMission.score}/${weeklyMission.total}`,
+      });
+    if (bpSystem)
+      cols.push({
+        label: tr("canvas_BP"),
+        value: `${bpSystem.curLevel}/${bpSystem.maxLevel}`,
+      });
 
-    if (bpSystem) {
+    const colW = cols.length > 0 ? actW / cols.length : actW;
+    for (let i = 0; i < cols.length; i++) {
+      const col = cols[i];
+      const colCenterX = actX + colW * i + colW / 2;
+
+      // Vertical divider (not before first col)
+      if (i > 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.fillRect(actX + colW * i, actY + 20, 1, actH - 40);
+      }
+
+      // Value (top, bold, white)
       ctx.textAlign = "center";
       ctx.fillStyle = "#ffffff";
       ctx.font = "60px NotoSansTCBold";
-      ctx.fillText(
-        `${bpSystem.curLevel}/${bpSystem.maxLevel}`,
-        actX + halfW + halfW / 2,
-        actY + 35 + 60,
-      );
+      ctx.fillText(col.value, colCenterX, actY + 35 + 60);
+
+      // Label (below, gray)
       ctx.fillStyle = "#888888";
       ctx.font = "28px NotoSans";
-      ctx.fillText(tr("canvas_BP"), actX + halfW + halfW / 2, actY + 100 + 28);
+      ctx.fillText(col.label, colCenterX, actY + 100 + 28);
     }
+
     ctx.textAlign = "left";
     ctx.restore();
+  }
+
+  // Achieve Section (光榮之路)
+  if (
+    el.achieveTitle?.visible &&
+    detail.achieve &&
+    !skipIfFabric("achieveTitle")
+  ) {
+    const rtX = el.achieveTitle.x;
+    const rtY = el.achieveTitle.y;
+    const decorX = rtX;
+    ctx.save();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `${el.achieveTitle.fontSize || 50}px NotoSansTCBold`;
+    ctx.fillText(tr("canvas_AchieveTitle"), rtX + 70, rtY + 40);
+
+    // Replace 3 vertical bars with Hexagon
+    drawStylizedHexagon(
+      ctx,
+      rtX + 25,
+      rtY + 15,
+      25,
+      "rgba(255,255,255,0.2)",
+      "#ffffff",
+    );
+    ctx.restore();
+  }
+
+  if (el.achieveBox?.visible && detail.achieve && !skipIfFabric("achieveBox")) {
+    const achieve = detail.achieve;
+    const axX = el.achieveBox.x;
+    const axY = el.achieveBox.y;
+    const axW = el.achieveBox.width || 2240;
+    const axH = el.achieveBox.height || 300;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255,255,255,0.1)";
+    roundRect(ctx, axX, axY, axW, axH, 20, true);
+    ctx.restore();
+
+    // Build medal lookup map
+    const medalMap = new Map<string, (typeof achieve.achieveMedals)[number]>();
+    (achieve.achieveMedals || []).forEach((m) =>
+      medalMap.set(m.achievementData.id, m),
+    );
+
+    // Count by initLevel tier (1=bronze, 2=silver, 3=gold)
+    const tierCounts: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    (achieve.achieveMedals || []).forEach((m) => {
+      const t = m.achievementData.initLevel;
+      if (tierCounts[t] !== undefined) tierCounts[t]++;
+    });
+
+    const sidePad = 50;
+    const leftW = Math.round(axW * 0.28);
+
+    // ── LEFT: stats ──
+    ctx.save();
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "100px NotoSansTCBold";
+    ctx.fillText(String(achieve.count), axX + sidePad, axY + sidePad + 100);
+
+    ctx.fillStyle = "#888888";
+    ctx.font = "28px NotoSans";
+    ctx.fillText(
+      tr("canvas_TotalCollected"),
+      axX + sidePad,
+      axY + sidePad + 100 + 40,
+    );
+
+    // Tier icons + counts (bottom of left area)
+    const tierIconSize = 40;
+    const tierY = axY + axH - sidePad - tierIconSize;
+    let tierX = axX + sidePad;
+
+    const tierBgColors = ["#3d3d3d", "#e0e0e0", "#f4e05d"];
+    const tierLineColors = ["#aaaaaa", "#666666", "#7c6f2b"];
+
+    for (let t = 0; t < 3; t++) {
+      // Draw custom hexagon instead of rank images
+      drawStylizedHexagon(
+        ctx,
+        tierX + tierIconSize / 2,
+        tierY + tierIconSize / 2,
+        tierIconSize / 2,
+        tierBgColors[t],
+        tierLineColors[t],
+      );
+
+      tierX += tierIconSize + 15;
+      ctx.fillStyle = "#cccccc";
+      ctx.font = "34px NotoSansTCBold";
+      ctx.fillText(
+        String(tierCounts[t + 1] ?? 0),
+        tierX,
+        tierY + tierIconSize - 2,
+      );
+      tierX += ctx.measureText(String(tierCounts[t + 1] ?? 0)).width + 30;
+    }
+    ctx.restore();
+
+    // ── RIGHT: rotated bg hex grid + 3×2 flat-top display medals ──
+    // Flat-top hex: vertices at 0°,60°,120°,180°,240°,300°
+    // Zero-gap tiling: colSpacing=1.5r, rowSpacing=r*√3, odd cols stagger down r*√3/2
+    // Total 3×2 grid: width=5r, height=2.5*r*√3
+    const hexAreaX = axX + leftW;
+    const hexAreaW = axW - leftW;
+
+    // pointy-top honeycomb (edge-to-edge): colSpacing=√3r, rowSpacing=1.5r
+    // 5 cols × 2 rows, row-stagger (row1 shifts right by √3r/2)
+    // bounding box: width=5.5√3r, height=3.5r
+    const hexR = Math.max(
+      Math.floor(Math.min(axH / 3.5, hexAreaW / (5.5 * Math.sqrt(3)))),
+      1,
+    );
+    const hexColSpacing = hexR * Math.sqrt(3);
+    const hexRowSpacing = hexR * 1.5;
+
+    // Center grid: overall x span is [-√3r/2, 5√3r] = 5.5√3r wide
+    const gridStartX =
+      hexAreaX +
+      (hexAreaW - 5.5 * hexR * Math.sqrt(3)) / 2 +
+      (hexR * Math.sqrt(3)) / 2;
+    const gridStartY = axY + hexR; // top vertex = axY
+
+    // column-major: col=floor((slot-1)/2), row=(slot-1)%2
+    // row1 shifts right by √3r/2 to form proper honeycomb edge-sharing
+    for (let slot = 1; slot <= 10; slot++) {
+      const col = Math.floor((slot - 1) / 2);
+      const row = (slot - 1) % 2;
+      const cx =
+        gridStartX + col * hexColSpacing + (row === 1 ? hexColSpacing / 2 : 0);
+      const cy = gridStartY + row * hexRowSpacing;
+
+      const medalId = achieve.display?.[String(slot)];
+      const medal = medalId ? medalMap.get(medalId) : undefined;
+
+      let iconUrl = "";
+      if (medal) {
+        const { achievementData, level, isPlated } = medal;
+        if (isPlated && achievementData.platedIcon)
+          iconUrl = achievementData.platedIcon;
+        else if (level >= 3 && achievementData.reforge3Icon)
+          iconUrl = achievementData.reforge3Icon;
+        else if (level >= 2 && achievementData.reforge2Icon)
+          iconUrl = achievementData.reforge2Icon;
+        else iconUrl = achievementData.initIcon;
+      }
+
+      // Build rotated hex path (30°) for this slot
+      const drawRotatedHex = () => {
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (Math.PI / 3) * i + (30 * Math.PI) / 180;
+          if (i === 0)
+            ctx.moveTo(cx + hexR * Math.cos(a), cy + hexR * Math.sin(a));
+          else ctx.lineTo(cx + hexR * Math.cos(a), cy + hexR * Math.sin(a));
+        }
+        ctx.closePath();
+      };
+
+      ctx.save();
+      drawRotatedHex();
+      ctx.save();
+      ctx.clip();
+      if (medal && iconUrl) {
+        let medalImg: any = null;
+        try {
+          medalImg = await fetchImage(iconUrl);
+        } catch {}
+        if (medalImg) {
+          ctx.drawImage(medalImg, cx - hexR, cy - hexR, hexR * 2, hexR * 2);
+        } else {
+          ctx.fillStyle = "rgba(255,255,255,0.2)";
+          ctx.fill();
+        }
+        // stroke inside clip → image fills flush to border
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        ctx.lineWidth = 4;
+        drawRotatedHex();
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.lineWidth = 2;
+        drawRotatedHex();
+        ctx.stroke();
+      }
+      ctx.restore(); // remove clip
+      ctx.restore(); // restore outer
+    }
   }
 
   // Operators Title
@@ -685,10 +891,8 @@ export async function drawDashboard(
       }
 
       const phase = Number(char.evolvePhase) || 0;
-      if (phase > 0) {
-        loadLocalImage(`phase/${phase}.png`).catch(() => {});
-        loadLocalImage("phase/bg.png").catch(() => {});
-      }
+      loadLocalImage(`phase/${phase}.png`).catch(() => {});
+      loadLocalImage("phase/bg.png").catch(() => {});
     });
     await Promise.all(charAssetsPromises);
 
@@ -729,8 +933,12 @@ export async function drawDashboard(
           weaponImg = await loadLocalImage(
             `weapon/black/${char.charData.weaponType.key.replace("weapon_type_", "").toLowerCase()}.png`,
           );
-        if (char.evolvePhase && char.evolvePhase > 0)
-          phaseImg = await loadLocalImage(`phase/${char.evolvePhase}.png`);
+        
+        const phaseVal = char.evolvePhase !== undefined ? char.evolvePhase : 0;
+        phaseImg = await loadLocalImage(`phase/${phaseVal}.png`);
+
+        // Preload rank icon
+        loadLocalImage(`rank/${char.potentialLevel ?? 0}.png`).catch(() => {});
       } catch (e) {}
 
       // Card Drawing
@@ -811,32 +1019,47 @@ export async function drawDashboard(
         y + charImageSize - 18,
       );
 
-      // Phase
-      if (char.evolvePhase !== undefined && char.evolvePhase > 0) {
+      // Phase + Rank pill (bottom-right)
+      {
+        const phase = char.evolvePhase ?? 0;
+        const iconSize = 28;
+        const cellPad = 5;
+        const cellW = iconSize + cellPad * 2;
+        const containerH = iconSize + cellPad * 2;
+        const containerW = cellW * 2 + 2;
+        const containerX = x + charImageSize - containerW - 6;
+        const containerY = y + charImageSize - containerH - 6;
+
+        ctx.fillStyle = "rgba(30,30,30,0.82)";
+        roundRect(ctx, containerX, containerY, containerW, containerH, 8, true);
+
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.fillRect(containerX + cellW, containerY + 4, 2, containerH - 8);
+
+        // Left cell: phase icon
+        if (phaseImg) {
+          ctx.drawImage(
+            phaseImg,
+            containerX + cellPad,
+            containerY + cellPad,
+            iconSize,
+            iconSize,
+          );
+        }
+
+        // Right cell: rank icon
         try {
-          const phaseBg = await loadLocalImage("phase/bg.png");
-          const phaseSize = 32;
-          const phaseX = x + charImageSize - 45;
-          const phaseY = y + charImageSize - 40;
-          ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
-          if (phaseImg) {
-            const numSize = phaseSize * (204 / 336);
-            const numX = phaseX + (phaseSize - numSize) / 2;
-            const numY = phaseY + (phaseSize - numSize) / 2;
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(
-              numX + numSize / 2,
-              numY + numSize / 2,
-              numSize / 2,
-              0,
-              Math.PI * 2,
-            );
-            ctx.clip();
-            ctx.drawImage(phaseImg, numX, numY, numSize, numSize);
-            ctx.restore();
-          }
-        } catch (e) {}
+          const rankImg = await loadLocalImage(
+            `rank/${char.potentialLevel ?? 0}.png`,
+          );
+          ctx.drawImage(
+            rankImg,
+            containerX + cellW + 2 + cellPad,
+            containerY + cellPad,
+            iconSize,
+            iconSize,
+          );
+        } catch (_) {}
       }
 
       // Rarity Bar
@@ -1185,20 +1408,87 @@ function roundRect(
   if (fill) ctx.fill();
   else ctx.stroke();
 }
+
+function drawStylizedHexagon(
+  ctx: SKRSContext2D,
+  x: number,
+  y: number,
+  r: number,
+  bgColor: string,
+  lineColor: string,
+) {
+  const drawHex = (radius: number, context: any) => {
+    context.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = (Math.PI / 3) * i - Math.PI / 2; // Pointy top
+      const px = x + radius * Math.cos(a);
+      const py = y + radius * Math.sin(a);
+      if (i === 0) context.moveTo(px, py);
+      else context.lineTo(px, py);
+    }
+    context.closePath();
+  };
+
+  // 1. Draw solid background
+  ctx.save();
+  ctx.fillStyle = bgColor;
+  drawHex(r, ctx);
+  ctx.fill();
+
+  // 2. Draw 3 concentric light lines (Endfield style)
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = Math.max(r / 12, 1.5);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // We draw 3 nested hexagon paths, but only the top halves to match the vibe
+  for (let i = 1; i <= 3; i++) {
+    const innerR = r * (1 - i * 0.22);
+    if (innerR > 0) {
+      ctx.beginPath();
+      // Draw 4 segments out of 6 to create the "stacked" look
+      for (let j = 0; j < 4; j++) {
+        const a = (Math.PI / 3) * (j + 4) - Math.PI / 2;
+        const px = x + innerR * Math.cos(a);
+        const py = y + innerR * Math.sin(a);
+        if (j === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
 function parseEffectString(effectStr: string, params: any): string {
   if (!effectStr) return "";
   let res = effectStr;
   // Strip tags like <@ba.vup> or </>
   res = res.replace(/<[^>]+>/g, "");
-  // Replace {key:0} or {key}
-  res = res.replace(/\{(\w+)(?::\d+%?)?\}/g, (match, key) => {
-    let val = params[key];
-    if (val === undefined) return match;
-    // Basic percentage handling if requested in placeholder
-    if (match.includes("%") && !isNaN(Number(val))) {
-      return (Number(val) * 100).toFixed(0) + "%";
+  // Replace {key:0} or {key} or {1-key:0}
+  res = res.replace(/\{([^{}]+)\}/g, (match, content) => {
+    // content could be "1-dmg_taken_down2:0%"
+    const parts = content.split(":");
+    let expr = parts[0]; // "1-dmg_taken_down2"
+    const format = parts[1] || ""; // "0%"
+
+    let finalVal: number | string = "";
+
+    if (expr.startsWith("1-")) {
+      const key = expr.replace("1-", "");
+      let val = params[key];
+      if (val === undefined) return match;
+      finalVal = 1 - Number(val);
+    } else {
+      let val = params[expr];
+      if (val === undefined) return match;
+      finalVal = val;
     }
-    return val;
+
+    // Basic percentage handling if requested in placeholder
+    if (format.includes("%") && !isNaN(Number(finalVal))) {
+      return (Number(finalVal) * 100).toFixed(0) + "%";
+    }
+    return String(finalVal);
   });
   res = res
     .replace(/，/g, ", ")
@@ -1326,6 +1616,35 @@ function wrapText(
   return testY;
 }
 
+/** Count how many lines wrapText would produce (without drawing). */
+function measureLines(
+  ctx: SKRSContext2D,
+  text: string,
+  maxWidth: number,
+): number {
+  let count = 0;
+  for (const para of text.split("\n")) {
+    const words =
+      para.match(/[\u4e00-\u9fa5]|[\u3040-\u30ff]|[\uff00-\uffef]|\S+/g) || [];
+    let line = "";
+    for (const word of words) {
+      let testLine =
+        /[\u4e00-\u9fa5]/.test(word) &&
+        (line === "" || /[\u4e00-\u9fa5]/.test(line.slice(-1)))
+          ? line + word
+          : line + (line === "" ? "" : " ") + word;
+      if (ctx.measureText(testLine).width > maxWidth && line !== "") {
+        count++;
+        line = word;
+      } else {
+        line = testLine;
+      }
+    }
+    count++;
+  }
+  return count;
+}
+
 export async function drawCharacterDetail(
   char: any,
   tr: any,
@@ -1334,7 +1653,7 @@ export async function drawCharacterDetail(
   charIndex: number = 1,
 ): Promise<Buffer> {
   const width = 2400;
-  const height = 1400; // Increased height
+  const height = 1500; // Increased height for passiveEffect display
   const leftW = 720;
   const padding = 60;
   const rightX = leftW + 60;
@@ -1374,7 +1693,18 @@ export async function drawCharacterDetail(
   ].filter(Boolean);
 
   const weaponUrl = char.weapon?.weaponData?.iconUrl;
-  const gemUrl = char.weapon?.gem?.iconUrl || char.weapon?.gem?.icon;
+  const gemUrl =
+    char.weapon?.gem?.gemData?.icon ||
+    char.weapon?.gem?.iconUrl ||
+    char.weapon?.gem?.icon;
+
+  const talentUrls = [
+    ...(char.charData.abilityTalents || []),
+    ...(char.charData.combatTalents || []),
+    ...(char.charData.cultivationTalents || []),
+  ]
+    .map((t: any) => t.iconUrl)
+    .filter(Boolean);
 
   const remoteUrls = [
     imgUrl,
@@ -1382,6 +1712,7 @@ export async function drawCharacterDetail(
     ...equipUrls,
     weaponUrl,
     gemUrl,
+    ...talentUrls,
   ].filter((url) => url && url.startsWith("http"));
 
   const localAssets = [
@@ -1394,14 +1725,23 @@ export async function drawCharacterDetail(
     char.weapon?.weaponData?.type?.key
       ? `weapon/black/${char.weapon.weaponData.type.key.replace("weapon_type_", "").toLowerCase()}.png`
       : null,
-    (Number(char.evolvePhase) || 0) > 0
-      ? `phase/${char.evolvePhase}.png`
-      : null,
-    (Number(char.evolvePhase) || 0) > 0 ? "phase/bg.png" : null,
-    char.potentialLevel > 0 ? `rank/${char.potentialLevel}.png` : null,
-    char.weapon?.breakthroughLevel > 0
-      ? `rank/${char.weapon.breakthroughLevel}.png`
-      : null,
+    `phase/${char.evolvePhase ?? 0}.png`,
+    "phase/bg.png",
+    `rank/${char.potentialLevel ?? 0}.png`,
+    `phase/${char.weapon?.breakthroughLevel ?? 0}.png`,
+    `rank/${char.weapon?.refineLevel ?? 0}.png`,
+    "skill_property/1.png",
+    "skill_property/2.png",
+    "skill_property/3.png",
+    "skill_property/4.png",
+    "skill_property/alpha.png",
+    "skill_property/beta.png",
+    "skill_property/gemma.png",
+    "skill_property/bodyEquip.png",
+    "skill_property/armEquip.png",
+    "skill_property/firstAccessory.png",
+    "skill_property/secondAccessory.png",
+    "skill_property/tacticalItem.png",
   ].filter(Boolean) as string[];
 
   // Trigger parallel loading
@@ -1488,32 +1828,46 @@ export async function drawCharacterDetail(
     ctx.font = "44px NotoSans";
     ctx.fillText(labelText, startX + numW + 10, infoY + 70);
 
-    // --- English Phase Indicator ---
-    const phase = Number(char.evolvePhase) || 0;
-    if (phase > 0) {
+    // --- Phase + Rank pill container ---
+    {
+      const phase = Number(char.evolvePhase) || 0;
+      const iconSize = 72;
+      const cellPad = 14;
+      const cellW = iconSize + cellPad * 2;
+      const containerH = iconSize + cellPad * 2;
+      const containerW = cellW * 2 + 2;
+      const containerX = startX;
+      const containerY = infoY + 78;
+
+      ctx.fillStyle = "rgba(80,80,80,0.75)";
+      roundRect(ctx, containerX, containerY, containerW, containerH, 14, true);
+
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(containerX + cellW, containerY + 10, 2, containerH - 20);
+
       try {
-        const phaseBg = await loadLocalImage("phase/bg.png");
         const phaseNum = await loadLocalImage(`phase/${phase}.png`);
-        const phaseSize = 120;
-        const phaseX = startX + numW / 2 - phaseSize / 2;
-        const phaseY = infoY + 65;
-        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
-        const numSize = phaseSize * (204 / 336);
-        const numX = phaseX + (phaseSize - numSize) / 2;
-        const numY = phaseY + (phaseSize - numSize) / 2;
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(
-          numX + numSize / 2,
-          numY + numSize / 2,
-          numSize / 2,
-          0,
-          Math.PI * 2,
+        ctx.drawImage(
+          phaseNum,
+          containerX + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
         );
-        ctx.clip();
-        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
-        ctx.restore();
-      } catch (e) {}
+      } catch (_) {}
+
+      try {
+        const rankImg = await loadLocalImage(
+          `rank/${char.potentialLevel ?? 0}.png`,
+        );
+        ctx.drawImage(
+          rankImg,
+          containerX + cellW + 2 + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
+        );
+      } catch (_) {}
     }
 
     // 2. Name + Stars (Width limited by Level text)
@@ -1574,39 +1928,46 @@ export async function drawCharacterDetail(
     ctx.font = "44px NotoSans";
     ctx.fillText(labelText, startX + numW + 10, infoY + 70);
 
-    // ?蹓橘?謖嚗?(Phase Indicator) - 1.png + bg.png (Refined v2)
-    const phase = Number(char.evolvePhase) || 0;
-    if (phase > 0) {
+    // --- Phase + Rank pill container ---
+    {
+      const phase = Number(char.evolvePhase) || 0;
+      const iconSize = 72;
+      const cellPad = 14;
+      const cellW = iconSize + cellPad * 2;
+      const containerH = iconSize + cellPad * 2;
+      const containerW = cellW * 2 + 2;
+      const containerX = startX;
+      const containerY = infoY + 78;
+
+      ctx.fillStyle = "rgba(80,80,80,0.75)";
+      roundRect(ctx, containerX, containerY, containerW, containerH, 14, true);
+
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(containerX + cellW, containerY + 10, 2, containerH - 20);
+
       try {
-        const phaseBg = await loadLocalImage("phase/bg.png");
         const phaseNum = await loadLocalImage(`phase/${phase}.png`);
-
-        const phaseSize = 120; // Increased size as requested
-        // Align center with the level number center
-        const phaseX = startX + numW / 2 - phaseSize / 2;
-        const phaseY = infoY + 65; // Slightly adjusted for better alignment with larger size
-
-        // Draw background
-        ctx.drawImage(phaseBg, phaseX, phaseY, phaseSize, phaseSize);
-
-        // Draw number with circle clip (Proportional to 204/336)
-        const numSize = phaseSize * (204 / 336);
-        const numX = phaseX + (phaseSize - numSize) / 2;
-        const numY = phaseY + (phaseSize - numSize) / 2;
-
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(
-          numX + numSize / 2,
-          numY + numSize / 2,
-          numSize / 2,
-          0,
-          Math.PI * 2,
+        ctx.drawImage(
+          phaseNum,
+          containerX + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
         );
-        ctx.clip();
-        ctx.drawImage(phaseNum, numX, numY, numSize, numSize);
-        ctx.restore();
-      } catch (e) {}
+      } catch (_) {}
+
+      try {
+        const rankImg = await loadLocalImage(
+          `rank/${char.potentialLevel ?? 0}.png`,
+        );
+        ctx.drawImage(
+          rankImg,
+          containerX + cellW + 2 + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
+        );
+      } catch (_) {}
     }
   }
 
@@ -1673,89 +2034,419 @@ export async function drawCharacterDetail(
   ctx.font = "bold 44px NotoSansTCBold";
   ctx.fillText(`I ${tr("canvas_Skills")}`, rightX, skillsY);
 
-  const skY = skillsY + 20,
-    skSize = 130;
+  // Skill bars: 4 horizontal rows
+  const skillBarW = 960;
+  const barH = 60;
+  const barGap = 6;
+  const barAreaY = skillsY + 20;
+  const sqH = 20; // rectangle height
+  const sqGap = 5;
+  const sqR = 4; // corner radius
+  // 10-12 capsule: fixed 46 × 26 px, placed at right edge of bar
+  const capW = 56; // capsule width (enlarged for bigger circles)
+  const capPad = 12; // gap between last rect and capsule
+  const spotR = 8; // all 3 circles same radius
   const skList = char.charData.skills || [];
+
   for (let i = 0; i < 4; i++) {
-    const s = skList[i],
-      sx = rightX + i * (skSize + 110);
-    ctx.fillStyle = "#cccccc";
+    const s = skList[i];
+    const barY = barAreaY + i * (barH + barGap);
+
+    // Bar background
+    ctx.fillStyle = "#f8f8f8";
+    ctx.shadowColor = "rgba(0,0,0,0.05)";
+    ctx.shadowBlur = 8;
+    roundRect(ctx, rightX, barY, skillBarW, barH, 12, true);
+    ctx.shadowBlur = 0;
+
+    // Skill icon circle
+    const iconR = 22;
+    const iconCX = rightX + 14 + iconR;
+    const iconCY = barY + barH / 2;
+    ctx.fillStyle = "#dddddd";
     ctx.beginPath();
-    ctx.arc(sx + skSize / 2, skY + skSize / 2 + 20, skSize / 2, 0, Math.PI * 2);
+    ctx.arc(iconCX, iconCY, iconR, 0, Math.PI * 2);
     ctx.fill();
-    if (s && s.iconUrl) {
+    if (s?.iconUrl) {
       try {
         const sImg = await fetchImage(s.iconUrl);
         ctx.save();
         ctx.beginPath();
-        ctx.arc(
-          sx + skSize / 2,
-          skY + skSize / 2 + 20,
-          skSize / 2 - 3,
-          0,
-          Math.PI * 2,
-        );
+        ctx.arc(iconCX, iconCY, iconR - 1, 0, Math.PI * 2);
         ctx.clip();
-        ctx.drawImage(sImg, sx, skY + 20, skSize, skSize);
+        ctx.drawImage(
+          sImg,
+          iconCX - iconR,
+          iconCY - iconR,
+          iconR * 2,
+          iconR * 2,
+        );
         ctx.restore();
-      } catch (e) {}
+      } catch (_) {}
     }
-    // Dynamic Skill Rank & Level (Now on top)
-    const userSk = char.userSkills?.[s?.id || ""] || { level: 1, maxLevel: 1 };
-    const rankLabel = tr("canvas_Rank");
-    const levelNum = `${userSk.level}`;
-    const maxLevel = `/${userSk.maxLevel}`;
+    ctx.strokeStyle = "#555555";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(iconCX, iconCY, iconR, 0, Math.PI * 2);
+    ctx.stroke();
 
-    ctx.font = "bold 18px NotoSans";
-    const rankW = ctx.measureText(rankLabel).width;
-    ctx.font = "bold 26px NotoSans";
-    const levelW = ctx.measureText(levelNum).width;
-    ctx.font = "16px NotoSans";
-    const maxW = ctx.measureText(maxLevel).width;
+    // Level data (needed before drawing name for RANK text)
+    const userSk = char.userSkills?.[s?.id || ""] || { level: 1, maxLevel: 12 };
+    const level = userSk.level || 1;
 
-    const totalW = rankW + levelW + maxW + 15;
-    const infoX = sx + skSize / 2 - totalW / 2;
-    const infoY = skY + skSize + 45;
-
-    // Rank Label (Gray)
-    ctx.textAlign = "left";
-    ctx.font = "bold 18px NotoSans";
-    ctx.fillStyle = "#888";
-    ctx.fillText(rankLabel, infoX, infoY + 2);
-
-    // Level Num (Dark)
-    ctx.font = "bold 26px NotoSans";
-    ctx.fillStyle = "#111";
-    ctx.fillText(levelNum, infoX + rankW + 10, infoY + 2);
-
-    // Max Level (Gray)
-    ctx.font = "16px NotoSans";
-    ctx.fillStyle = "#888";
-    ctx.fillText(maxLevel, infoX + rankW + levelW + 15, infoY + 2);
-
-    // Skill Name (Now at bottom)
-    const skName = (s?.name || tr("None"))
-      .replace(/，/g, ", ")
-      .replace(/。/g, ". ")
-      .replace(/：/g, ": ")
-      .replace(/；/g, "; ")
-      .replace(/？/g, "?")
-      .replace(/！/g, "!");
-
+    // Skill name
+    const nameX = rightX + 14 + iconR * 2 + 14;
     ctx.fillStyle = "#222";
-    ctx.textAlign = "center";
-    ctx.font = "bold 24px NotoSansTCBold";
-    wrapText(
-      ctx,
-      skName,
-      sx + skSize / 2,
-      skY + skSize + 85,
-      skSize + 110,
-      30,
-      80, // Max height for skill name area
-    );
+    ctx.font = "bold 26px NotoSansTCBold";
+    ctx.textAlign = "left";
+    ctx.fillText(s?.name || tr("None"), nameX, barY + 28);
+
+    // RANK X/Y — vertically centred with the level rectangles
+    ctx.font = "bold 26px NotoSansTCBold";
+    const nameTextW = ctx.measureText(s?.name || "").width;
+    const rankLabel = tr("canvas_Rank");
+    const rankNum = `${level}`;
+    const rankMax = `/${userSk.maxLevel}`;
+    const rankGapX = nameX + nameTextW + 16;
+    const rankBaseY = barY + barH / 2 + 7; // baseline aligned with rect vertical centre
+    ctx.font = "bold 16px NotoSans";
+    ctx.fillStyle = "#aaaaaa";
+    ctx.fillText(rankLabel, rankGapX, rankBaseY);
+    const rankLabelW = ctx.measureText(rankLabel).width;
+    ctx.font = "bold 22px NotoSans";
+    ctx.fillStyle = "#555";
+    ctx.fillText(rankNum, rankGapX + rankLabelW + 6, rankBaseY);
+    const rankNumW = ctx.measureText(rankNum).width;
+    ctx.font = "16px NotoSans";
+    ctx.fillStyle = "#aaaaaa";
+    ctx.fillText(rankMax, rankGapX + rankLabelW + 6 + rankNumW, rankBaseY);
+    const rankMaxW = ctx.measureText(rankMax).width;
+    const rankTotalW = rankLabelW + 6 + rankNumW + rankMaxW;
+
+    // Skill type label
+    if (s?.type?.value) {
+      ctx.fillStyle = "#999";
+      ctx.font = "18px NotoSans";
+      ctx.fillText(s.type.value, nameX, barY + 52);
+    }
+
+    // Measure type text for sqStart
+    ctx.font = "18px NotoSans";
+    const typeTextW = s?.type?.value ? ctx.measureText(s.type.value).width : 0;
+    const sqStart =
+      nameX + Math.max(nameTextW + 16 + rankTotalW, typeTextW) + 20;
+
+    // 10-12 capsule anchored to right edge of bar
+    const capX = rightX + skillBarW - capPad - capW;
+    const capCY = barY + barH / 2;
+
+    // Dynamic rect width to fill space between name and capsule
+    const sqEnd = capX - capPad;
+    const dynSqW = Math.max(16, Math.floor((sqEnd - sqStart - 8 * sqGap) / 9));
+    const sqY = barY + barH / 2 - sqH / 2;
+
+    for (let lv = 1; lv <= 9; lv++) {
+      const sqX = sqStart + (lv - 1) * (dynSqW + sqGap);
+      const unlocked = level >= lv;
+      ctx.fillStyle = unlocked ? "#ffffff" : "#d8d8d8";
+      roundRect(ctx, sqX, sqY, dynSqW, sqH, sqR, true);
+      ctx.strokeStyle = "#aaaaaa";
+      ctx.lineWidth = 1.5;
+      roundRect(ctx, sqX, sqY, dynSqW, sqH, sqR, false);
+    }
+
+    // 10-12 indicator: 3 equal circles, touching each other
+    const r = spotR; // all three same radius
+    const leftCX = capX + r;
+    const rightCX = leftCX + r * 2; // touching left circle
+    const topRightCY = capCY - r; // touching each other vertically
+    const botRightCY = capCY + r;
+
+    const dotPositions = [
+      { cx: leftCX, cy: capCY, lv: 10 },
+      { cx: rightCX, cy: topRightCY, lv: 11 },
+      { cx: rightCX, cy: botRightCY, lv: 12 },
+    ];
+    for (const { cx, cy, lv } of dotPositions) {
+      // Dark border background
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Fill: white if unlocked, gray if not
+      ctx.fillStyle = level >= lv ? "#ffffff" : "#cccccc";
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.textAlign = "left";
   }
   ctx.textAlign = "left";
+
+  // --- TALENT SECTION (to the right of skills) ---
+  {
+    const talentX = rightX + skillBarW + 40;
+    const talentSectionW = width - padding - talentX;
+    const talentColW = Math.floor((talentSectionW - 20) / 2);
+    const tiSize = 44;
+    const dashW = 20;
+
+    const abilityTalents: any[] = char.charData.abilityTalents || [];
+    const combatTalents: any[] = char.charData.combatTalents || [];
+    const cultivationTalents: any[] = char.charData.cultivationTalents || [];
+
+    // Build unlock lookup sets from char.talent
+    const talentData = (char as any).talent || {};
+    const unlockedAttrNodes = new Set<string>(talentData.attrNodes || []);
+
+    const buildLatestTierMap = (nodes: string[]): Map<string, number> => {
+      const map = new Map<string, number>();
+      for (const nodeId of nodes) {
+        const parts = nodeId.split("_");
+        const tier = parseInt(parts.pop() || "0");
+        const chainKey = parts.join("_");
+        map.set(chainKey, Math.max(map.get(chainKey) ?? 0, tier));
+      }
+      return map;
+    };
+    const latestPassiveMap = buildLatestTierMap(
+      talentData.latestPassiveSkillNodes || [],
+    );
+    const latestSpaceshipMap = buildLatestTierMap(
+      talentData.latestSpaceshipSkillNodes || [],
+    );
+
+    const isAbilityUnlocked = (id: string) => unlockedAttrNodes.has(id);
+    const isCombatUnlocked = (id: string) => {
+      const parts = id.split("_");
+      const tier = parseInt(parts.pop() || "0");
+      const chainKey = parts.join("_");
+      return tier <= (latestPassiveMap.get(chainKey) ?? 0);
+    };
+    const isCultivationUnlocked = (id: string) => {
+      const parts = id.split("_");
+      const tier = parseInt(parts.pop() || "0");
+      const chainKey = parts.join("_");
+      return tier <= (latestSpaceshipMap.get(chainKey) ?? 0);
+    };
+
+    // Section title
+    ctx.fillStyle = "#333";
+    ctx.font = "bold 44px NotoSansTCBold";
+    ctx.textAlign = "left";
+    ctx.fillText(`I ${tr("canvas_Talents")}`, talentX, skillsY);
+
+    // Helper: draw a talent icon — circle or rounded square
+    const drawTalentIcon = async (
+      item: any,
+      x: number,
+      y: number,
+      size: number,
+      square = false,
+      unlocked = true,
+    ) => {
+      const url = unlocked
+        ? item?.iconUrl || item?.lockedIconUrl
+        : item?.lockedIconUrl || item?.iconUrl;
+      const bgColor = unlocked ? "#e8b84b" : "#cccccc";
+      if (square) {
+        ctx.fillStyle = bgColor;
+        roundRect(ctx, x, y, size, size, size * 0.2, true);
+        if (url) {
+          try {
+            const img = await fetchImage(url);
+            ctx.save();
+            ctx.beginPath();
+            roundRect(
+              ctx,
+              x + 2,
+              y + 2,
+              size - 4,
+              size - 4,
+              size * 0.15,
+              false,
+            );
+            ctx.clip();
+            ctx.drawImage(img, x, y, size, size);
+            ctx.restore();
+          } catch (_) {}
+        }
+        ctx.strokeStyle = "#555555";
+        ctx.lineWidth = 1.5;
+        roundRect(ctx, x, y, size, size, size * 0.2, false);
+      } else {
+        ctx.fillStyle = bgColor;
+        ctx.beginPath();
+        ctx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+        ctx.fill();
+        if (url) {
+          try {
+            const img = await fetchImage(url);
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(x + size / 2, y + size / 2, size / 2 - 2, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(img, x, y, size, size);
+            ctx.restore();
+          } catch (_) {}
+        }
+        ctx.strokeStyle = "#555555";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(x + size / 2, y + size / 2, size / 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    };
+
+    // Helper: group talents by iconUrl, sort each group by the last numeric ID suffix (ascending tier)
+    const groupTalents = (talents: any[]) => {
+      const map = new Map<string, any[]>();
+      for (const t of talents) {
+        const key = t.iconUrl || t.id;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(t);
+      }
+      return Array.from(map.values()).map((g) =>
+        g.sort((a: any, b: any) => {
+          const aNum = parseInt(a.id.split("_").pop() || "0");
+          const bNum = parseInt(b.id.split("_").pop() || "0");
+          return aNum - bNum;
+        }),
+      );
+    };
+
+    // Draw dash connector between icons
+    const drawDash = (x: number, y: number) => {
+      ctx.fillStyle = "#aaaaaa";
+      ctx.fillRect(x + 3, y + tiSize / 2 - 2, dashW - 6, 4);
+    };
+
+    // --- abilityTalents: small circles in a row ---
+    const abRowY = skillsY + 30;
+    for (let i = 0; i < abilityTalents.length && i < 6; i++) {
+      const ix = talentX + i * (tiSize + 12);
+      await drawTalentIcon(
+        abilityTalents[i],
+        ix,
+        abRowY,
+        tiSize,
+        false,
+        isAbilityUnlocked(abilityTalents[i]?.id),
+      );
+    }
+
+    // Helper: draw tier mark image (bottom-right of icon)
+    const drawTierMarks = async (ix: number, chainY: number, count: number) => {
+      try {
+        const img = await loadLocalImage(`skill_property/${count}.png`);
+        const imgH = 16;
+        const imgW = Math.round((img.width / img.height) * imgH);
+        ctx.drawImage(
+          img,
+          ix + tiSize - imgW + 15,
+          chainY + tiSize - imgH + 5,
+          imgW,
+          imgH,
+        );
+      } catch (e) {}
+    };
+
+    // --- combatTalents: 2 columns, each column shows a chain ---
+    const combatGroups = groupTalents(combatTalents);
+    const combatRowY = abRowY + tiSize + 28;
+    for (let g = 0; g < combatGroups.length && g < 2; g++) {
+      const group = combatGroups[g];
+      const colX = talentX + g * (talentColW + 20);
+
+      // Group name above the chain
+      ctx.fillStyle = "#555";
+      ctx.font = "bold 22px NotoSansTCBold";
+      ctx.textAlign = "left";
+      ctx.fillText(group[0]?.name || "", colX, combatRowY + 16);
+
+      // Icon chain with tier marks at bottom-right of each icon
+      const chainY = combatRowY + 25;
+      for (let t = 0; t < group.length && t < 3; t++) {
+        const ix = colX + t * (tiSize + dashW);
+        await drawTalentIcon(
+          group[t],
+          ix,
+          chainY,
+          tiSize,
+          false,
+          isCombatUnlocked(group[t]?.id),
+        );
+        await drawTierMarks(ix, chainY, t + 1);
+        if (t < group.length - 1) drawDash(ix + tiSize, chainY);
+      }
+    }
+
+    // --- cultivationTalents: 2 columns, each with Greek label image beside each icon ---
+    const cultivGroups = groupTalents(cultivationTalents);
+    const cultivRowY = combatRowY + tiSize + 55;
+    const greekImgMap: Record<string, string> = {
+      α: "alpha",
+      β: "beta",
+      γ: "gemma",
+    };
+    const greekFallback = ["α", "β", "γ", "δ"];
+    for (let g = 0; g < cultivGroups.length && g < 2; g++) {
+      const group = cultivGroups[g];
+      const colX = talentX + g * (talentColW + 20);
+
+      // Base name (strip trailing ·β/·γ etc.)
+      const baseName = (group[0]?.name || "")
+        .replace(/[··][αβγδεζηθ]$/, "")
+        .trim();
+      ctx.fillStyle = "#555";
+      ctx.font = "bold 22px NotoSansTCBold";
+      ctx.textAlign = "left";
+      ctx.fillText(baseName, colX, cultivRowY + 16);
+
+      // Icon chain with Greek label to the bottom-right of each icon
+      const chainY = cultivRowY + 25;
+      const gImgH = 28;
+      const gImgW = Math.round((42 / 60) * gImgH); // ≈ 14px
+      const labelStride = tiSize + dashW + 6;
+      for (let t = 0; t < group.length && t < 4; t++) {
+        const ix = colX + t * labelStride;
+        await drawTalentIcon(
+          group[t],
+          ix,
+          chainY,
+          tiSize,
+          true,
+          isCultivationUnlocked(group[t]?.id),
+        );
+
+        // Greek letter image at bottom-right of icon (overlay)
+        const tierMatch = group[t]?.name?.match(/[··]([αβγδεζηθ])$/);
+        const letter = tierMatch ? tierMatch[1] : (greekFallback[t] ?? "");
+        const imgName = greekImgMap[letter];
+        if (imgName) {
+          try {
+            const gImg = await loadLocalImage(`skill_property/${imgName}.png`);
+            ctx.drawImage(
+              gImg,
+              ix + tiSize - gImgW + 20,
+              chainY + tiSize - gImgH + 10,
+              gImgW,
+              gImgH,
+            );
+          } catch (e) {}
+        }
+
+        // Dash connector between icon+label groups
+        if (t < group.length - 1) {
+          ctx.fillStyle = "#aaaaaa";
+          ctx.fillRect(ix + tiSize + 3, chainY + tiSize / 2 - 2, dashW - 2, 4);
+        }
+      }
+    }
+
+    ctx.textAlign = "left";
+  }
 
   const getRarityColor = (rKey: string) => {
     if (rKey.includes("_6")) return "rgba(255, 113, 0, 1)"; // Orange
@@ -1793,6 +2484,7 @@ export async function drawCharacterDetail(
     cardW: number,
     cardH: number,
     hideSkill = false,
+    equipKey = "",
   ) {
     ctx.fillStyle = "#fcfcfc";
     ctx.shadowColor = "rgba(0,0,0,0.05)";
@@ -1814,11 +2506,30 @@ export async function drawCharacterDetail(
     ctx.fillStyle = rarityColor;
     ctx.fillRect(ex, ey, 12, cardH);
 
+    // Scaled font sizes based on cardH
+    const isCompact = cardH < 180;
+
     // 1. Level / Title Section
     ctx.fillStyle = "#111";
     if (isTac) {
-      ctx.font = "bold 32px NotoSansTCBold";
-      ctx.fillText(data?.name || "??", ex + 35, ey + 50);
+      // Draw tacticalItem icon before name (32px, vertically centred with text)
+      const tacIconSize = 32;
+      const tacNameFontSize = 32;
+      const tacTextBaseline = ey + 50;
+      // visual mid of cap ≈ baseline - fontSize * 0.38
+      const tacTextMidY = tacTextBaseline - tacNameFontSize * 0.38;
+      const tacIconX = ex + 30;
+      const tacIconY = tacTextMidY - tacIconSize / 2;
+      try {
+        const tacIcon = await loadLocalImage("skill_property/tacticalItem.png");
+        ctx.drawImage(tacIcon, tacIconX, tacIconY, tacIconSize, tacIconSize);
+      } catch (_) {}
+      ctx.font = `bold ${tacNameFontSize}px NotoSansTCBold`;
+      ctx.fillText(
+        data?.name || "??",
+        ex + 30 + tacIconSize + 8,
+        tacTextBaseline,
+      );
     } else {
       ctx.font = "bold 44px NotoSansTCBold";
       const lvVal = data?.level?.value || "??";
@@ -1844,12 +2555,10 @@ export async function drawCharacterDetail(
 
     // 3. Skill / Effect Description
     const skillY = ey + (isTac ? 120 : 130);
-    const nameY = ey + cardH - 25;
+    const nameY = ey + cardH - 50;
     const effectStr = isTac
       ? parseEffectString(data?.activeEffect, data?.activeEffectParams)
-      : data?.suit?.skillDesc
-        ? parseEffectString(data.suit.skillDesc, data.suit.skillDescParams)
-        : "";
+      : "";
 
     if (effectStr && !hideSkill) {
       const skillFontSize = tr.lang === "en" ? 18 : 20;
@@ -1866,22 +2575,42 @@ export async function drawCharacterDetail(
     if (isTac) {
       // Tactical items don't have tags/suits at the bottom in current design
     } else {
-      // 4. Multi-item Perfection Row: Name + Suit + Tags
+      // 4. Bottom row: gray background bar + type icon + Name + Suit + Tags
+      const barH = 52;
+      const barY = ey + cardH - barH;
+      const barCY = barY + barH / 2;
+
+      // Type icon from skill_property
+      const typeIconSize = 32;
+      const typeIconX = ex + 30;
+      const typeIconY = barCY - typeIconSize / 2;
+      if (equipKey) {
+        try {
+          const typeIcon = await loadLocalImage(
+            `skill_property/${equipKey}.png`,
+          );
+          ctx.drawImage(
+            typeIcon,
+            typeIconX,
+            typeIconY,
+            typeIconSize,
+            typeIconSize,
+          );
+        } catch (e) {}
+      }
+      const contentX = ex + 30 + (equipKey ? typeIconSize + 6 : 0);
+
       const props = data?.properties || [];
       const suitName = data?.suit?.name;
-      const tagFontSize = tr.lang === "en" ? 14 : 22; // Shrunk EN tags slightly more
-      const rowCenterY = nameY - 12;
-      const nudge = tr.lang === "en" ? 0 : 2;
-
-      // 4a. Calculate Tags total width (Priority 1)
-      ctx.font = `bold ${tagFontSize}px NotoSansTCBold`;
-      const textPadding = tr.lang === "en" ? 6 : 16;
+      const tagFontSize = tr.lang === "en" ? 14 : 20;
+      const textPadding = tr.lang === "en" ? 6 : 14;
       const tagGap = 6;
 
+      // 4a. Tags total width
+      ctx.font = `bold ${tagFontSize}px NotoSansTCBold`;
       const tagWidths: number[] = [];
       let totalTagsW = 0;
-      const displayedProps = [...props].slice(0, 3);
-
+      const displayedProps = [...props].filter((p: string) => !!p).slice(0, 3);
       displayedProps.forEach((pKey: string) => {
         const enumItem = enums.find((v: any) => v.key === pKey);
         const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
@@ -1890,42 +2619,43 @@ export async function drawCharacterDetail(
         totalTagsW += tW + tagGap;
       });
 
-      // 4b. Calculate available space for Name + Suit
+      // 4b. Available space for Name + Suit
       const suitPillW = suitName
         ? ctx.measureText(suitName).width + (tr.lang === "en" ? 10 : 20)
         : 0;
-      const spaceForNameAndSuit = cardW - totalTagsW - 35 - 30 - 15;
+      const rightMargin = 30;
+      const spaceForNameAndSuit =
+        cardW - totalTagsW - (contentX - ex) - rightMargin - 15;
       const nameMaxWidth =
         spaceForNameAndSuit - (suitPillW > 0 ? suitPillW + 8 : 0);
-
       const nameStr = data?.name || tr("None");
-      const baseNameSize = tr.lang === "en" ? 30 : 32;
+      const baseNameSize = tr.lang === "en" ? 28 : 30;
 
-      // 4c. Render Tags (Right to Left)
-      let currentRightX = ex + cardW - 30;
+      // 4c. Tags (right to left), vertically centered on barCY
+      let currentRightX = ex + cardW - rightMargin;
       ctx.textBaseline = "middle";
       [...displayedProps].reverse().forEach((pKey, i) => {
         const enumItem = enums.find((v: any) => v.key === pKey);
         const labelText = enumItem?.value || pKey.replace("equip_attr_", "");
         const bgW = tagWidths[displayedProps.length - 1 - i];
+        const tagH = 32;
         const labelX = currentRightX - bgW;
-
-        ctx.fillStyle = "rgba(0,0,0,0.05)";
-        roundRect(ctx, labelX, rowCenterY - 20 + nudge, bgW, 40, 6, true);
+        ctx.fillStyle = "rgba(0,0,0,0.08)";
+        roundRect(ctx, labelX, barCY - tagH / 2, bgW, tagH, 6, true);
         ctx.fillStyle = "#555";
         ctx.textAlign = "center";
-        ctx.fillText(labelText, labelX + bgW / 2, rowCenterY + nudge);
+        ctx.fillText(labelText, labelX + bgW / 2, barCY);
         ctx.textAlign = "left";
         currentRightX -= bgW + tagGap;
       });
 
-      // 4d. Render Name & Suit (scaled to fit)
+      // 4d. Name + Suit, vertically centered on barCY
       ctx.fillStyle = "#111";
       fillDynamicText(
         ctx,
         nameStr,
-        ex + 35,
-        rowCenterY + nudge,
+        contentX,
+        barCY - 20,
         nameMaxWidth,
         baseNameSize,
         detail,
@@ -1933,17 +2663,20 @@ export async function drawCharacterDetail(
       );
 
       ctx.font = `bold ${baseNameSize}px NotoSansTCBold`;
-      const actualNameW = ctx.measureText(nameStr).width;
-      const actualDisplayedNameW = Math.min(actualNameW, nameMaxWidth);
+      const actualNameW = Math.min(
+        ctx.measureText(nameStr).width,
+        nameMaxWidth,
+      );
 
       if (suitName) {
-        const suitX = ex + 35 + actualDisplayedNameW + 8;
+        const suitX = contentX + actualNameW + 8;
+        const suitH = 32;
         ctx.font = `bold ${tagFontSize}px NotoSansTCBold`;
         ctx.fillStyle = rarityColor;
-        roundRect(ctx, suitX, rowCenterY - 20 + nudge, suitPillW, 40, 6, true);
+        roundRect(ctx, suitX, barCY - suitH / 2, suitPillW, suitH, 6, true);
         ctx.fillStyle = "#fff";
         ctx.textAlign = "center";
-        ctx.fillText(suitName, suitX + suitPillW / 2, rowCenterY + nudge);
+        ctx.fillText(suitName, suitX + suitPillW / 2, barCY);
         ctx.textAlign = "left";
       }
       ctx.textBaseline = "alphabetic";
@@ -1997,6 +2730,49 @@ export async function drawCharacterDetail(
     ctx.fillText("LEVEL", rightX + 45 + wLvW + 10, wCardY + 70);
     const wLabelW = ctx.measureText("LEVEL").width;
 
+    // Weapon Phase + Refine pill container (inline right of LEVEL)
+    {
+      const wPhase = char.weapon.breakthroughLevel ?? 0;
+      const wRefine = char.weapon.refineLevel ?? 0;
+      const iconSize = 36;
+      const cellPad = 6;
+      const cellW = iconSize + cellPad * 2;
+      const containerH = iconSize + cellPad * 2;
+      const containerW = cellW * 2 + 2;
+      const containerX = rightX + 45 + wLvW + 10 + wLabelW + 16;
+      const containerY = wCardY + 70 - containerH / 2 - 15;
+
+      ctx.fillStyle = "rgba(80,80,80,0.75)";
+      roundRect(ctx, containerX, containerY, containerW, containerH, 10, true);
+
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.fillRect(containerX + cellW, containerY + 7, 2, containerH - 14);
+
+      // Left cell: breakthrough (phase)
+      try {
+        const phaseImg = await loadLocalImage(`phase/${wPhase}.png`);
+        ctx.drawImage(
+          phaseImg,
+          containerX + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
+        );
+      } catch (_) {}
+
+      // Right cell: refine level (rank)
+      try {
+        const refineImg = await loadLocalImage(`rank/${wRefine}.png`);
+        ctx.drawImage(
+          refineImg,
+          containerX + cellW + 2 + cellPad,
+          containerY + cellPad,
+          iconSize,
+          iconSize,
+        );
+      } catch (_) {}
+    }
+
     const wRarity = parseInt(rKey.split("_").pop() || "0");
     for (let j = 0; j < wRarity; j++) {
       ctx.drawImage(starImg, rightX + 45 + j * 30, wCardY + 85, 25, 25);
@@ -2019,23 +2795,50 @@ export async function drawCharacterDetail(
   }
 
   // Weapon Section Slot (Gem/Plugin)
+  const slotX = rightX + wCardW + eGap;
+
+  // Gem slot title (same style as weapon title)
+  ctx.fillStyle = "#333";
+  ctx.font = "bold 44px NotoSansTCBold";
+  ctx.fillText(`I ${tr("canvas_Gem")}`, slotX, weaponTitleY);
+
   ctx.fillStyle = "#fcfcfc";
   ctx.shadowColor = "rgba(0,0,0,0.05)";
   ctx.shadowBlur = 10;
-  const slotX = rightX + wCardW + eGap;
   roundRect(ctx, slotX, wCardY, wSlotW, wCardH, 15, true);
   ctx.shadowBlur = 0;
 
   let hasGem = false;
   const gemData = char.weapon?.gem;
   if (gemData) {
-    const gIcon = gemData.iconUrl || gemData.icon;
+    const gIcon = gemData.gemData?.icon || gemData.iconUrl || gemData.icon;
+    const templateId: string = gemData.gemData?.templateId || "";
+    const rarityMatch = templateId.match(/rarity_(\d+)/);
+    const rarityN = rarityMatch ? rarityMatch[1] : null;
+
+    // Left rarity color bar (same as weapon card)
+    if (rarityN) {
+      const rarityColorMap: Record<string, string> = {
+        "3": "rgba(51, 194, 255, 1)",
+        "4": "rgba(179, 128, 255, 1)",
+        "5": "rgba(255, 204, 0, 1)",
+      };
+      const barColor = rarityColorMap[rarityN] || "rgb(14, 6, 6)";
+      ctx.fillStyle = barColor;
+      ctx.fillRect(slotX, wCardY, 12, wCardH);
+    }
+
     if (gIcon) {
       try {
+        const gbgImage = await loadLocalImage(`gem/${rarityN || "3"}.png`);
         const gImg = gIcon.startsWith("http")
           ? await fetchImage(gIcon)
           : await loadLocalImage(gIcon);
-        ctx.drawImage(gImg, slotX + 15, wCardY + 15, wSlotW - 30, wCardH - 30);
+        const gemSize = 180;
+        const gemX = slotX + (wSlotW - gemSize) / 2;
+        const gemY = wCardY + (wCardH - gemSize) / 2 - 10;
+        ctx.drawImage(gbgImage, gemX, gemY, gemSize, gemSize);
+        ctx.drawImage(gImg, gemX, gemY, gemSize, gemSize);
         hasGem = true;
       } catch (e) {}
     }
@@ -2045,7 +2848,32 @@ export async function drawCharacterDetail(
     drawPlaceholder(slotX, wCardY, wSlotW, wCardH);
   }
 
-  // 6. Configuration Grid (2:3)
+  // 6. Detect active suit sets (≥3 pieces same suit.id)
+  const allEquipData = [
+    char.bodyEquip?.equipData,
+    char.armEquip?.equipData,
+    char.firstAccessory?.equipData,
+    char.secondAccessory?.equipData,
+  ].filter(Boolean);
+
+  const suitCountMap = new Map<
+    string,
+    { suit: any; rKey: string; count: number }
+  >();
+  for (const d of allEquipData) {
+    const sid = d?.suit?.id;
+    if (!sid) continue;
+    if (!suitCountMap.has(sid))
+      suitCountMap.set(sid, {
+        suit: d.suit,
+        rKey: d.rarity?.key || "",
+        count: 0,
+      });
+    suitCountMap.get(sid)!.count++;
+  }
+  const activeSuits = [...suitCountMap.values()].filter((s) => s.count >= 3);
+
+  // 7. Configuration Grid — compact cards (no descriptions)
   const gridTitleY = wCardY + wCardH + 50;
   ctx.fillStyle = "#333";
   ctx.font = "bold 44px NotoSansTCBold";
@@ -2053,44 +2881,160 @@ export async function drawCharacterDetail(
 
   const egX = rightX;
   const egY = gridTitleY + 30;
-  const totalGridH = height - egY - 60;
   const colW1 = (rightW - eGap) / 2;
   const colW2 = colW1;
-  const itemH_L = (totalGridH - eGap) / 2;
-  const itemH_R = (totalGridH - 2 * eGap) / 3;
+
+  const suitAreaH =
+    activeSuits.length > 0 ? activeSuits.length * (100 + eGap) + 20 : 0;
+
+  // Right column: firstAccessory/secondAccessory need ≥215px so the 150px icon
+  // doesn't overlap the 52px bottom bar (10+150+52=212 < 215 ✓).
+  // tacticalItem is more compact (no level/stars, smaller icon).
+  const itemH_acc = 190; // firstAccessory & secondAccessory
+  const itemH_tac = 180; // tacticalItem
+  const rightHeights = [itemH_acc, itemH_acc, itemH_tac];
+
+  // Total right column height (cards + gaps between them)
+  const rightTotalH =
+    rightHeights.reduce((s, h) => s + h, 0) + (rightHeights.length - 1) * eGap;
+
+  // Left total must equal right total: 2*itemH_L + eGap = rightTotalH
+  const itemH_L = (rightTotalH - eGap) / 2;
 
   const leftItems = [
-    { item: char.bodyEquip, type: tr("canvas_Armor") },
-    { item: char.armEquip, type: tr("canvas_Bracer") },
+    { item: char.bodyEquip, type: tr("canvas_Armor"), equipKey: "bodyEquip" },
+    { item: char.armEquip, type: tr("canvas_Bracer"), equipKey: "armEquip" },
   ];
   const rightItems = [
     {
       item: char.firstAccessory,
       type: tr("canvas_Accessory"),
-      hideSkill: true,
+      equipKey: "firstAccessory",
     },
     {
       item: char.secondAccessory,
       type: tr("canvas_Accessory"),
-      hideSkill: true,
+      equipKey: "secondAccessory",
     },
-    { item: char.tacticalItem, type: tr("canvas_TacticalItem"), isTac: true },
+    {
+      item: char.tacticalItem,
+      type: tr("canvas_TacticalItem"),
+      isTac: true,
+      equipKey: "tacticalItem",
+    },
   ];
 
-  // Draw Left Column
   for (let i = 0; i < leftItems.length; i++) {
     const e = leftItems[i];
-    const ex = egX;
-    const ey = egY + i * (itemH_L + eGap);
-    await drawEquipCard(e, ex, ey, colW1, itemH_L);
+    await drawEquipCard(
+      e,
+      egX,
+      egY + i * (itemH_L + eGap),
+      colW1,
+      itemH_L,
+      false,
+      e.equipKey,
+    );
   }
 
-  // Draw Right Column
+  let rightY = egY;
   for (let i = 0; i < rightItems.length; i++) {
     const e = rightItems[i];
-    const ex = egX + colW1 + eGap;
-    const ey = egY + i * (itemH_R + eGap);
-    await drawEquipCard(e, ex, ey, colW2, itemH_R, e.hideSkill);
+    const h = rightHeights[i];
+    await drawEquipCard(
+      e,
+      egX + colW1 + eGap,
+      rightY,
+      colW2,
+      h,
+      false,
+      e.equipKey,
+    );
+    rightY += h + eGap;
+  }
+
+  // 8. Active Suit Effects Section
+  if (activeSuits.length > 0) {
+    const descFontSize = 20;
+    const descLineH = 26;
+    const headerH = 60; // badge + name row height
+    const vPad = 14; // vertical padding top+bottom inside card
+    const descMaxW = rightW - 60; // max width for description text
+
+    let sy = egY + rightTotalH + 20;
+
+    for (let si = 0; si < activeSuits.length; si++) {
+      const { suit, rKey, count } = activeSuits[si];
+      const suitColor = getRarityColor(rKey);
+
+      // Pre-measure description to determine card height
+      const desc = parseEffectString(suit.skillDesc, suit.skillDescParams);
+      ctx.font = `${descFontSize}px NotoSansTCBold`;
+      const descLines = desc ? measureLines(ctx, desc, descMaxW) : 0;
+      const descBlockH = descLines * descLineH;
+
+      // Badge width needed for layout
+      ctx.font = "bold 18px NotoSansTCBold";
+      const badge = `${tr("canvas_Suit", { count: Math.min(3, count) })}`;
+      const badgeW = ctx.measureText(badge).width + 16;
+
+      const suitCardH =
+        vPad + headerH + (descLines > 0 ? descBlockH + 8 : 0) + vPad;
+
+      // Background card
+      ctx.fillStyle = "#fcfcfc";
+      ctx.shadowColor = "rgba(0,0,0,0.05)";
+      ctx.shadowBlur = 8;
+      roundRect(ctx, egX, sy, rightW, suitCardH, 12, true);
+      ctx.shadowBlur = 0;
+
+      // Left rarity bar
+      ctx.fillStyle = suitColor;
+      ctx.fillRect(egX, sy, 12, suitCardH);
+
+      // Piece-count badge
+      ctx.font = "bold 18px NotoSansTCBold";
+      ctx.fillStyle = suitColor;
+      roundRect(
+        ctx,
+        egX + 20,
+        sy + vPad + (headerH - 28) / 2,
+        badgeW,
+        28,
+        6,
+        true,
+      );
+      ctx.fillStyle = "#fff";
+      ctx.textBaseline = "middle";
+      ctx.fillText(badge, egX + 28, sy + vPad + headerH / 2);
+
+      // Suit name
+      ctx.fillStyle = "#111";
+      ctx.font = "bold 30px NotoSansTCBold";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(
+        suit.name || "",
+        egX + 20 + badgeW + 10,
+        sy + vPad + headerH / 2 + 10,
+      );
+
+      // Suit description (no maxH — draw all lines)
+      if (desc) {
+        ctx.fillStyle = "#555";
+        ctx.font = `${descFontSize}px NotoSansTCBold`;
+        wrapText(
+          ctx,
+          desc,
+          egX + 20,
+          sy + vPad + headerH + descLineH,
+          descMaxW,
+          descLineH,
+        );
+      }
+
+      ctx.textBaseline = "alphabetic";
+      sy += suitCardH + eGap;
+    }
   }
 
   return canvas.toBuffer("image/webp", 90);

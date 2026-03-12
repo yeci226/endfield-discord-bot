@@ -324,9 +324,40 @@ export interface CardDungeon {
   maxTs: string;
 }
 
+export interface CardAchieveMedalData {
+  id: string;
+  name: string;
+  initIcon: string;
+  reforge2Icon: string;
+  reforge3Icon: string;
+  platedIcon: string;
+  cateName: string;
+  canCertify: boolean;
+  cate: string;
+  initLevel: number;
+}
+
+export interface CardAchieveMedal {
+  achievementData: CardAchieveMedalData;
+  level: number;
+  isPlated: boolean;
+  obtainTs: string;
+}
+
+export interface CardAchieve {
+  achieveMedals: CardAchieveMedal[];
+  display: Record<string, string>;
+  count: number;
+}
+
 export interface CardDailyMission {
   dailyActivation: number;
   maxDailyActivation: number;
+}
+
+export interface CardWeeklyMission {
+  score: number;
+  total: number;
 }
 
 export interface CardBpSystem {
@@ -339,7 +370,9 @@ export interface CardDetail {
   chars: CardChar[];
   dungeon: CardDungeon;
   dailyMission: CardDailyMission;
+  weeklyMission?: CardWeeklyMission;
   bpSystem: CardBpSystem;
+  achieve?: CardAchieve;
 }
 
 export interface CardDetailResponse {

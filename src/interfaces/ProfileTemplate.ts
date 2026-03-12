@@ -51,6 +51,8 @@ export interface ProfileTemplate {
       charHeight: number;
       limit?: number;
     };
+    achieveTitle?: ProfileElement;
+    achieveBox?: ProfileElement;
   };
   fabricJson?: any;
 }

@@ -13,7 +13,7 @@ export class ProfileTemplateService {
     },
     canvas: {
       width: 2400,
-      height: 1600,
+      height: 2000,
       padding: 80,
     },
     elements: {
@@ -47,10 +47,10 @@ export class ProfileTemplateService {
       // width = 2400 - 160 - 1558 - 20 = 662
       authLevelBox: { x: 1658, y: 480, width: 662, height: 160, visible: true },
       // Realtime Title: y = mlY + mlH + 30 = 480 + 160 + 30 = 670
-      realtimeTitle: { x: 150, y: 670, fontSize: 50, visible: true },
+      realtimeTitle: { x: 100, y: 670, fontSize: 50, visible: true },
       // Stamina Box: y = realTimeY + 80 = 670 + 80 = 750
       staminaBox: { x: 80, y: 750, width: 750, height: 180, visible: true },
-      // Activity BP Box: x = 80 + 750 + 40 = 870, y = 750
+      // Activity BP Box: x = 870, y = 750
       // width = 2400 - 160 - 750 - 40 = 1450
       activityBpBox: {
         x: 870,
@@ -59,12 +59,16 @@ export class ProfileTemplateService {
         height: 180,
         visible: true,
       },
-      // Operators Title: y = 950
-      operatorsTitle: { x: 80, y: 950, fontSize: 50, visible: true },
-      // Operators Grid: y = 980
+      // Achieve Title: y = 750 + 180 + 30 = 960
+      achieveTitle: { x: 100, y: 960, fontSize: 50, visible: true },
+      // Achieve Box: y = 960 + 60 = 1020, h = 300
+      achieveBox: { x: 80, y: 1020, width: 2240, height: 300, visible: true },
+      // Operators Title: y = 1020 + 300 + 30 = 1350
+      operatorsTitle: { x: 80, y: 1325, fontSize: 50, visible: true },
+      // Operators Grid: y = 1390
       operatorsGrid: {
         x: 80,
-        y: 980,
+        y: 1390,
         cols: 10,
         gap: 15,
         charWidth: 210,

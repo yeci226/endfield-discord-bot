@@ -38,6 +38,7 @@ import {
   clearGachaLog,
   migrateGachaLog,
   updateLeaderboard,
+  GachaApiError,
 } from "../../utils/gachaLogUtils";
 import {
   drawGachaStats,
@@ -730,6 +731,58 @@ const command: Command = {
       });
     }
 
+    const TOKEN_EXPIRED_MESSAGE =
+      "獲取抽卡紀錄令牌已過期\n\n**「令牌無效」錯誤**\n如果您看到「令牌無效」錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 完全關閉遊戲\n2. 在Windows中搜尋 `%localappdata%` 並打開顯示的資料夾\n3. 返回上一級資料夾，然後進入 `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. 刪除檔案 `HGWebview.log`\n5. 打開遊戲，直接進入**尋訪 > 歷史記錄**以重新生成檔案\n6. 再次執行PowerShell腳本獲取新令牌";
+
+    async function doFetchGachaLog(
+      url: string,
+      selectedUidRaw: string,
+      userId: string,
+    ) {
+      const allRoles = await getAllPossibleUserRoles(userId, db);
+
+      let selectedUid = selectedUidRaw;
+      let accountIndex: number | undefined = undefined;
+      let nickname: string | undefined = undefined;
+
+      if (selectedUid === "CREATE_NEW_GUEST") {
+        selectedUid = `EF_GUEST_${userId}_${Date.now()}`;
+        nickname = tr("gacha_log_load_NewGuestName");
+      } else {
+        accountIndex = allRoles.findIndex((r) => r.uid === selectedUid) + 1;
+        nickname = allRoles.find((r) => r.uid === selectedUid)?.nickname;
+      }
+
+      console.log(`[Gacha Load] Starting merge for UID: ${selectedUid}`);
+
+      try {
+        await fetchAndMergeGachaLog(
+          db,
+          url,
+          (msg) => console.log(msg),
+          selectedUid,
+          tr.lang,
+          interaction.user.displayAvatarURL({ extension: "png", size: 128 }),
+          interaction.user.displayName,
+          accountIndex && accountIndex > 0 ? accountIndex : undefined,
+          nickname,
+        );
+        await showGachaStats(selectedUid, "limited_char", "", 0, "");
+      } catch (error) {
+        let errorMessage: string;
+        if (error instanceof GachaApiError && error.apiCode === 40100) {
+          errorMessage = TOKEN_EXPIRED_MESSAGE;
+        } else {
+          const err = error as Error;
+          errorMessage = err.message || "未知錯誤";
+        }
+        await interaction.followUp({
+          content: errorMessage,
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    }
+
     if (interaction.isStringSelectMenu()) {
       const customId = interaction.customId;
       const parts = customId.split(":");
@@ -793,51 +846,34 @@ const command: Command = {
         await showGachaLeaderboard(newPool, newSort);
         return;
       } else if (action === "log_load_select_target") {
-        await interaction.deferUpdate();
         const selectedUidRaw = interaction.values[0];
         const userId = interaction.user.id;
         const pendingUrl = await db.get<string>(`PENDING_GACHA_URL_${userId}`);
 
         if (!pendingUrl) {
-          await interaction.followUp({
-            content: tr("gacha_log_load_UrlLabel"), // Re-fetch logic or error
-            flags: MessageFlags.Ephemeral,
-          });
+          // URL expired or missing — show URL input modal again with uid in customId
+          const modal = new ModalBuilder()
+            .setCustomId(`gacha:log_load:${selectedUidRaw}`)
+            .setTitle(tr("gacha_log_load_ModalTitle"));
+
+          const urlInput = new TextInputBuilder()
+            .setCustomId("url")
+            .setLabel(tr("gacha_log_load_UrlLabel"))
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("https://ef-webview.gryphline.com/...")
+            .setRequired(true);
+
+          modal.addComponents(
+            new ActionRowBuilder<TextInputBuilder>().addComponents(urlInput),
+          );
+
+          await interaction.showModal(modal);
           return;
         }
 
+        await interaction.deferUpdate();
         await db.delete(`PENDING_GACHA_URL_${userId}`);
-
-        // Fetch accounts again to calculate index
-        const allRoles = await getAllPossibleUserRoles(userId, db);
-
-        let selectedUid = selectedUidRaw;
-        let accountIndex: number | undefined = undefined;
-        let nickname: string | undefined = undefined;
-
-        if (selectedUid === "CREATE_NEW_GUEST") {
-          selectedUid = `EF_GUEST_${userId}_${Date.now()}`;
-          nickname = tr("gacha_log_load_NewGuestName");
-        } else {
-          accountIndex = allRoles.findIndex((r) => r.uid === selectedUid) + 1;
-          nickname = allRoles.find((r) => r.uid === selectedUid)?.nickname;
-        }
-
-        console.log(`[Gacha Load] Starting merge for UID: ${selectedUid}`);
-
-        const result = await fetchAndMergeGachaLog(
-          db,
-          pendingUrl,
-          (msg) => console.log(msg),
-          selectedUid,
-          tr.lang,
-          interaction.user.displayAvatarURL({ extension: "png", size: 128 }),
-          interaction.user.displayName,
-          accountIndex && accountIndex > 0 ? accountIndex : undefined,
-          nickname,
-        );
-
-        await showGachaStats(selectedUid, "limited_char", "", 0, "");
+        await doFetchGachaLog(pendingUrl, selectedUidRaw, userId);
         return;
       }
 
@@ -1211,6 +1247,15 @@ const command: Command = {
       if (parts[1] === "log_load") {
         const url = interaction.fields.getTextInputValue("url");
         const userId = interaction.user.id;
+
+        if (parts[2]) {
+          // Direct load — uid was encoded in customId (re-entry or from view menu)
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          await doFetchGachaLog(url, parts[2], userId);
+          return;
+        }
+
+        // Regular flow — store URL and show account selection
         const allRoles = await getAllPossibleUserRoles(userId, db);
 
         await db.set(`PENDING_GACHA_URL_${userId}`, url);
