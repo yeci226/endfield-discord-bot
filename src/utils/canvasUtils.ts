@@ -54,6 +54,7 @@ export async function drawDashboard(
   template: ProfileTemplate = ProfileTemplateService.getDefaultTemplate(),
 ): Promise<Buffer> {
   const { base, chars } = detail;
+  console.log(chars[0]);
   const { canvas: cv, elements: el } = template;
 
   // Canvas dimensions
@@ -933,7 +934,7 @@ export async function drawDashboard(
           weaponImg = await loadLocalImage(
             `weapon/black/${char.charData.weaponType.key.replace("weapon_type_", "").toLowerCase()}.png`,
           );
-        
+
         const phaseVal = char.evolvePhase !== undefined ? char.evolvePhase : 0;
         phaseImg = await loadLocalImage(`phase/${phaseVal}.png`);
 

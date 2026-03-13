@@ -1,4 +1,4 @@
-import {
+﻿import {
   SlashCommandBuilder,
   MessageFlags,
   ContainerBuilder,
@@ -46,6 +46,17 @@ import {
   getDetailedPageCount,
 } from "../../utils/gachaCanvasUtils";
 import { drawGachaLeaderboard } from "../../utils/gachaLeaderboardCanvasUtils";
+import {
+  buildSimPoolFromSources,
+  loadPityState,
+  savePityState,
+  simulatePulls,
+  drawSimulationImage,
+  loadSimPoolRecords,
+  FIVE_STAR_PITY_CAP,
+  SIX_STAR_PITY_CAP,
+  CURRENT_UP_HARD_PITY_CAP,
+} from "../../utils/gachaSimulatorUtils";
 import moment from "moment";
 import { CustomDatabase } from "../../utils/Database";
 
@@ -90,6 +101,14 @@ async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
   return roles;
 }
 
+function getSimCurrentUpCounterKey(userId: string, poolId: string): string {
+  return `simGachaCurrentUp.${userId}.${poolId}`;
+}
+
+function getDisplayedRemainingPulls(cap: number, pity: number): number {
+  return Math.max(1, cap - pity);
+}
+
 const command: Command = {
   data: new SlashCommandBuilder()
     .setName("gacha")
@@ -131,6 +150,40 @@ const command: Command = {
             .setDescriptionLocalizations({
               "zh-TW": "如何獲取抽卡紀錄網址",
             }),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("simulate")
+            .setNameLocalizations({ "zh-TW": "模擬抽卡" })
+            .setDescription("Simulate gacha pulls with accurate pity mechanics")
+            .setDescriptionLocalizations({
+              "zh-TW": "以準確機率與保底機制模擬招募/尋訪",
+            })
+            .addStringOption((opt) =>
+              opt
+                .setName("banner")
+                .setNameLocalizations({ "zh-TW": "卡池" })
+                .setDescription("Select banner")
+                .setDescriptionLocalizations({
+                  "zh-TW": "選擇卡池",
+                })
+                .setAutocomplete(true)
+                .setRequired(false),
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName("count")
+                .setNameLocalizations({ "zh-TW": "抽數" })
+                .setDescription("Number of pulls (1 or 10, default: 10)")
+                .setDescriptionLocalizations({
+                  "zh-TW": "抽卡次數（1次或10連，預設：10連）",
+                })
+                .addChoices(
+                  { name: "1次", value: 1 },
+                  { name: "10連", value: 10 },
+                )
+                .setRequired(false),
+            ),
         )
         .addSubcommand((sub) =>
           sub
@@ -731,8 +784,7 @@ const command: Command = {
       });
     }
 
-    const TOKEN_EXPIRED_MESSAGE =
-      "獲取抽卡紀錄令牌已過期\n\n**「令牌無效」錯誤**\n如果您看到「令牌無效」錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 完全關閉遊戲\n2. 在Windows中搜尋 `%localappdata%` 並打開顯示的資料夾\n3. 返回上一級資料夾，然後進入 `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. 刪除檔案 `HGWebview.log`\n5. 打開遊戲，直接進入**尋訪 > 歷史記錄**以重新生成檔案\n6. 再次執行PowerShell腳本獲取新令牌";
+    const TOKEN_EXPIRED_MESSAGE = tr("gacha_log_token_expired_message");
 
     async function doFetchGachaLog(
       url: string,
@@ -985,6 +1037,126 @@ const command: Command = {
             components: [],
           });
         }
+        return;
+      }
+
+      if (action === "sim_pull") {
+        if (btnInteraction.user.id !== parts[2]) {
+          await btnInteraction.reply({
+            content: tr("gacha_sim_only_initiator"),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        await btnInteraction.deferUpdate();
+        const simPoolId = parts[3];
+        const simPityKey = parts[4];
+        const simCount = (parseInt(parts[5], 10) || 10) as 1 | 10;
+        const simUserId = parts[2];
+        let simPoolsData: any;
+        try {
+          const simAccounts = await getAccounts(db, simUserId);
+          const simAccount = simAccounts?.[0];
+          if (simAccount?.cookie) {
+            simPoolsData = await withAutoRefresh(
+              client,
+              simUserId,
+              simAccount,
+              (c, s, o) => getCharacterPool(undefined, c, s, o),
+              tr.lang,
+            );
+          } else {
+            simPoolsData = await getCharacterPool();
+          }
+        } catch {}
+        let simPoolList: any[] = simPoolsData?.data?.list || [];
+        if (simPoolList.length === 0) {
+          const recs = await loadSimPoolRecords(db, simUserId);
+          simPoolList = recs.map((r) => ({
+            id: r.poolId,
+            name: r.poolName,
+            chars: [],
+          }));
+        }
+        const foundSimPool = simPoolList.find((p: any) => p.id === simPoolId);
+        if (!foundSimPool) {
+          await btnInteraction.followUp({
+            content: tr("gacha_sim_pool_missing_ended"),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        const simCfg = await buildSimPoolFromSources(
+          db,
+          simUserId,
+          foundSimPool,
+        );
+        const simState = await loadPityState(db, simUserId, simPityKey);
+        const simCurrentUpCounterKey = getSimCurrentUpCounterKey(
+          simUserId,
+          simCfg.poolId,
+        );
+        const simPoolCurrentUpCounter = await db.get<number>(
+          simCurrentUpCounterKey,
+        );
+        simState.pullsWithoutCurrentUp = simCfg.sixStarUp
+          ? Math.max(0, Math.min(119, Number(simPoolCurrentUpCounter) || 0))
+          : 0;
+        const simRes = simulatePulls(simCount, simState, simCfg);
+        await savePityState(db, simUserId, simPityKey, simState);
+        await db.set(simCurrentUpCounterKey, simState.pullsWithoutCurrentUp);
+        const simImg = await drawSimulationImage(simRes);
+        const simFile = new AttachmentBuilder(simImg, {
+          name: "gacha_simulate.webp",
+        });
+        const simCurrentUpRemain =
+          CURRENT_UP_HARD_PITY_CAP - simState.pullsWithoutCurrentUp;
+        const simHardPityNote = simCfg.sixStarUp
+          ? simCurrentUpRemain <= 1
+            ? `\n${tr("gacha_sim_current_up_guarantee_next")}`
+            : `\n${tr("gacha_sim_current_up_guarantee_remaining", { remaining: simCurrentUpRemain })}`
+          : "";
+        const simNote =
+          tr("gacha_sim_note_summary", {
+            pity: simState.sixStarPity,
+            sixRemaining: getDisplayedRemainingPulls(
+              SIX_STAR_PITY_CAP,
+              simState.sixStarPity,
+            ),
+            fiveRemaining: getDisplayedRemainingPulls(
+              FIVE_STAR_PITY_CAP,
+              simState.fiveStarPity,
+            ),
+          }) +
+          simHardPityNote +
+          (simCfg.isSpecial && simState.isGuaranteed
+            ? `\n${tr("gacha_sim_next_six_limited")}`
+            : "");
+        await btnInteraction.editReply({
+          content: tr("gacha_sim_result_content", {
+            poolName: simCfg.poolName,
+            note: simNote,
+          }),
+          files: [simFile],
+          components: [
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `gacha:sim_pull:${simUserId}:${simPoolId}:${simPityKey}:1`,
+                )
+                .setLabel(tr("gacha_sim_pull_once"))
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji("🎲"),
+              new ButtonBuilder()
+                .setCustomId(
+                  `gacha:sim_pull:${simUserId}:${simPoolId}:${simPityKey}:10`,
+                )
+                .setLabel(tr("gacha_sim_pull_ten"))
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji("🎰"),
+            ),
+          ],
+        });
         return;
       }
     }
@@ -1415,6 +1587,117 @@ const command: Command = {
         });
       }
     }
+
+    if (interaction.isChatInputCommand() && subcommand === "simulate") {
+      await interaction.deferReply();
+      const userId = interaction.user.id;
+      const bannerOption = interaction.options.getString("banner");
+      const countOption = (interaction.options.getInteger("count") || 10) as
+        | 1
+        | 10;
+      let poolsData: any;
+      try {
+        const accounts = await getAccounts(db, userId);
+        const account = accounts?.[0];
+        if (account?.cookie) {
+          poolsData = await withAutoRefresh(
+            client,
+            userId,
+            account,
+            (c, s, opts) => getCharacterPool(interaction.locale, c, s, opts),
+            tr.lang,
+          );
+        } else {
+          poolsData = await getCharacterPool(interaction.locale);
+        }
+      } catch {}
+      let poolsList: any[] = poolsData?.data?.list || [];
+      if (poolsList.length === 0) {
+        const recs = await loadSimPoolRecords(db, userId);
+        poolsList = recs.map((r) => ({
+          id: r.poolId,
+          name: r.poolName,
+          chars: [],
+        }));
+      }
+      let targetSkPool = poolsList.find((p: any) => p.id === bannerOption);
+      if (!targetSkPool && poolsList.length > 0) {
+        targetSkPool =
+          poolsList.find((p: any) => p.id.includes("special")) || poolsList[0];
+      }
+      if (!targetSkPool) {
+        await interaction.editReply({
+          content: tr("gacha_sim_pool_missing_retry"),
+        });
+        return;
+      }
+      const poolCfg = await buildSimPoolFromSources(db, userId, targetSkPool);
+      const pityState = await loadPityState(db, userId, poolCfg.pityKey);
+      const currentUpCounterKey = getSimCurrentUpCounterKey(
+        userId,
+        poolCfg.poolId,
+      );
+      const poolCurrentUpCounter = await db.get<number>(currentUpCounterKey);
+      pityState.pullsWithoutCurrentUp = poolCfg.sixStarUp
+        ? Math.max(0, Math.min(119, Number(poolCurrentUpCounter) || 0))
+        : 0;
+      const results = simulatePulls(countOption, pityState, poolCfg);
+      await savePityState(db, userId, poolCfg.pityKey, pityState);
+      await db.set(currentUpCounterKey, pityState.pullsWithoutCurrentUp);
+      const imageBuffer = await drawSimulationImage(results);
+      const attachment = new AttachmentBuilder(imageBuffer, {
+        name: "gacha_simulate.webp",
+      });
+      const currentUpRemain =
+        CURRENT_UP_HARD_PITY_CAP - pityState.pullsWithoutCurrentUp;
+      const hardPityNote = poolCfg.sixStarUp
+        ? currentUpRemain <= 1
+          ? `\n${tr("gacha_sim_current_up_guarantee_next")}`
+          : `\n${tr("gacha_sim_current_up_guarantee_remaining", { remaining: currentUpRemain })}`
+        : "";
+      const note =
+        tr("gacha_sim_note_summary", {
+          pity: pityState.sixStarPity,
+          sixRemaining: getDisplayedRemainingPulls(
+            SIX_STAR_PITY_CAP,
+            pityState.sixStarPity,
+          ),
+          fiveRemaining: getDisplayedRemainingPulls(
+            FIVE_STAR_PITY_CAP,
+            pityState.fiveStarPity,
+          ),
+        }) +
+        hardPityNote +
+        (poolCfg.isSpecial && pityState.isGuaranteed
+          ? `\n${tr("gacha_sim_next_six_rate_up")}`
+          : "");
+      await interaction.editReply({
+        content: tr("gacha_sim_result_content", {
+          poolName: poolCfg.poolName,
+          note,
+        }),
+        files: [attachment],
+        components: [
+          new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+              .setCustomId(
+                `gacha:sim_pull:${userId}:${poolCfg.poolId}:${poolCfg.pityKey}:1`,
+              )
+              .setLabel(tr("gacha_sim_pull_once"))
+              .setStyle(ButtonStyle.Secondary)
+              .setEmoji("🎲"),
+            new ButtonBuilder()
+              .setCustomId(
+                `gacha:sim_pull:${userId}:${poolCfg.poolId}:${poolCfg.pityKey}:10`,
+              )
+              .setLabel(tr("gacha_sim_pull_ten"))
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🎰"),
+          ),
+        ],
+      });
+      return;
+    }
   },
 
   autocomplete: async (client, interaction, db) => {
@@ -1472,6 +1755,41 @@ const command: Command = {
         .slice(0, 25);
 
       await interaction.respond(filtered);
+      return;
+    }
+
+    if (subcommand === "simulate") {
+      const choices: { name: string; value: string }[] = [];
+      const recs = await loadSimPoolRecords(db, interaction.user.id);
+      for (const r of recs) {
+        if (!choices.some((c) => c.value === r.poolId)) {
+          choices.push({ name: r.poolName || r.poolId, value: r.poolId });
+        }
+      }
+
+      if (choices.length === 0) {
+        try {
+          const simPools = await getCharacterPool(interaction.locale);
+          if (simPools?.code === 0 && simPools.data?.list) {
+            for (const p of simPools.data.list) {
+              if (!choices.some((c) => c.value === p.id)) {
+                choices.push({ name: p.name, value: p.id });
+              }
+            }
+          }
+        } catch {}
+      }
+
+      await interaction.respond(
+        choices
+          .filter(
+            (c) =>
+              c.name.toLowerCase().includes(focusedValue.toLowerCase()) ||
+              c.value.toLowerCase().includes(focusedValue.toLowerCase()),
+          )
+          .slice(0, 25),
+      );
+      return;
     }
   },
 };

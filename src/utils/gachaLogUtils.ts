@@ -62,6 +62,111 @@ export interface GachaLogData {
   };
 }
 
+interface SimPoolRecordChar {
+  charId?: string;
+  charName?: string;
+}
+
+interface SimPoolRecord {
+  poolId: string;
+  poolName: string;
+  poolType?: string;
+  lastSeenTs?: number;
+  featuredSixStar?: SimPoolRecordChar;
+  featuredFiveStars?: SimPoolRecordChar[];
+}
+
+function toTs(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function persistSimPoolRecordsFromLog(
+  db: CustomDatabase,
+  uid: string,
+  data: GachaLogData,
+) {
+  const key = `SIM_POOL_RECORDS.${uid}`;
+  const existing = (await db.get<Record<string, SimPoolRecord>>(key)) || {};
+  const merged: Record<string, SimPoolRecord> = { ...existing };
+
+  const byPool = new Map<string, GachaRecord[]>();
+  for (const rec of data.characterList || []) {
+    if (!rec?.poolId) continue;
+    if (!byPool.has(rec.poolId)) byPool.set(rec.poolId, []);
+    byPool.get(rec.poolId)!.push(rec);
+  }
+
+  for (const [poolId, list] of byPool.entries()) {
+    const sixCounter = new Map<
+      string,
+      { count: number; latestTs: number; name?: string }
+    >();
+    const fiveCounter = new Map<
+      string,
+      { count: number; latestTs: number; name?: string }
+    >();
+    let lastSeenTs = 0;
+    let poolName = poolId;
+    let poolType = "";
+
+    for (const rec of list) {
+      const ts = toTs(rec.gachaTs) || Math.floor(Number(rec.seqId || 0) / 1000);
+      if (ts > lastSeenTs) lastSeenTs = ts;
+      if (rec.poolName) poolName = rec.poolName;
+      if (rec.poolType) poolType = rec.poolType;
+
+      const id = String(rec.charId || "").trim();
+      if (!id) continue;
+
+      if (rec.rarity >= 6) {
+        const old = sixCounter.get(id) || {
+          count: 0,
+          latestTs: 0,
+          name: rec.charName,
+        };
+        sixCounter.set(id, {
+          count: old.count + 1,
+          latestTs: Math.max(old.latestTs, ts),
+          name: rec.charName || old.name,
+        });
+      } else if (rec.rarity === 5) {
+        const old = fiveCounter.get(id) || {
+          count: 0,
+          latestTs: 0,
+          name: rec.charName,
+        };
+        fiveCounter.set(id, {
+          count: old.count + 1,
+          latestTs: Math.max(old.latestTs, ts),
+          name: rec.charName || old.name,
+        });
+      }
+    }
+
+    const topSix = Array.from(sixCounter.entries())
+      .sort((a, b) => b[1].count - a[1].count || b[1].latestTs - a[1].latestTs)
+      .slice(0, 1)
+      .map(([charId, meta]) => ({ charId, charName: meta.name }));
+
+    const topFive = Array.from(fiveCounter.entries())
+      .sort((a, b) => b[1].count - a[1].count || b[1].latestTs - a[1].latestTs)
+      .slice(0, 2)
+      .map(([charId, meta]) => ({ charId, charName: meta.name }));
+
+    merged[poolId] = {
+      poolId,
+      poolName,
+      poolType,
+      lastSeenTs,
+      featuredSixStar: topSix[0],
+      featuredFiveStars: topFive,
+    };
+  }
+
+  await db.set(key, merged);
+}
+
 const POOL_TYPES = [
   "E_CharacterGachaPoolType_Standard",
   "E_CharacterGachaPoolType_Special",
@@ -195,7 +300,10 @@ export async function fetchAndMergeGachaLog(
 
       const data = res.data;
       if (data.code !== 0) {
-        throw new GachaApiError(data.msg || data.message || "API Error", data.code);
+        throw new GachaApiError(
+          data.msg || data.message || "API Error",
+          data.code,
+        );
       }
 
       const list = data.data.list as GachaRecord[];
@@ -300,6 +408,7 @@ export async function fetchAndMergeGachaLog(
   };
 
   await db.set(dbKey, updatedData);
+  await persistSimPoolRecordsFromLog(db, uid, updatedData);
 
   // Update leaderboard
   try {
@@ -385,6 +494,7 @@ export async function migrateGachaLog(
   };
 
   await db.set(targetKey, updatedData);
+  await persistSimPoolRecordsFromLog(db, targetUid, updatedData);
   if (sourceKey !== targetKey) {
     await db.delete(sourceKey);
   }

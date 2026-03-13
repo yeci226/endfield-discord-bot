@@ -266,6 +266,21 @@ const langs: Record<string, any> = {
   gacha_log_load_CreateNewGuest: "🆕 建立新的訪客紀錄槽位",
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount: "請選擇要將紀錄匯入至哪個帳號：",
+  gacha_log_token_expired_message:
+    "獲取抽卡紀錄令牌已過期\n\n**「令牌無效」錯誤**\n如果您看到「令牌無效」錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 完全關閉遊戲\n2. 在Windows中搜尋 `%localappdata%` 並打開顯示的資料夾\n3. 返回上一級資料夾，然後進入 `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. 刪除檔案 `HGWebview.log`\n5. 打開遊戲，直接進入**尋訪 > 歷史記錄**以重新生成檔案\n6. 再次執行PowerShell腳本獲取新令牌",
+  gacha_sim_only_initiator: "⚠️ 只有指令發起者可以繼續抽卡。",
+  gacha_sim_pool_missing_ended: "⚠️ 找不到卡池資料，可能已結束。",
+  gacha_sim_pool_missing_retry: "⚠️ 找不到卡池資料，請稍後再試。",
+  gacha_sim_current_up_guarantee_next: "**當期 UP 保底：下一抽強制中當期 UP**",
+  gacha_sim_current_up_guarantee_remaining:
+    "**當期 UP 保底剩餘：<remaining> 抽**",
+  gacha_sim_note_summary:
+    "已墊：**<pity>** 抽 ｜ 六星保底剩餘：**<sixRemaining>** 抽後｜ 五星保底剩餘：**<fiveRemaining>** 抽後",
+  gacha_sim_next_six_limited: "**下一位六星必定為限定角色**",
+  gacha_sim_next_six_rate_up: "**下一位六星必定為當期 UP**",
+  gacha_sim_result_content: "**<poolName>** 模擬結果\n<note>",
+  gacha_sim_pull_once: "抽 1 次",
+  gacha_sim_pull_ten: "10 連抽",
 
   // News
   news_NoPerm: "❌ 你需要 `管理伺服器` 權限才能使用此指令。",

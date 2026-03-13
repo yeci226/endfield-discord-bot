@@ -149,24 +149,28 @@ export class AutoDailyService {
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
-        if (account.invalid) {
-          this.logger.warn(
-            `Skipping invalid account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
-          );
-          results.push({
-            roleName: `${account.info?.nickname || "Unknown"}`,
-            rewardName: "",
-            rewardIcon: "",
-            totalDays: 0,
-            status: tr("TokenExpired"),
-            isError: true,
-          });
-          failCount++;
-          continue;
-        }
 
         try {
+          // Always attempt account validation/recovery, even if previously marked invalid.
+          // ensureAccountBinding will try all 3 refresh steps and clear the invalid flag if successful.
           await ensureAccountBinding(account, userId, this.client.db, tr.lang);
+
+          if (account.invalid) {
+            // Still invalid after recovery attempt — token is truly expired
+            this.logger.warn(
+              `Skipping unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
+            );
+            results.push({
+              roleName: `${account.info?.nickname || "Unknown"}`,
+              rewardName: "",
+              rewardIcon: "",
+              totalDays: 0,
+              status: tr("TokenExpired"),
+              isError: true,
+            });
+            failCount++;
+            continue;
+          }
 
           const roles = account.roles;
           if (!roles || roles.length === 0) {

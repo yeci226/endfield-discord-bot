@@ -271,6 +271,27 @@ const langs: Record<string, any> = {
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount:
     "Select which account to import the records into:",
+  gacha_log_token_expired_message:
+    "The gacha record token has expired\n\n**\"Invalid token\" error**\nIf you see the \"Invalid token\" error, your token has expired. Please follow these steps to get a new token:\n\n1. Fully close the game\n2. Search for `%localappdata%` in Windows and open the shown folder\n3. Go back one level, then open `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. Delete the file `HGWebview.log`\n5. Open the game and go directly to **Headhunt > History** to regenerate the file\n6. Run the PowerShell script again to get a new token",
+  gacha_sim_only_initiator:
+    "⚠️ Only the user who started the command can continue pulling.",
+  gacha_sim_pool_missing_ended:
+    "⚠️ Pool data could not be found. It may have ended.",
+  gacha_sim_pool_missing_retry:
+    "⚠️ Pool data could not be found. Please try again later.",
+  gacha_sim_current_up_guarantee_next:
+    "**Current UP guarantee: the next pull is forced to be the current UP**",
+  gacha_sim_current_up_guarantee_remaining:
+    "**Current UP guarantee remaining: <remaining> pulls**",
+  gacha_sim_note_summary:
+    "Padded: **<pity>** pulls ｜ 6★ guarantee in **<sixRemaining>** pulls ｜ 5★ guarantee in **<fiveRemaining>** pulls",
+  gacha_sim_next_six_limited:
+    "**The next 6★ is guaranteed to be the limited character**",
+  gacha_sim_next_six_rate_up:
+    "**The next 6★ is guaranteed to be the current UP**",
+  gacha_sim_result_content: "**<poolName>** Simulation Result\n<note>",
+  gacha_sim_pull_once: "Pull 1",
+  gacha_sim_pull_ten: "Pull 10",
 
   // News
   news_NoPerm: "❌ You need `Manage Server` permission to use this command.",
