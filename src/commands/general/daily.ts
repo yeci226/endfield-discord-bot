@@ -106,7 +106,9 @@ const command: Command = {
         .addStringOption((op) =>
           op
             .setName("channel")
-            .setDescription("Target channel when notification method is channel")
+            .setDescription(
+              "Target channel when notification method is channel",
+            )
             .setNameLocalizations({ "zh-TW": "通知頻道" })
             .setDescriptionLocalizations({
               "zh-TW": "通知方式為頻道時，選擇要發送通知的頻道",
