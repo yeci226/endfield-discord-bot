@@ -521,8 +521,8 @@ export async function drawGachaStats(
       categorySixCount += sObj.sixStarCount || 0;
       categorySixPullCount += sObj.sixStarPullCount || 0;
 
-      // For Win Rate in Overview (Limited Only)
-      if (type === "limited_char" && sObj.poolFeaturedSixMap) {
+      // For Win Rate in Overview (Limited or Weapon)
+      if ((type === "limited_char" || type === "weapon") && sObj.poolFeaturedSixMap) {
         Object.values(sObj.poolFeaturedSixMap).forEach((v: any) => {
           featuredSixCount += v || 0;
         });
@@ -581,11 +581,13 @@ export async function drawGachaStats(
       label:
         type === "limited_char"
           ? (tr?.("gacha_log_canvas_UpCharWinRate") ?? "UP角色不歪率")
-          : "", // Only show for limited characters
-      value: type === "limited_char" ? rateUpWinRate : "",
+          : type === "weapon"
+            ? (tr?.("gacha_log_canvas_UpWeaponWinRate") ?? "UP武器不歪率")
+            : "",
+      value: (type === "limited_char" || type === "weapon") ? rateUpWinRate : "",
       subValue: "",
-      icon: type === "limited_char" ? "💍" : "",
-      hidden: type !== "limited_char",
+      icon: (type === "limited_char" || type === "weapon") ? "💍" : "",
+      hidden: type !== "limited_char" && type !== "weapon",
     },
   ];
 

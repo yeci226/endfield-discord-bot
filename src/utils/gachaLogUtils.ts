@@ -1044,6 +1044,23 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
     if (pm) poolMetaMap[pid] = pm;
   }
 
+  // Build a dynamic set of known standard characters from the user's own standard/beginner
+  // pool history. This is more reliable than a hardcoded list because it automatically
+  // captures all permanent characters the game has ever added, without manual maintenance.
+  // When a standard character appears off-rate in a limited/weapon pool and their pool
+  // metadata is missing, this set ensures they are still correctly identified as off-rate.
+  const dynamicStandardSixStars = new Set<string>(STANDARD_SIX_STARS);
+  for (const rec of data.characterList) {
+    if (
+      (rec.poolType?.includes("Standard") || rec.poolType?.includes("Beginner")) &&
+      rec.rarity >= 6 &&
+      !isPullFree(rec)
+    ) {
+      const cid = String(rec.charId || "").replace("icon_", "");
+      if (cid) dynamicStandardSixStars.add(cid);
+    }
+  }
+
   const getPityGroupId = (record: GachaRecord) => {
     const type = record.poolType || "";
     const pId = record.poolId || "";
@@ -1208,20 +1225,24 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
               record.charId || record.weaponId || "",
             ).replace("icon_", "");
 
-            // Try to resolve UP character ID from pool metadata names
+            // Try to resolve only the CURRENT UP character ID from pool metadata.
+            // rotate_list is intentionally ignored here: if a 6-star is not the current
+            // up6 target for this pool, it should be treated as off-rate.
             let upCids: string[] = [];
-            if (pMeta?.all && (pMeta.up6_name || pMeta.up6_item_name)) {
+            if (pMeta?.all) {
               const upName = pMeta.up6_name;
               const upItemName = pMeta.up6_item_name;
 
-              for (const a of pMeta.all) {
-                if (
-                  a.rarity >= 6 &&
-                  (a.name === upName ||
-                    a.name === upItemName ||
-                    (upItemName && upItemName.includes(a.name)))
-                ) {
-                  upCids.push(a.id.replace("icon_", ""));
+              if (upName || upItemName) {
+                for (const a of pMeta.all) {
+                  if (
+                    a.rarity >= 6 &&
+                    (a.name === upName ||
+                      a.name === upItemName ||
+                      (upItemName && upItemName.includes(a.name)))
+                  ) {
+                    upCids.push(a.id.replace("icon_", ""));
+                  }
                 }
               }
             }
@@ -1255,8 +1276,8 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
                       record.poolName.includes(record.charName)))
                 ) {
                   isFeatured = true;
-                } else if (STANDARD_SIX_STARS.includes(recordCid)) {
-                  // Priority 4: Standard List Fallback
+                } else if (dynamicStandardSixStars.has(recordCid)) {
+                  // Priority 4: Standard List Fallback (dynamic + hardcoded)
                   isOffRate = true;
                 } else {
                   isFeatured = true;
@@ -1275,7 +1296,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
                 const recordCid = String(
                   record.charId || record.weaponId || "",
                 ).replace("icon_", "");
-                if (STANDARD_SIX_STARS.includes(recordCid)) {
+                if (dynamicStandardSixStars.has(recordCid)) {
                   isOffRate = true;
                 } else {
                   isFeatured = true;
@@ -1448,6 +1469,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           endTs: p.endTs,
           total: poolTotal, // Current non-free total
           freeCount,
+          bannerUrl: p.bannerUrl,
           sixStarPullCount:
             Object.values(summary).reduce(
               (sum, s) => sum + ((s as any).poolSixStarPullMap?.[p.id] || 0),
