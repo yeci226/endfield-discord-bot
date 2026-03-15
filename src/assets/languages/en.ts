@@ -375,6 +375,19 @@ const langs: Record<string, any> = {
   gacha_log_recover_Button: "Recover Stranded Data",
   gacha_log_recover_Success:
     "✅ **Recovery Successful**\nLost data has been successfully restored to account **<nickname>**.",
+  gacha_log_clear_Warning:
+    "⚠️ **Confirm Gacha Log Deletion**\nYou are about to delete gacha logs for account **<uid>**. This action cannot be undone.",
+  gacha_log_clear_ConfirmAll: "Are you sure you want to delete all records?",
+  gacha_log_clear_ConfirmRange:
+    "Are you sure you want to delete records in the selected time range?\nStart: <start>\nEnd: <end>",
+  gacha_log_clear_Success:
+    "✅ **Deletion Successful**\nSelected gacha log records for account **<uid>** have been deleted.",
+  gacha_log_fingerprint_prompt:
+    "⚠️ **Import Account Check**\nCurrent selection: **<selectedUid>**\nClosest match: **<predictedUid>**\nMatch confidence: **<confidence>**\n\nPlease confirm whether to switch to the predicted account before importing.",
+  gacha_log_fingerprint_keep_selected: "Keep import to <uid>",
+  gacha_log_fingerprint_switch_predicted: "Switch import to <uid>",
+  gacha_log_fingerprint_expired:
+    "This import confirmation has expired. Please run `/gacha log load` again.",
 };
 
 export default langs;

@@ -39,6 +39,7 @@ import {
   migrateGachaLog,
   updateLeaderboard,
   GachaApiError,
+  analyzeGachaImportFingerprint,
 } from "../../utils/gachaLogUtils";
 import {
   drawGachaStats,
@@ -319,9 +320,9 @@ const command: Command = {
             .setNameLocalizations({
               "zh-TW": "清除紀錄",
             })
-            .setDescription("Clear your gacha logs (with confirmation)")
+            .setDescription("Clear your gacha logs")
             .setDescriptionLocalizations({
-              "zh-TW": "清除您的抽卡紀錄 (包含兩次確認)",
+              "zh-TW": "清除您的抽卡紀錄",
             })
             .addStringOption((option) =>
               option
@@ -861,6 +862,7 @@ const command: Command = {
       url: string,
       selectedUidRaw: string,
       userId: string,
+      skipFingerprintCheck: boolean = false,
     ) {
       const allRoles = await getAllPossibleUserRoles(userId, db);
 
@@ -877,6 +879,83 @@ const command: Command = {
       }
 
       console.log(`[Gacha Load] Starting merge for UID: ${selectedUid}`);
+
+      if (
+        !skipFingerprintCheck &&
+        !selectedUid.startsWith("EF_GUEST_") &&
+        allRoles.length > 1
+      ) {
+        try {
+          const candidateUids = Array.from(new Set(allRoles.map((r) => r.uid)));
+          const fingerprint = await analyzeGachaImportFingerprint(
+            db,
+            url,
+            candidateUids,
+            selectedUid,
+            tr.lang,
+          );
+
+          const bestUid = fingerprint.recommendedUid;
+          const bestScore = Number(fingerprint.confidence || 0);
+          const selectedScore = Number(fingerprint.selectedScore || 0);
+          const hasMismatch =
+            !!bestUid &&
+            bestUid !== selectedUid &&
+            bestScore - selectedScore >= 0.08;
+          const lowConfidence = bestScore > 0 && bestScore < 0.58;
+
+          if (hasMismatch || lowConfidence) {
+            const pendingKey = `PENDING_GACHA_FINGERPRINT_${interaction.user.id}`;
+            await db.set(pendingKey, {
+              url,
+              userId,
+              selectedUid,
+              predictedUid: bestUid || null,
+              confidence: bestScore,
+              createdAt: Date.now(),
+            });
+
+            const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId("gacha:log_load_confirm:keep")
+                .setLabel(
+                  tr("gacha_log_fingerprint_keep_selected", {
+                    uid: selectedUid,
+                  }),
+                )
+                .setStyle(ButtonStyle.Secondary),
+              ...(hasMismatch && bestUid
+                ? [
+                    new ButtonBuilder()
+                      .setCustomId("gacha:log_load_confirm:switch")
+                      .setLabel(
+                        tr("gacha_log_fingerprint_switch_predicted", {
+                          uid: bestUid,
+                        }),
+                      )
+                      .setStyle(ButtonStyle.Primary),
+                  ]
+                : []),
+              new ButtonBuilder()
+                .setCustomId("gacha:log_load_confirm:cancel")
+                .setLabel(tr("Cancel"))
+                .setStyle(ButtonStyle.Danger),
+            );
+
+            await interaction.editReply({
+              content: tr("gacha_log_fingerprint_prompt", {
+                selectedUid,
+                predictedUid: bestUid || "N/A",
+                confidence: `${(bestScore * 100).toFixed(1)}%`,
+              }),
+              components: [buttons],
+            });
+            return;
+          }
+        } catch (e) {
+          console.error("[Gacha Load] Fingerprint check failed, continue import", e);
+        }
+      }
 
       let latestProgress = tr("gacha_log_load_Loading");
       let lastRenderedProgress = "";
@@ -1131,6 +1210,59 @@ const command: Command = {
         const poolId = parts[4];
         const gotoPage = parseInt(parts[5], 10);
         await showGachaStats(targetUid, pageType, poolId, gotoPage);
+        return;
+      }
+
+      if (action === "log_load_confirm") {
+        const mode = parts[2];
+        const pendingKey = `PENDING_GACHA_FINGERPRINT_${btnInteraction.user.id}`;
+        const pending = await db.get<any>(pendingKey);
+
+        if (!pending) {
+          await btnInteraction.update({
+            content: tr("gacha_log_fingerprint_expired"),
+            components: [],
+          });
+          return;
+        }
+
+        if (mode === "cancel") {
+          await db.delete(pendingKey);
+          await btnInteraction.update({
+            content: tr("Cancelled"),
+            components: [],
+          });
+          return;
+        }
+
+        await btnInteraction.deferUpdate();
+
+        const isExpired = Date.now() - Number(pending.createdAt || 0) > 1000 * 60 * 15;
+        if (isExpired) {
+          await db.delete(pendingKey);
+          await btnInteraction.editReply({
+            content: tr("gacha_log_fingerprint_expired"),
+            components: [],
+          });
+          return;
+        }
+
+        const targetImportUid =
+          mode === "switch" && pending.predictedUid
+            ? String(pending.predictedUid)
+            : String(pending.selectedUid);
+
+        await db.delete(pendingKey);
+        await btnInteraction.editReply({
+          content: tr("gacha_log_load_Loading"),
+          components: [],
+        });
+        await doFetchGachaLog(
+          String(pending.url),
+          targetImportUid,
+          String(pending.userId || btnInteraction.user.id),
+          true,
+        );
         return;
       }
 

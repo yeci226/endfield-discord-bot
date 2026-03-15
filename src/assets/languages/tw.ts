@@ -359,6 +359,19 @@ const langs: Record<string, any> = {
   gacha_log_recover_Button: "救回遺失數據",
   gacha_log_recover_Success:
     "✅ **數據救回成功**\n已成功將遺失數據恢復至帳號 **<nickname>**。",
+  gacha_log_clear_Warning:
+    "⚠️ **確認清除抽卡紀錄**\n您即將清除帳號 **<uid>** 的抽卡紀錄，此操作無法復原。",
+  gacha_log_clear_ConfirmAll: "是否確認清除全部紀錄？",
+  gacha_log_clear_ConfirmRange:
+    "是否確認清除指定時間區間紀錄？\n開始：<start>\n結束：<end>",
+  gacha_log_clear_Success:
+    "✅ **清除成功**\n已成功清除帳號 **<uid>** 的選定抽卡紀錄。",
+  gacha_log_fingerprint_prompt:
+    "⚠️ **匯入前帳號確認**\n系統發現這份抽卡紀錄可能不是目前選擇的帳號。\n目前選擇：**<selectedUid>**\n系統建議：**<predictedUid>**\n相似度參考：**<confidence>**\n\n這是依照抽卡紀錄自動比對的結果（非 100% 保證），請確認要匯入到哪個帳號。",
+  gacha_log_fingerprint_keep_selected: "仍匯入目前帳號（<uid>）",
+  gacha_log_fingerprint_switch_predicted: "改為匯入建議帳號（<uid>）",
+  gacha_log_fingerprint_expired:
+    "這次匯入確認已逾時，請重新執行 `/gacha log load`。",
 };
 
 export default langs;

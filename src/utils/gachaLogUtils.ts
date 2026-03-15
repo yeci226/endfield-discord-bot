@@ -86,6 +86,315 @@ function toTs(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function parseRecordTs(v: any): number {
+  if (v == null) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
+  const m = moment(v);
+  return m.isValid() ? m.valueOf() : 0;
+}
+
+type RawFetchedGacha = {
+  host: string;
+  lang: string;
+  serverId: string;
+  apiDomain: string;
+  inferredUid: string;
+  characterList: GachaRecord[];
+  weaponList: GachaRecord[];
+};
+
+async function fetchRawGachaFromUrl(
+  urlStr: string,
+  onProgress?: (message: string) => void,
+  locale?: string,
+): Promise<RawFetchedGacha> {
+  const url = new URL(urlStr);
+  const token =
+    url.searchParams.get("token") || url.searchParams.get("u8_token");
+  const lang = locale
+    ? mapLocaleToLang(locale)
+    : url.searchParams.get("lang") || "en-us";
+  const serverId =
+    url.searchParams.get("server_id") || url.searchParams.get("server");
+  const apiDomain = `${url.protocol}//${url.host}`;
+
+  if (!token || !serverId) {
+    throw new Error("Invalid URL: Missing token or server_id");
+  }
+
+  const host = url.host;
+  let inferredUid = `EF_${serverId}`;
+  if (host.includes("hypergryph")) {
+    inferredUid = `EF_CN_${serverId}`;
+  }
+
+  const characterList: GachaRecord[] = [];
+  const weaponList: GachaRecord[] = [];
+
+  for (const poolType of POOL_TYPES) {
+    let hasMore = true;
+    let lastSeqId: string | undefined = undefined;
+    let page = 1;
+
+    while (hasMore) {
+      if (onProgress)
+        onProgress(`Fetching character records (${poolType}, page ${page})...`);
+
+      const res = await axios.get(`${apiDomain}/api/record/char`, {
+        params: {
+          token,
+          lang,
+          server_id: serverId,
+          pool_type: poolType,
+          seq_id: lastSeqId,
+        },
+      });
+
+      const data = res.data;
+      if (data.code !== 0) {
+        throw new GachaApiError(
+          data.msg || data.message || "API Error",
+          data.code,
+        );
+      }
+
+      const list = data.data.list as GachaRecord[];
+      if (list && list.length > 0) {
+        for (const item of list) {
+          item.poolType = poolType;
+          item.isFree = isPullFree(item);
+          characterList.push(item);
+        }
+        lastSeqId = list[list.length - 1].seqId;
+      }
+      hasMore = data.data.hasMore;
+      page++;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  if (onProgress) onProgress("Fetching weapon pools...");
+  const wpRes = await axios.get(`${apiDomain}/api/record/weapon/pool`, {
+    params: { lang, token, server_id: serverId },
+  });
+
+  if (wpRes.data.code === 0) {
+    const weaponPools = wpRes.data.data;
+    for (const pool of weaponPools) {
+      const poolId = pool.poolId;
+      const poolName = pool.poolName;
+      let hasMore = true;
+      let lastSeqId: string | undefined = undefined;
+      let page = 1;
+
+      while (hasMore) {
+        if (onProgress)
+          onProgress(`Fetching weapon records (${poolName}, page ${page})...`);
+
+        const res = await axios.get(`${apiDomain}/api/record/weapon`, {
+          params: {
+            token,
+            lang,
+            server_id: serverId,
+            pool_id: poolId,
+            seq_id: lastSeqId,
+          },
+        });
+
+        const data = res.data;
+        if (data.code !== 0) break;
+
+        const list = data.data.list as GachaRecord[];
+        if (list && list.length > 0) {
+          for (const item of list) {
+            item.poolType = "WeaponPool";
+            item.isFree = isPullFree(item);
+            weaponList.push(item);
+          }
+          lastSeqId = list[list.length - 1].seqId;
+        }
+        hasMore = data.data.hasMore;
+        page++;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+  }
+
+  return {
+    host,
+    lang,
+    serverId,
+    apiDomain,
+    inferredUid,
+    characterList,
+    weaponList,
+  };
+}
+
+export interface GachaFingerprintMatch {
+  uid: string;
+  score: number;
+  seqOverlap: number;
+  timeSimilarity: number;
+  poolSimilarity: number;
+}
+
+export interface GachaFingerprintResult {
+  recommendedUid?: string;
+  confidence: number;
+  selectedUid?: string;
+  selectedScore?: number;
+  compared: number;
+  matches: GachaFingerprintMatch[];
+  incomingSummary: {
+    total: number;
+    startTs: number;
+    endTs: number;
+  };
+}
+
+function buildPoolDistMap(list: GachaRecord[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const r of list) {
+    if (isPullFree(r)) continue;
+    const key = String(r.poolId || "unknown");
+    map.set(key, (map.get(key) || 0) + 1);
+  }
+  return map;
+}
+
+function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
+  const keys = new Set<string>([...a.keys(), ...b.keys()]);
+  if (keys.size === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (const k of keys) {
+    const av = a.get(k) || 0;
+    const bv = b.get(k) || 0;
+    dot += av * bv;
+    na += av * av;
+    nb += bv * bv;
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+function seqOverlapRatio(a: string[], b: string[]): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  const sa = new Set(a);
+  let hit = 0;
+  for (const v of b) {
+    if (sa.has(v)) hit++;
+  }
+  return hit / Math.min(a.length, b.length);
+}
+
+function timeWindowSimilarity(
+  aStart: number,
+  aEnd: number,
+  bStart: number,
+  bEnd: number,
+): number {
+  if (!aStart || !aEnd || !bStart || !bEnd) return 0;
+  const centerA = (aStart + aEnd) / 2;
+  const centerB = (bStart + bEnd) / 2;
+  const spanA = Math.max(1, aEnd - aStart);
+  const spanB = Math.max(1, bEnd - bStart);
+  const centerDiff = Math.abs(centerA - centerB);
+  const spanDiff = Math.abs(spanA - spanB);
+  const normCenter = Math.max(spanA, spanB, 1000 * 60 * 60 * 24 * 7);
+  const centerScore = Math.max(0, 1 - centerDiff / normCenter);
+  const spanScore = Math.max(0, 1 - spanDiff / Math.max(spanA, spanB));
+  return centerScore * 0.7 + spanScore * 0.3;
+}
+
+export async function analyzeGachaImportFingerprint(
+  db: CustomDatabase,
+  urlStr: string,
+  candidateUids: string[],
+  selectedUid?: string,
+  locale?: string,
+): Promise<GachaFingerprintResult> {
+  const raw = await fetchRawGachaFromUrl(urlStr, undefined, locale);
+  const incomingList = [...raw.characterList, ...raw.weaponList].sort(
+    (a, b) => Number(b.seqId) - Number(a.seqId),
+  );
+
+  const incomingSeqs = incomingList.slice(0, 300).map((r) => String(r.seqId));
+  const incomingPoolDist = buildPoolDistMap(incomingList);
+  const incomingTs = incomingList
+    .map((r) => parseRecordTs(r.gachaTs))
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+  const incomingStart = incomingTs[0] || 0;
+  const incomingEnd = incomingTs[incomingTs.length - 1] || 0;
+
+  const matches: GachaFingerprintMatch[] = [];
+  const uniqueCandidates = Array.from(new Set(candidateUids.filter(Boolean)));
+
+  for (const uid of uniqueCandidates) {
+    const existing = await db.get<GachaLogData>(`GACHA_LOG_${uid}`);
+    if (!existing) continue;
+    const existingList = [...existing.characterList, ...existing.weaponList].sort(
+      (a, b) => Number(b.seqId) - Number(a.seqId),
+    );
+    if (existingList.length === 0) continue;
+
+    const existingSeqs = existingList
+      .slice(0, 300)
+      .map((r) => String(r.seqId));
+    const seqOverlap = seqOverlapRatio(incomingSeqs, existingSeqs);
+
+    const existingPoolDist = buildPoolDistMap(existingList);
+    const poolSimilarity = cosineSimilarity(incomingPoolDist, existingPoolDist);
+
+    const existingTs = existingList
+      .map((r) => parseRecordTs(r.gachaTs))
+      .filter((v) => v > 0)
+      .sort((a, b) => a - b);
+    const existingStart = existingTs[0] || 0;
+    const existingEnd = existingTs[existingTs.length - 1] || 0;
+    const timeSimilarity = timeWindowSimilarity(
+      incomingStart,
+      incomingEnd,
+      existingStart,
+      existingEnd,
+    );
+
+    const score = seqOverlap * 0.55 + poolSimilarity * 0.3 + timeSimilarity * 0.15;
+
+    matches.push({
+      uid,
+      score,
+      seqOverlap,
+      timeSimilarity,
+      poolSimilarity,
+    });
+  }
+
+  matches.sort((a, b) => b.score - a.score);
+  const best = matches[0];
+  const selected = selectedUid
+    ? matches.find((m) => m.uid === selectedUid)
+    : undefined;
+
+  return {
+    recommendedUid: best?.uid,
+    confidence: best?.score || 0,
+    selectedUid,
+    selectedScore: selected?.score,
+    compared: matches.length,
+    matches,
+    incomingSummary: {
+      total: incomingList.length,
+      startTs: incomingStart,
+      endTs: incomingEnd,
+    },
+  };
+}
+
 /**
  * Detects whether there is a seqId gap between existing DB records and
  * newly fetched API records. Returns the oldest new record's seqId if a
@@ -296,25 +605,10 @@ export async function fetchAndMergeGachaLog(
   accountIndex?: number,
   gameNickname?: string,
 ) {
-  const url = new URL(urlStr);
-  const token =
-    url.searchParams.get("token") || url.searchParams.get("u8_token");
-  const lang = locale
-    ? mapLocaleToLang(locale)
-    : url.searchParams.get("lang") || "en-us";
-  const serverId =
-    url.searchParams.get("server_id") || url.searchParams.get("server");
-  const apiDomain = `${url.protocol}//${url.host}`;
-
-  if (!token || !serverId) {
-    throw new Error("Invalid URL: Missing token or server_id");
-  }
-
-  const host = url.host;
-  let uid = targetUid || `EF_${serverId}`;
-  if (!targetUid && host.includes("hypergryph")) {
-    uid = `EF_CN_${serverId}`;
-  }
+  const rawFetched = await fetchRawGachaFromUrl(urlStr, onProgress, locale);
+  const lang = rawFetched.lang;
+  const serverId = rawFetched.serverId;
+  let uid = targetUid || rawFetched.inferredUid;
 
   const dbKey = `GACHA_LOG_${uid}`;
   const existingData = (await db.get<GachaLogData>(dbKey)) || {
@@ -328,99 +622,8 @@ export async function fetchAndMergeGachaLog(
     ...existingData.weaponList.map((r) => String(r.seqId)),
   ]);
 
-  const characterList: GachaRecord[] = [];
-  const weaponList: GachaRecord[] = [];
-
-  // 1. Fetch character records
-  for (const poolType of POOL_TYPES) {
-    let hasMore = true;
-    let lastSeqId: string | undefined = undefined;
-    let page = 1;
-
-    while (hasMore) {
-      if (onProgress)
-        onProgress(`Fetching character records (${poolType}, page ${page})...`);
-
-      const res = await axios.get(`${apiDomain}/api/record/char`, {
-        params: {
-          token,
-          lang,
-          server_id: serverId,
-          pool_type: poolType,
-          seq_id: lastSeqId,
-        },
-      });
-
-      const data = res.data;
-      if (data.code !== 0) {
-        throw new GachaApiError(
-          data.msg || data.message || "API Error",
-          data.code,
-        );
-      }
-
-      const list = data.data.list as GachaRecord[];
-      if (list && list.length > 0) {
-        for (const item of list) {
-          item.poolType = poolType;
-          item.isFree = isPullFree(item);
-          characterList.push(item);
-        }
-        lastSeqId = list[list.length - 1].seqId;
-      }
-      hasMore = data.data.hasMore;
-      page++;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-
-  // 2. Fetch weapon pools and records
-  if (onProgress) onProgress("Fetching weapon pools...");
-  const wpRes = await axios.get(`${apiDomain}/api/record/weapon/pool`, {
-    params: { lang, token, server_id: serverId },
-  });
-
-  if (wpRes.data.code === 0) {
-    const weaponPools = wpRes.data.data;
-    for (const pool of weaponPools) {
-      const poolId = pool.poolId;
-      const poolName = pool.poolName;
-      let hasMore = true;
-      let lastSeqId: string | undefined = undefined;
-      let page = 1;
-
-      while (hasMore) {
-        if (onProgress)
-          onProgress(`Fetching weapon records (${poolName}, page ${page})...`);
-
-        const res = await axios.get(`${apiDomain}/api/record/weapon`, {
-          params: {
-            token,
-            lang,
-            server_id: serverId,
-            pool_id: poolId,
-            seq_id: lastSeqId,
-          },
-        });
-
-        const data = res.data;
-        if (data.code !== 0) break;
-
-        const list = data.data.list as GachaRecord[];
-        if (list && list.length > 0) {
-          for (const item of list) {
-            item.poolType = "WeaponPool";
-            item.isFree = isPullFree(item);
-            weaponList.push(item);
-          }
-          lastSeqId = list[list.length - 1].seqId;
-        }
-        hasMore = data.data.hasMore;
-        page++;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-    }
-  }
+  const characterList = rawFetched.characterList;
+  const weaponList = rawFetched.weaponList;
 
   // 3. Detect data gap BEFORE merging (compare existing vs newly fetched)
   const charPityResetSeqId = detectPityGapSeqId(
@@ -998,7 +1201,9 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
               record.poolName?.includes("特選"))
           ) {
             // Priority 1: Match by ID
-            const recordCid = String(record.charId || "").replace("icon_", "");
+            const recordCid = String(
+              record.charId || record.weaponId || "",
+            ).replace("icon_", "");
 
             // Try to resolve UP character ID from pool metadata names
             let upCids: string[] = [];
@@ -1064,7 +1269,9 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
                   record.poolType?.includes("WeaponPool") ||
                   record.poolName?.includes("特選"))
               ) {
-                const recordCid = String(record.charId || "").replace(
+                const recordCid = String(
+                  record.charId || record.weaponId || "",
+                ).replace(
                   "icon_",
                   "",
                 );

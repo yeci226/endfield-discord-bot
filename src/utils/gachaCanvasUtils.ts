@@ -28,6 +28,22 @@ function normalizeGachaText(text: string): string {
     .replace(/）/g, ") ");
 }
 
+function parseGachaTs(rawTs: any): number {
+  if (rawTs == null) return 0;
+  if (typeof rawTs === "number") return rawTs;
+  if (typeof rawTs === "string" && /^\d+$/.test(rawTs)) {
+    return Number(rawTs);
+  }
+  const parsed = moment(rawTs);
+  return parsed.isValid() ? parsed.valueOf() : 0;
+}
+
+function formatSmallGachaTime(rawTs: any): string {
+  const ts = parseGachaTs(rawTs);
+  if (!ts) return "";
+  return moment(ts).format("YY/MM/DD HH:mm");
+}
+
 function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -182,6 +198,8 @@ export async function drawGachaStats(
       const prev = sixMap.get(key);
       if (prev) {
         prev.count += 1;
+        prev.latestTs = Math.max(prev.latestTs || 0, parseGachaTs(item.gachaTs));
+        prev.isOffRate = prev.isOffRate || !!item.isOffRate;
       } else {
         sixMap.set(key, {
           key,
@@ -189,11 +207,19 @@ export async function drawGachaStats(
           charId: item.charId,
           weaponId: item.weaponId,
           count: 1,
+          latestTs: parseGachaTs(item.gachaTs),
+          isOffRate: !!item.isOffRate,
         });
       }
     }
 
     return Array.from(sixMap.values()).sort((a, b) => b.count - a.count);
+  };
+
+  const getPoolLatestGachaTs = (poolId?: string): any => {
+    if (!poolId) return undefined;
+    const rec = history.find((item: any) => item.poolId === poolId);
+    return rec?.gachaTs;
   };
 
   const poolBannerUrlMap = new Map<string, string>();
@@ -951,6 +977,17 @@ export async function drawGachaStats(
               tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
             ).replace("<hardCount>", String(displayPity));
             ctx.fillText(paddedText, curX + colW / 2, curY + 30);
+
+            const paddedTimeText = formatSmallGachaTime(
+              getPoolLatestGachaTs(group.pId),
+            );
+            if (paddedTimeText) {
+              ctx.textAlign = "right";
+              ctx.textBaseline = "alphabetic";
+              ctx.fillStyle = "#b0b5bf";
+              ctx.font = "15px NotoSans";
+              ctx.fillText(paddedTimeText, curX + colW - 12, curY + 52);
+            }
             ctx.restore();
             curY += 60 + 15;
           }
@@ -996,6 +1033,15 @@ export async function drawGachaStats(
             "已使用 <count> 抽加急尋訪"
           ).replace("<count>", String(item.count));
           ctx.fillText(freeText, curX + colW / 2, curY + 30);
+
+          const freeTimeText = formatSmallGachaTime(item.gachaTs);
+          if (freeTimeText) {
+            ctx.textAlign = "right";
+            ctx.textBaseline = "alphabetic";
+            ctx.fillStyle = "#b0b5bf";
+            ctx.font = "16px NotoSans";
+            ctx.fillText(freeTimeText, curX + colW - 12, curY + 52);
+          }
           ctx.restore();
           curY += 60 + 15;
           continue;
@@ -1057,7 +1103,7 @@ export async function drawGachaStats(
         const nameText = normalizeGachaText(item.name);
         ctx.fillText(nameText, centerX + 60, curY + rectH / 2 + 10);
 
-        if (item.isOffRate && type !== "weapon") {
+        if (item.isOffRate) {
           const textWidth = ctx.measureText(nameText).width; // Use nameText for measurement
           drawOffRateBadge(
             ctx,
@@ -1102,6 +1148,14 @@ export async function drawGachaStats(
           );
         }
 
+        const itemTimeText = formatSmallGachaTime(item.gachaTs);
+        if (itemTimeText) {
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#b0b5bf";
+          ctx.font = "16px NotoSans";
+          ctx.fillText(itemTimeText, curX + colW - 14, curY + rectH - 10);
+        }
+
         curY += rectH + 15;
       }
     }
@@ -1129,14 +1183,8 @@ export async function drawGachaStats(
         const nonFree = p.total || 0;
         const free = p.freeCount || 0;
         const paddedCount = getPoolPaddedCount(p.id, gId);
-        const freePart = free > 0 ? `+${free}` : "";
-        const summary = (
-          tr?.("gacha_log_canvas_HistoryQuickTotal") ??
-          "總共 <nonFree><freePart> 抽"
-        )
-          .replace("<nonFree>", String(nonFree))
-          .replace("<freePart>", freePart);
         const sixSummary = getPoolSixStarSummary(p.id);
+        const quickTimeText = formatSmallGachaTime(getPoolLatestGachaTs(p.id));
 
         ctx.fillStyle = "#ffffff";
         ctx.shadowColor = "rgba(0,0,0,0.04)";
@@ -1229,17 +1277,39 @@ export async function drawGachaStats(
           );
         }
 
-        ctx.fillStyle = "#777";
-        ctx.font = "19px NotoSans";
-        fillDynamicText(
-          ctx,
-          summary,
-          x + 14,
-          quickCardY + 58,
-          quickCardW - 24,
-          19,
-          false,
-        );
+        // Keep quick total line consistent with top cards: Prefix + count + suffix.
+        let summaryX = x + 14;
+        const summaryY = quickCardY + 52;
+        const totalPrefix = tr("gacha_log_canvas_Total_Prefix").trim();
+        const totalSuffix = tr("gacha_log_canvas_Pulls_Suffix").trim();
+
+        ctx.textAlign = "left";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillStyle = "#888";
+        ctx.font = "16px NotoSans";
+        ctx.fillText(totalPrefix, summaryX, summaryY);
+        summaryX += ctx.measureText(totalPrefix).width + 6;
+
+        ctx.fillStyle = "#444";
+        ctx.font = "bold 18px NotoSansTCBold";
+        ctx.fillText(String(nonFree), summaryX, summaryY);
+        summaryX += ctx.measureText(String(nonFree)).width + 6;
+
+        if (free > 0) {
+          ctx.fillStyle = "#888";
+          ctx.font = "15px NotoSans";
+          ctx.fillText("+", summaryX, summaryY);
+          summaryX += ctx.measureText("+").width + 6;
+
+          ctx.fillStyle = "#ffcc00";
+          ctx.font = "bold 17px NotoSansTCBold";
+          ctx.fillText(String(free), summaryX, summaryY);
+          summaryX += ctx.measureText(String(free)).width + 6;
+        }
+
+        ctx.fillStyle = "#888";
+        ctx.font = "16px NotoSans";
+        ctx.fillText(totalSuffix, summaryX, summaryY);
 
         if (sixSummary.length === 0) {
           ctx.fillStyle = "#999";
@@ -1314,6 +1384,16 @@ export async function drawGachaStats(
             } catch (e) {}
           }
 
+          if (sixItem.isOffRate) {
+            drawOffRateBadge(
+              ctx,
+              iconX + iconSize / 2 - 2,
+              iconY - iconSize / 2 + 2,
+              useTwoRows ? 8 : 10,
+              isEn,
+            );
+          }
+
           ctx.fillStyle = "#666";
           ctx.font = `bold ${useTwoRows ? 17 : 22}px NotoSansTCBold`;
           ctx.textAlign = "left";
@@ -1332,8 +1412,15 @@ export async function drawGachaStats(
           ctx.fillText(
             `+${remain}`,
             x + quickCardW - 10,
-            quickCardY + quickCardH - 10,
+            quickCardY + quickCardH - 28,
           );
+        }
+
+        if (quickTimeText) {
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#b0b5bf";
+          ctx.font = "15px NotoSans";
+          ctx.fillText(quickTimeText, x + quickCardW - 10, quickCardY + quickCardH - 10);
         }
       }
 
@@ -1720,7 +1807,7 @@ export async function drawGachaStats(
       const nameText = normalizeGachaText(item.name);
       ctx.fillText(nameText, centerX + radius + 10, curY + itemH / 2 - 5);
 
-      if (item.isOffRate && type !== "weapon") {
+      if (item.isOffRate) {
         const textWidth = ctx.measureText(nameText).width;
         drawOffRateBadge(
           ctx,
@@ -1860,21 +1947,30 @@ function drawOffRateBadge(
 ) {
   ctx.save();
   ctx.translate(x, y);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
 
   if (isEn) {
     // Background circle for "L" (LOSE)
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = "#1e3a8a"; // Deep blue
+    ctx.fill();
+
+    // White "L"
     ctx.fillStyle = "#fff";
-    ctx.font = `bold ${Math.floor(radius * 1.3)}px NotoSansTCBold`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.font = `bold ${Math.floor(radius * 1.25)}px NotoSansTCBold`;
     ctx.fillText("L", 0, -1);
   } else {
+    // Background circle for "歪"
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = "#ff0000";
     ctx.fill();
-    ctx.textBaseline = "middle";
+
+    // White "歪"
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${Math.floor(radius * 1.1)}px NotoSansTCBold`;
     ctx.fillText("歪", 0, -2.5);
   }
 
