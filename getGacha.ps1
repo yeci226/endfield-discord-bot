@@ -21,22 +21,30 @@ $text = $text -replace '\\u0026', '&'
 $text = $text -replace '\\/', '/'
 $text = $text -replace '&amp;', '&'
 
-$urlMatches = [regex]::Matches($text, 'https?://[^\s"''<>\\]+u8_token=[^\s"''<>\\]+')
+$allUrlMatches = [regex]::Matches($text, 'https?://[A-Za-z0-9\-\._~:/\?#\[\]@!\$&''\(\)\*\+,;=%]+')
+$targetPrefix = 'https://ef-webview.gryphline.com'
 
-if ($urlMatches.Count -eq 0) {
-    Write-Host "No URL containing u8_token was found in data_1." -ForegroundColor Red
+$targetUrls = @(
+    foreach ($match in $allUrlMatches) {
+        $match.Value
+    }
+) | Where-Object {
+    $_ -like "$targetPrefix*"
+}
+
+if ($targetUrls.Count -eq 0) {
+    Write-Host "No URL from $targetPrefix was found in data_1." -ForegroundColor Red
     Read-Host "Press Enter to exit"
     return
 }
 
-$url = $urlMatches[$urlMatches.Count - 1].Value
-
-Write-Host ""
-Write-Host ("{0}" -f ([char]0x2501) * 50)
-Write-Host " URL: $url"
-Write-Host ("{0}" -f ([char]0x2501) * 50)
+$urlsWithToken = $targetUrls | Where-Object { $_ -match 'u8_token=' }
+if ($urlsWithToken.Count -gt 0) {
+    $url = $urlsWithToken[$urlsWithToken.Count - 1]
+} else {
+    $url = $targetUrls[$targetUrls.Count - 1]
+}
 
 Set-Clipboard -Value $url
-Write-Host ""
 Write-Host "Copied to clipboard." -ForegroundColor Green
 Read-Host "Press Enter to exit"
