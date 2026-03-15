@@ -217,7 +217,7 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "亞洲：將在 <asiaEndTs> (<asiaEndTsRelative>) 結束",
   gacha_log_how_Title: "❓ **如何獲取抽卡紀錄**",
   gacha_log_how_Steps:
-    "1. 打開遊戲中的抽卡紀錄頁面。\n2. 在電腦上打開 PowerShell。\n3. 複製並貼上以下指令並執行：\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/holstonline/endfield-gacha-url/refs/heads/main/extract-headhunt-api-url.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. 執行後，抽卡紀錄網址會自動複製到剪貼簿。\n5. 使用 `/gacha log load` 並貼上網址以匯入資料。",
+    "1. 打開遊戲中的抽卡紀錄頁面。\n2. 在電腦上打開 PowerShell。\n3. 複製並貼上以下指令並執行：\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/yeci226/endfield-discord-bot/refs/heads/main/getGacha.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. 執行後，抽卡紀錄網址會自動複製到剪貼簿。\n5. 使用 `/gacha log load` 並貼上網址以匯入資料。",
   gacha_log_load_Loading: "🔄 **正在獲取抽卡紀錄...**",
   gacha_log_load_ModalTitle: "匯入抽卡紀錄",
   gacha_log_load_UrlLabel: "請貼上抽卡紀錄網址 (URL)",

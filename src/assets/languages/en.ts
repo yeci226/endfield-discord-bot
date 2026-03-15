@@ -219,7 +219,7 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "Asia: Will end at <asiaEndTs> (<asiaEndTsRelative>)",
   gacha_log_how_Title: "❓ **How to get Gacha Log**",
   gacha_log_how_Steps:
-    "1. Open the Gacha Record page in the game.\n2. Open PowerShell on your computer.\n3. Copy and paste the following command and execute it:\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/holstonline/endfield-gacha-url/refs/heads/main/extract-headhunt-api-url.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. After execution, the Gacha Record URL will be copied to your clipboard automatically.\n5. Use `/gacha log load` and paste the URL to import your records.",
+    "1. Open the Gacha Record page in the game.\n2. Open PowerShell on your computer.\n3. Copy and paste the following command and execute it:\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/yeci226/endfield-discord-bot/refs/heads/main/getGacha.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. After execution, the Gacha Record URL will be copied to your clipboard automatically.\n5. Use `/gacha log load` and paste the URL to import your records.",
   gacha_log_load_Loading: "🔄 **Fetching gacha records...**",
   gacha_log_load_ModalTitle: "Import Gacha Records",
   gacha_log_load_UrlLabel: "Please paste the Gacha Record URL",
@@ -272,7 +272,7 @@ const langs: Record<string, any> = {
   gacha_log_load_SelectAccount:
     "Select which account to import the records into:",
   gacha_log_token_expired_message:
-    "The gacha record token has expired\n\n**\"Invalid token\" error**\nIf you see the \"Invalid token\" error, your token has expired. Please follow these steps to get a new token:\n\n1. Fully close the game\n2. Search for `%localappdata%` in Windows and open the shown folder\n3. Go back one level, then open `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. Delete the file `HGWebview.log`\n5. Open the game and go directly to **Headhunt > History** to regenerate the file\n6. Run the PowerShell script again to get a new token",
+    'The gacha record token has expired\n\n**"Invalid token" error**\nIf you see the "Invalid token" error, your token has expired. Please follow these steps to get a new token:\n\n1. Fully close the game\n2. Search for `%localappdata%` in Windows and open the shown folder\n3. Go back one level, then open `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. Delete the file `HGWebview.log`\n5. Open the game and go directly to **Headhunt > History** to regenerate the file\n6. Run the PowerShell script again to get a new token',
   gacha_sim_only_initiator:
     "⚠️ Only the user who started the command can continue pulling.",
   gacha_sim_pool_missing_ended:
