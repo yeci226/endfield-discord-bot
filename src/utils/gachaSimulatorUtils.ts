@@ -18,6 +18,7 @@ export interface SimPoolConfig {
   poolName: string;
   pityKey: string;
   isSpecial: boolean;
+  currentUpHardPityEnabled: boolean;
   sixStarUp?: SimCharInfo;
   fiveStarUpList: SimCharInfo[];
   sixStarPool: SimCharInfo[];
@@ -72,6 +73,9 @@ const CHAR_LIST_URL =
 const SIM_CHAR_LIST_CACHE_KEY = "SIM_CHAR_LIST_CACHE";
 const SIM_CHAR_LIST_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 const SIM_POOL_RECORDS_KEY_PREFIX = "SIM_POOL_RECORDS";
+const SIM_POOL_RECORDS_GLOBAL_KEY = `${SIM_POOL_RECORDS_KEY_PREFIX}.GLOBAL`;
+const EXCLUDED_SIX_STAR_IDS = new Set<string>(["chr_0000_endministrator"]);
+const EXCLUDED_SIX_STAR_NAME_KEYWORDS = ["endministrator"];
 
 function normalizeRarity(raw: any): 4 | 5 | 6 | undefined {
   const n = Number(raw);
@@ -83,12 +87,24 @@ function fromCharRecord(item: any): SimCharInfo | null {
   if (!item || !item.charId) return null;
   const rarity = normalizeRarity(item.rarity);
   if (!rarity) return null;
+  const id = String(item.charId || "");
+  const name = String(item.engName || item.charId || "");
+  if (rarity === 6 && isExcludedSixStar(id, name)) return null;
   return {
-    id: item.charId,
-    name: item.engName || item.charId,
+    id,
+    name,
     rarity,
-    iconUrl: charIcon(item.charId),
+    iconUrl: charIcon(id),
   };
+}
+
+function isExcludedSixStar(id?: string, name?: string): boolean {
+  const normalizedId = String(id || "").toLowerCase();
+  const normalizedName = String(name || "").toLowerCase();
+  if (EXCLUDED_SIX_STAR_IDS.has(normalizedId)) return true;
+  return EXCLUDED_SIX_STAR_NAME_KEYWORDS.some(
+    (kw) => normalizedId.includes(kw) || normalizedName.includes(kw),
+  );
 }
 
 function ensureInPool(pool: SimCharInfo[], charInfo: SimCharInfo) {
@@ -138,9 +154,48 @@ export async function loadSimPoolRecords(
   userId: string,
 ): Promise<SimPoolRecord[]> {
   const key = `${SIM_POOL_RECORDS_KEY_PREFIX}.${userId}`;
-  const records = await db.get<Record<string, SimPoolRecord>>(key);
-  if (!records) return [];
-  return Object.values(records).sort(
+  const [records, globalRecords] = await Promise.all([
+    db.get<Record<string, SimPoolRecord>>(key),
+    db.get<Record<string, SimPoolRecord>>(SIM_POOL_RECORDS_GLOBAL_KEY),
+  ]);
+
+  const merged: Record<string, SimPoolRecord> = {
+    ...(globalRecords || {}),
+    ...(records || {}),
+  };
+
+  let values = Object.values(merged);
+
+  // Backward-compat fallback: older data may only exist under
+  // SIM_POOL_RECORDS.EF_xxx / SIM_POOL_RECORDS.EF_CN_xxx keys.
+  // If both per-user and global are empty, aggregate from all legacy keys.
+  if (values.length === 0) {
+    const allPoolEntries = await db.findByPrefix<Record<string, SimPoolRecord>>(
+      `${SIM_POOL_RECORDS_KEY_PREFIX}.`,
+    );
+
+    const fallbackMerged: Record<string, SimPoolRecord> = {};
+    for (const entry of allPoolEntries) {
+      const entryKey = entry.id || "";
+      if (entryKey === SIM_POOL_RECORDS_GLOBAL_KEY) continue;
+      const obj = entry.value || {};
+      for (const [poolId, rec] of Object.entries(obj)) {
+        const old = fallbackMerged[poolId];
+        if (
+          !old ||
+          Number(old.lastSeenTs || 0) <= Number(rec?.lastSeenTs || 0)
+        ) {
+          fallbackMerged[poolId] = rec;
+        }
+      }
+    }
+
+    values = Object.values(fallbackMerged);
+  }
+
+  if (values.length === 0) return [];
+
+  return values.sort(
     (a, b) => Number(b.lastSeenTs || 0) - Number(a.lastSeenTs || 0),
   );
 }
@@ -258,11 +313,19 @@ const DEFAULT_4: SimCharInfo[] = [
  */
 export function buildSimPoolFromSkPool(skPool: SkPoolItem): SimPoolConfig {
   const idLower = (skPool.id || "").toLowerCase();
+  const typeLower = String(
+    (skPool as any).type || (skPool as any).poolType || "",
+  ).toLowerCase();
   const hasFeaturedChars =
     Array.isArray(skPool.chars) && skPool.chars.length > 0;
-  const isSpecial = idLower.includes("special") || hasFeaturedChars;
-  const isBeginner = idLower.includes("beginner");
+  const isSpecial =
+    idLower.includes("special") ||
+    typeLower.includes("special") ||
+    hasFeaturedChars;
+  const isBeginner =
+    idLower.includes("beginner") || typeLower.includes("beginner");
   const pityKey = isSpecial ? "special" : isBeginner ? "beginner" : "standard";
+  const currentUpHardPityEnabled = isSpecial;
 
   // Parse featured chars from pool
   const featuredChars: SimCharInfo[] = (skPool.chars || []).map((c, i) => {
@@ -289,7 +352,11 @@ export function buildSimPoolFromSkPool(skPool: SkPoolItem): SimPoolConfig {
 
   // 6★ pool: standard 6★ roster + UP char (deduped)
   const sixStarPool: SimCharInfo[] = [...DEFAULT_STANDARD_6];
-  if (sixStarUp && !sixStarPool.some((c) => c.id === sixStarUp!.id)) {
+  if (
+    sixStarUp &&
+    !isExcludedSixStar(sixStarUp.id, sixStarUp.name) &&
+    !sixStarPool.some((c) => c.id === sixStarUp!.id)
+  ) {
     sixStarPool.push({ ...sixStarUp });
   }
 
@@ -306,6 +373,7 @@ export function buildSimPoolFromSkPool(skPool: SkPoolItem): SimPoolConfig {
     poolName: skPool.name,
     pityKey,
     isSpecial,
+    currentUpHardPityEnabled,
     sixStarUp,
     fiveStarUpList,
     sixStarPool,
@@ -328,13 +396,25 @@ export async function buildSimPoolFromSources(
   ]);
 
   if (latestRoster && latestRoster.length > 0) {
-    const six = latestRoster.filter((c) => c.rarity === 6);
+    const six = latestRoster.filter(
+      (c) => c.rarity === 6 && !isExcludedSixStar(c.id, c.name),
+    );
     const five = latestRoster.filter((c) => c.rarity === 5);
     const four = latestRoster.filter((c) => c.rarity === 4);
 
     if (six.length > 0) cfg.sixStarPool = [...six];
     if (five.length > 0) cfg.fiveStarPool = [...five];
     if (four.length > 0) cfg.fourStarPool = [...four];
+  }
+
+  cfg.sixStarPool = cfg.sixStarPool.filter(
+    (c) => !isExcludedSixStar(c.id, c.name),
+  );
+  if (
+    cfg.sixStarUp &&
+    isExcludedSixStar(cfg.sixStarUp.id, cfg.sixStarUp.name)
+  ) {
+    cfg.sixStarUp = undefined;
   }
 
   const rec = poolRecords.find((r) => r.poolId === cfg.poolId);
@@ -366,6 +446,49 @@ export async function buildSimPoolFromSources(
 
       for (const it of cfg.fiveStarUpList) {
         ensureInPool(cfg.fiveStarPool, it);
+      }
+    }
+  }
+
+  // Fallback: infer UP 6★ from cached pool metadata even if no one pulled 6★ in logs.
+  if (!cfg.sixStarUp) {
+    const metaWrap = await db.get<any>(`GACHA_POOL_METADATA_${cfg.poolId}`);
+    const pMeta = metaWrap?.data || metaWrap;
+    const upName = String(pMeta?.up6_item_name || pMeta?.up6_name || "").trim();
+
+    if (upName) {
+      let upId = "";
+
+      const allList = Array.isArray(pMeta?.all) ? pMeta.all : [];
+      const byAll = allList.find((a: any) => {
+        const name = String(a?.name || "").trim();
+        return (
+          name === upName || name.includes(upName) || upName.includes(name)
+        );
+      });
+      if (byAll?.id) {
+        upId = String(byAll.id).replace(/^icon_/, "");
+      }
+
+      if (!upId && latestRoster?.length) {
+        const byRoster = latestRoster.find((c) => {
+          const n = String(c.name || "").trim();
+          return n === upName || n.includes(upName) || upName.includes(n);
+        });
+        if (byRoster?.id) upId = byRoster.id;
+      }
+
+      if (upId && !isExcludedSixStar(upId, upName)) {
+        const up: SimCharInfo = {
+          id: upId,
+          name: upName,
+          rarity: 6,
+          iconUrl: charIcon(upId),
+          isUp: true,
+        };
+        cfg.sixStarUp = up;
+        ensureInPool(cfg.sixStarPool, up);
+        cfg.isSpecial = true;
       }
     }
   }
@@ -429,7 +552,11 @@ export function simulatePulls(
 
   for (let i = 0; i < count; i++) {
     const pitySixBefore = state.sixStarPity;
-    const supportsCurrentUpHardPity = pool.isSpecial && !!pool.sixStarUp;
+    const supportsCurrentUpHardPity =
+      pool.isSpecial &&
+      pool.currentUpHardPityEnabled &&
+      !!pool.sixStarUp &&
+      !isExcludedSixStar(pool.sixStarUp.id, pool.sixStarUp.name);
     const forceCurrentUp =
       supportsCurrentUpHardPity &&
       state.pullsWithoutCurrentUp >= CURRENT_UP_HARD_PITY_CAP - 1;

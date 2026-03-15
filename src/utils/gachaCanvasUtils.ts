@@ -5,6 +5,7 @@ import {
   loadImage,
 } from "@napi-rs/canvas";
 import path from "path";
+import fs from "fs";
 import moment from "moment";
 import { GachaLogData } from "./gachaLogUtils";
 import { fetchImage } from "./canvasUtils";
@@ -118,6 +119,191 @@ export async function drawGachaStats(
 
   const totalPulls = poolStats.total ?? 0;
   const history = poolStats.history || [];
+  const cachedPoolBannerMap = new Map<string, string>();
+  for (const p of poolStats.pools || []) {
+    const bannerUrl = String((p as any)?.bannerUrl || "").trim();
+    if (p?.id && bannerUrl) cachedPoolBannerMap.set(String(p.id), bannerUrl);
+  }
+
+  const resolveGroupIdForPool = (pool: any): string => {
+    if (type === "weapon") return pool?.id || "";
+    if (pool?.type?.includes("Beginner")) return "Beginner";
+    if (pool?.type?.includes("Standard") || pool?.type?.includes("Classic")) {
+      return `Standard_${pool.id}`;
+    }
+    return "SpecialShared";
+  };
+
+  const getPoolPaddedCount = (poolId: string, groupId: string): number => {
+    const categoryStats = stats[type === "weapon" ? "weapon" : "char"];
+    const categorySummary = categoryStats.summary?.[groupId];
+    const poolTotal = categorySummary?.poolTotalMap?.[poolId] || 0;
+    const newestPoolId = categoryStats.pools?.[0]?.id;
+
+    if (poolId === newestPoolId) {
+      return Math.max(0, categorySummary?.currentPity || 0);
+    }
+
+    const poolItemsAll = categoryStats.history.filter(
+      (r: any) => r.poolId === poolId,
+    );
+    let displayPity = poolTotal;
+
+    if (poolItemsAll.length > 0) {
+      const lastSix = poolItemsAll.find((r: any) => r.rarity >= 6 && !r.isFree);
+      if (lastSix) {
+        displayPity = poolTotal - lastSix.poolTotalCount;
+      } else {
+        const oldest = poolItemsAll[poolItemsAll.length - 1];
+        const initial = Math.max(
+          0,
+          oldest.pitySixCount - oldest.poolTotalCount,
+        );
+        displayPity = initial + poolTotal;
+      }
+    }
+
+    return Math.max(0, displayPity);
+  };
+
+  const getPoolSixStarSummary = (poolId: string): any[] => {
+    const poolSixItems = history.filter(
+      (item: any) =>
+        item.poolId === poolId &&
+        Number(item.rarity || 0) >= 6 &&
+        !item.isExpeditedBlock,
+    );
+
+    const sixMap = new Map<string, any>();
+    for (const item of poolSixItems) {
+      const key = String(
+        item.charId || item.weaponId || item.name || "unknown",
+      );
+      const prev = sixMap.get(key);
+      if (prev) {
+        prev.count += 1;
+      } else {
+        sixMap.set(key, {
+          key,
+          name: item.name,
+          charId: item.charId,
+          weaponId: item.weaponId,
+          count: 1,
+        });
+      }
+    }
+
+    return Array.from(sixMap.values()).sort((a, b) => b.count - a.count);
+  };
+
+  const poolBannerUrlMap = new Map<string, string>();
+  const fetchPoolBannerUrl = async (
+    poolId: string,
+  ): Promise<string | undefined> => {
+    if (!poolId) return undefined;
+    if (poolBannerUrlMap.has(poolId)) return poolBannerUrlMap.get(poolId);
+
+    const cachedBanner = cachedPoolBannerMap.get(poolId);
+    if (cachedBanner) {
+      poolBannerUrlMap.set(poolId, cachedBanner);
+      return cachedBanner;
+    }
+
+    if (selectedPoolId === poolId && poolApiData?.up6_image) {
+      poolBannerUrlMap.set(poolId, poolApiData.up6_image);
+      return poolApiData.up6_image;
+    }
+
+    try {
+      const res = await fetch(
+        `https://ef-webview.gryphline.com/api/content?lang=${apiLang}&pool_id=${poolId}&server_id=${apiServerId}`,
+      );
+      if (!res.ok) return undefined;
+
+      const json = await res.json();
+      const pool = json?.data?.pool;
+      const bannerUrl =
+        pool?.up6_image || pool?.up5_image || pool?.banner_image;
+      if (bannerUrl) {
+        poolBannerUrlMap.set(poolId, bannerUrl);
+        return bannerUrl;
+      }
+    } catch (e) {
+      console.error(
+        `[drawGachaStats] Failed to fetch banner for pool ${poolId}`,
+        e,
+      );
+    }
+
+    return undefined;
+  };
+
+  const loadGachaIconImage = async (
+    isCharacter: boolean,
+    rawId: string,
+  ): Promise<any> => {
+    const cid = String(rawId || "").replace("icon_", "");
+    if (!cid) throw new Error("Missing icon id");
+
+    const localDirs = [
+      path.join(__dirname, "../assets/remote_cache"),
+      path.join(__dirname, "../assets/cache"),
+    ];
+
+    const candidateNames = isCharacter
+      ? [`icon_${cid}.png`, `icon_${cid}.webp`, `icon_${cid}.jpg`]
+      : [
+          `${cid}.png`,
+          `${cid}.webp`,
+          `${cid}.jpg`,
+          `icon_${cid}.png`,
+          `icon_${cid}.webp`,
+          `icon_${cid}.jpg`,
+        ];
+
+    for (const dir of localDirs) {
+      for (const fileName of candidateNames) {
+        const localPath = path.join(dir, fileName);
+        if (!fs.existsSync(localPath)) continue;
+        try {
+          return await loadImage(fs.readFileSync(localPath));
+        } catch {}
+      }
+    }
+
+    const iconUrl = isCharacter
+      ? `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`
+      : `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`;
+
+    const cacheName = isCharacter ? `icon_${cid}` : cid;
+    return await fetchImage(iconUrl, cacheName);
+  };
+
+  const drawBannerContain = (
+    img: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ) => {
+    const aspect = img.width / img.height;
+    const boxAspect = w / h;
+    let drawW = w;
+    let drawH = h;
+    let drawX = x;
+    let drawY = y;
+
+    if (aspect > boxAspect) {
+      drawW = w;
+      drawH = w / aspect;
+      drawY = y + (h - drawH) / 2;
+    } else {
+      drawH = h;
+      drawW = h * aspect;
+      drawX = x + (w - drawW) / 2;
+    }
+    ctx.drawImage(img, drawX, drawY, drawW, drawH);
+  };
 
   // 1. Grouping for Visuals
   const visualGroups: {
@@ -430,65 +616,164 @@ export async function drawGachaStats(
   // 4. History Groups
   const listY = summaryY + summaryH + 80;
 
+  const categoryPoolsForQuick = (
+    type === "weapon" ? stats.weapon.pools : stats.char.pools
+  ).filter((p: any) => {
+    if (type === "weapon") return p.type?.includes("Weapon");
+    if (type === "standard_char")
+      return p.type?.includes("Standard") && !p.name?.includes("新手");
+    if (type === "beginner_char")
+      return p.type?.includes("Beginner") || p.name?.includes("新手");
+    return p.type?.includes("Special");
+  });
+
+  const shownPoolIds = new Set(visualGroups.map((g) => g.pId).filter(Boolean));
+  const hiddenPoolsWithData = categoryPoolsForQuick.filter((p: any) => {
+    if (shownPoolIds.has(p.id)) return false;
+    return (
+      (p.total || 0) > 0 ||
+      (p.freeCount || 0) > 0 ||
+      (p.sixStarPullCount || 0) > 0
+    );
+  });
+  const quickPoolsForOverview = !selectedPoolId
+    ? hiddenPoolsWithData.slice(0, 5)
+    : [];
+  const quickStripEnabled = quickPoolsForOverview.length > 0;
+  const overviewBottomLimit = quickStripEnabled ? height - 240 : height - 80;
+
+  const bannerCandidatePoolIds = new Set<string>();
+  visualGroups.forEach((g) => {
+    if (g.pId) bannerCandidatePoolIds.add(g.pId);
+  });
+  quickPoolsForOverview.forEach((p: any) => bannerCandidatePoolIds.add(p.id));
+  if (selectedPoolId) bannerCandidatePoolIds.add(selectedPoolId);
+
+  await Promise.all(
+    Array.from(bannerCandidatePoolIds).map((poolId) =>
+      fetchPoolBannerUrl(poolId),
+    ),
+  );
+
   if (!selectedPoolId) {
-    // OVERVIEW: 3 Columns Horizontal Layout
+    // OVERVIEW: 3 Columns Horizontal Layout (fixed)
     const colW = (width - padding * 2 - cardGap * 2) / 3;
+    // For standard/beginner single-pool overview, spread items across all 3 columns
+    // since those pool types only ever have 1 visualGroup, leaving 2/3 of the canvas empty.
+    const isSinglePoolSpread =
+      visualGroups.length === 1 &&
+      (type === "standard_char" || type === "beginner_char");
     for (let i = 0; i < visualGroups.length; i++) {
       const group = visualGroups[i];
-      const curX = padding + i * (colW + cardGap);
+      let curX = padding + i * (colW + cardGap);
       let curY = listY;
 
       // Pool Group Header
       ctx.textAlign = "left";
+      const poolTitle = normalizeGachaText(group.title);
+      const poolBannerUrl = group.pId
+        ? poolBannerUrlMap.get(group.pId)
+        : undefined;
+      let titleRight = curX;
       ctx.fillStyle = "#111";
-      ctx.font = "bold 44px NotoSansTCBold";
-      const poolTitle = `I ${group.title}`;
-      ctx.fillText(poolTitle, curX, curY);
+      ctx.font = "bold 52px NotoSansTCBold";
+      ctx.fillText("I", curX, curY);
+      const fallbackTitle = `I ${poolTitle}`;
 
-      // Total Pulls Breakdown Next to Title
-      const titleWidth = ctx.measureText(poolTitle).width;
+      if (poolBannerUrl) {
+        try {
+          const bannerImg = await fetchImage(
+            poolBannerUrl,
+            `pool_header_${group.pId || `group_${i}`}`,
+          );
+          const bHeight = 320;
+          const bWidth = colW;
+          const bX = curX;
+          const bY = curY - 170;
+
+          drawBannerContain(bannerImg, bX, bY, bWidth, bHeight);
+
+          ctx.save();
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#000";
+          fillDynamicText(
+            ctx,
+            fallbackTitle,
+            curX + 15,
+            curY,
+            bWidth - 26,
+            50,
+            true,
+          );
+          ctx.restore();
+
+          titleRight = bX + bWidth;
+        } catch (e) {}
+      }
+
+      if (!poolBannerUrl) {
+        ctx.fillText(fallbackTitle, curX, curY);
+        titleRight = curX + ctx.measureText(fallbackTitle).width;
+      }
+
       const gSummary = stats[type === "weapon" ? "weapon" : "char"].summary;
       const gId = group.gId;
       const pId = group.pId || "unknown";
       const nonFreeCount = gSummary[gId]?.poolTotalMap?.[pId] || 0;
       const freeCount = gSummary[gId]?.poolFreeTotalMap?.[pId] || 0;
 
-      let startX = curX + titleWidth + 20;
+      let startX = titleRight + 16;
+      let totalLineY = curY;
+      if (poolBannerUrl) {
+        startX = curX + 15;
+        totalLineY = curY + 30;
+      } else if (startX > curX + colW - 220) {
+        startX = curX;
+        totalLineY = curY + 36;
+      }
       ctx.textBaseline = "alphabetic";
 
       // "總計"
       ctx.fillStyle = "#888";
-      ctx.font = "28px NotoSans";
-      ctx.fillText(tr("gacha_log_canvas_Total_Prefix").trim(), startX, curY);
+      ctx.font = "24px NotoSans";
+      ctx.fillText(
+        tr("gacha_log_canvas_Total_Prefix").trim(),
+        startX,
+        totalLineY,
+      );
       startX +=
         ctx.measureText(tr("gacha_log_canvas_Total_Prefix").trim()).width + 8;
 
       // Non-free count
       ctx.fillStyle = "#444";
-      ctx.font = "bold 28px NotoSansTCBold";
-      ctx.fillText(String(nonFreeCount), startX, curY);
+      ctx.font = "bold 24px NotoSansTCBold";
+      ctx.fillText(String(nonFreeCount), startX, totalLineY);
       startX += ctx.measureText(String(nonFreeCount)).width + 8;
 
       if (freeCount > 0) {
         // "+"
         ctx.fillStyle = "#888";
-        ctx.font = "24px NotoSans";
-        ctx.fillText("+", startX, curY);
+        ctx.font = "20px NotoSans";
+        ctx.fillText("+", startX, totalLineY);
         startX += ctx.measureText("+").width + 8;
 
         // Free count
         ctx.fillStyle = "#ffcc00";
-        ctx.font = "bold 28px NotoSansTCBold";
-        ctx.fillText(String(freeCount), startX, curY);
+        ctx.font = "bold 24px NotoSansTCBold";
+        ctx.fillText(String(freeCount), startX, totalLineY);
         startX += ctx.measureText(String(freeCount)).width + 8;
       }
 
       // "抽"
       ctx.fillStyle = "#888";
-      ctx.font = "28px NotoSans";
-      ctx.fillText(tr("gacha_log_canvas_Pulls_Suffix").trim(), startX, curY);
+      ctx.font = "24px NotoSans";
+      ctx.fillText(
+        tr("gacha_log_canvas_Pulls_Suffix").trim(),
+        startX,
+        totalLineY,
+      );
 
-      curY += 70;
+      curY = totalLineY + 70;
 
       // --- PITY PLACEHOLDER (Overview) ---
       const pityData = gSummary[gId || "unknown"];
@@ -535,12 +820,10 @@ export async function drawGachaStats(
         showPlaceholder = true;
       }
 
-      let showPadding = false;
-
       const rectH = 110;
-
-      if (showPlaceholder) {
+      if (showPlaceholder && curY + rectH <= overviewBottomLimit) {
         // Draw Placeholder Card
+        curY -= 40;
         ctx.save();
         ctx.fillStyle = "#fff";
         ctx.shadowColor = "rgba(0,0,0,0.02)";
@@ -648,7 +931,7 @@ export async function drawGachaStats(
         }
 
         if (displayPity > 0) {
-          if (curY + 60 <= height - 80) {
+          if (curY + 60 <= overviewBottomLimit) {
             // Check space
             ctx.save();
             ctx.fillStyle = "#f0f2f5"; // Soft gray background
@@ -677,32 +960,44 @@ export async function drawGachaStats(
       // ------------------------------------
 
       // Items (6★ and Free Blocks)
+      let itemColIdx = i; // tracks current rendering column for single-pool overflow
       for (const item of group.items) {
+        const neededH = item.isExpeditedBlock ? 60 : rectH;
+        // Overflow into the next column (standard/beginner single-pool spread)
+        if (curY + neededH > overviewBottomLimit) {
+          if (isSinglePoolSpread && itemColIdx < 2) {
+            itemColIdx++;
+            curX = padding + itemColIdx * (colW + cardGap);
+            curY = listY;
+          } else {
+            if (!item.isExpeditedBlock) break;
+            continue;
+          }
+        }
+
         if (item.isExpeditedBlock) {
           // Render Yellow Free Pull Card
-          if (curY + 60 <= height - 80) {
-            ctx.save();
-            ctx.fillStyle = "#fffbeb";
-            ctx.shadowColor = "rgba(0,0,0,0.02)";
-            ctx.shadowBlur = 10;
-            roundRect(ctx, curX, curY, colW, 60, 15, true);
-            ctx.shadowBlur = 0;
+          ctx.save();
+          ctx.fillStyle = "#fffbeb";
+          ctx.shadowColor = "rgba(0,0,0,0.02)";
+          ctx.shadowBlur = 10;
+          roundRect(ctx, curX, curY, colW, 60, 15, true);
+          ctx.shadowBlur = 0;
 
-            ctx.fillStyle = "#ffcc00";
-            ctx.fillRect(curX, curY, 8, 60);
+          ctx.fillStyle = "#ffcc00";
+          ctx.fillRect(curX, curY, 8, 60);
 
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillStyle = "#d97706";
-            ctx.font = "bold 22px NotoSansTCBold";
-            const freeText = (
-              tr?.("gacha_log_canvas_FreePullSummary") ??
-              "已使用 <count> 抽加急尋訪"
-            ).replace("<count>", String(item.count));
-            ctx.fillText(freeText, curX + colW / 2, curY + 30);
-            ctx.restore();
-            curY += 60 + 15;
-          }
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = "#d97706";
+          ctx.font = "bold 22px NotoSansTCBold";
+          const freeText = (
+            tr?.("gacha_log_canvas_FreePullSummary") ??
+            "已使用 <count> 抽加急尋訪"
+          ).replace("<count>", String(item.count));
+          ctx.fillText(freeText, curX + colW / 2, curY + 30);
+          ctx.restore();
+          curY += 60 + 15;
           continue;
         }
 
@@ -726,13 +1021,11 @@ export async function drawGachaStats(
 
         // Icon
         if (item.charId || item.weaponId) {
-          const cid = String(item.charId || item.weaponId).replace("icon_", "");
-          const iconUrl = item.charId
-            ? `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`
-            : `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`;
           try {
-            const cacheName = item.charId ? `icon_${cid}` : cid;
-            const icon = await fetchImage(iconUrl, cacheName);
+            const icon = await loadGachaIconImage(
+              !!item.charId,
+              String(item.charId || item.weaponId),
+            );
             ctx.save();
             ctx.beginPath();
             ctx.arc(centerX, centerY, radius - 5, 0, Math.PI * 2);
@@ -810,7 +1103,253 @@ export async function drawGachaStats(
         }
 
         curY += rectH + 15;
-        if (curY > height - 150) break; // page limit check
+      }
+    }
+
+    if (quickPoolsForOverview.length > 0) {
+      const quickTitleY = height - 205;
+      const quickCardY = height - 178;
+      const quickCardH = 160;
+      const quickGap = 16;
+      const quickCardW = (width - padding * 2 - quickGap * 4) / 5;
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#666";
+      ctx.font = "bold 30px NotoSansTCBold";
+      ctx.fillText(
+        tr?.("gacha_log_canvas_HistoryQuickTitle") ?? "過往卡池速覽",
+        padding,
+        quickTitleY,
+      );
+
+      for (let idx = 0; idx < quickPoolsForOverview.length; idx++) {
+        const p = quickPoolsForOverview[idx];
+        const x = padding + idx * (quickCardW + quickGap);
+        const gId = resolveGroupIdForPool(p);
+        const nonFree = p.total || 0;
+        const free = p.freeCount || 0;
+        const paddedCount = getPoolPaddedCount(p.id, gId);
+        const freePart = free > 0 ? `+${free}` : "";
+        const summary = (
+          tr?.("gacha_log_canvas_HistoryQuickTotal") ??
+          "總共 <nonFree><freePart> 抽"
+        )
+          .replace("<nonFree>", String(nonFree))
+          .replace("<freePart>", freePart);
+        const sixSummary = getPoolSixStarSummary(p.id);
+
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowColor = "rgba(0,0,0,0.04)";
+        ctx.shadowBlur = 10;
+        roundRect(ctx, x, quickCardY, quickCardW, quickCardH, 14, true);
+        ctx.shadowBlur = 0;
+
+        const quickBannerUrl = poolBannerUrlMap.get(p.id);
+        let titleMaxWidth = quickCardW - 24;
+        if (quickBannerUrl) {
+          try {
+            const bannerImg = await fetchImage(
+              quickBannerUrl,
+              `pool_quick_${p.id}`,
+            );
+            const bHeight = 52;
+            const bWidth = quickCardW;
+            const bX = x;
+            const bY = quickCardY;
+
+            // Quick overview cards should prioritize full-width visual impact.
+            // Use cover-style crop instead of contain so the banner always spans the card width.
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(bX, bY);
+            ctx.lineTo(bX + bWidth, bY);
+            ctx.lineTo(bX + bWidth, bY + bHeight - 5);
+            ctx.quadraticCurveTo(
+              bX + bWidth,
+              bY + bHeight,
+              bX + bWidth - 5,
+              bY + bHeight,
+            );
+            ctx.lineTo(bX + 5, bY + bHeight);
+            ctx.quadraticCurveTo(bX, bY + bHeight, bX, bY + bHeight - 5);
+            ctx.closePath();
+            ctx.clip();
+            const imgAspect = bannerImg.width / bannerImg.height;
+            const boxAspect = bWidth / bHeight;
+            let drawW = bWidth;
+            let drawH = bHeight;
+            let drawX = bX;
+            let drawY = bY;
+            if (imgAspect > boxAspect) {
+              drawH = bHeight;
+              drawW = bHeight * imgAspect;
+              drawX = bX - (drawW - bWidth) / 2;
+            } else {
+              drawW = bWidth;
+              drawH = bWidth / imgAspect;
+              drawY = bY - (drawH - bHeight) / 2;
+            }
+            ctx.drawImage(bannerImg, drawX, drawY, drawW, drawH);
+            ctx.restore();
+
+            ctx.save();
+            ctx.textAlign = "left";
+            ctx.fillStyle = "#111";
+            fillDynamicText(
+              ctx,
+              `I ${normalizeGachaText(p.name)}`,
+              bX + 14,
+              quickCardY + 33,
+              bWidth - 24,
+              24,
+              true,
+            );
+            ctx.restore();
+
+            titleMaxWidth = 0;
+          } catch (e) {}
+        }
+
+        // Draw the left accent strip after banner so it visually overlays the banner area.
+        ctx.fillStyle = "#d4d7dd";
+        ctx.fillRect(x, quickCardY, 6, quickCardH);
+
+        if (titleMaxWidth > 0) {
+          ctx.textAlign = "left";
+          ctx.fillStyle = "#111";
+          ctx.font = "bold 24px NotoSansTCBold";
+          fillDynamicText(
+            ctx,
+            normalizeGachaText(p.name),
+            x + 14,
+            quickCardY + 30,
+            titleMaxWidth,
+            22,
+            true,
+          );
+        }
+
+        ctx.fillStyle = "#777";
+        ctx.font = "19px NotoSans";
+        fillDynamicText(
+          ctx,
+          summary,
+          x + 14,
+          quickCardY + 58,
+          quickCardW - 24,
+          19,
+          false,
+        );
+
+        if (sixSummary.length === 0) {
+          ctx.fillStyle = "#999";
+          ctx.font = "18px NotoSans";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            tr?.("gacha_log_canvas_HistoryQuickNoSix") ?? "尚未抽到 6 星",
+            x + quickCardW / 2,
+            quickCardY + 108,
+          );
+          continue;
+        }
+
+        const useTwoRows = sixSummary.length > 3;
+        const maxDisplay = useTwoRows ? 6 : 3;
+        const displayList = sixSummary.slice(0, maxDisplay);
+        const perRow = useTwoRows
+          ? 3
+          : Math.max(1, Math.min(3, displayList.length));
+        const iconSize = useTwoRows ? 28 : 48;
+        const rowGap = useTwoRows ? 10 : 0;
+        const sidePadding = 14;
+        const contentW = quickCardW - sidePadding * 2;
+        const slotW = contentW / perRow;
+        const iconStartY = useTwoRows ? quickCardY + 74 : quickCardY + 86;
+
+        for (let i = 0; i < displayList.length; i++) {
+          const row = useTwoRows ? Math.floor(i / 3) : 0;
+          const col = useTwoRows ? i % 3 : i;
+          const slotCenterX = x + sidePadding + col * slotW + slotW / 2;
+          const countAreaW = useTwoRows ? 26 : 34;
+          const clusterW = iconSize + 6 + countAreaW;
+          const cellX = slotCenterX - clusterW / 2;
+          const cellY = iconStartY + row * (iconSize + rowGap);
+          const iconX = cellX + iconSize / 2;
+          const iconY = cellY + iconSize / 2;
+          const sixItem = displayList[i];
+
+          ctx.beginPath();
+          ctx.arc(iconX, iconY, iconSize / 2, 0, Math.PI * 2);
+          ctx.fillStyle = "#eceff3";
+          ctx.fill();
+
+          if (sixItem.charId || sixItem.weaponId) {
+            try {
+              const icon = await loadGachaIconImage(
+                !!sixItem.charId,
+                String(sixItem.charId || sixItem.weaponId),
+              );
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(iconX, iconY, iconSize / 2 - 1, 0, Math.PI * 2);
+              ctx.clip();
+
+              const aspect = icon.width / icon.height;
+              let drawW = iconSize;
+              let drawH = iconSize;
+              if (aspect > 1) {
+                drawW = drawH * aspect;
+              } else {
+                drawH = drawW / aspect;
+              }
+
+              ctx.drawImage(
+                icon,
+                iconX - drawW / 2,
+                iconY - drawH / 2,
+                drawW,
+                drawH,
+              );
+              ctx.restore();
+            } catch (e) {}
+          }
+
+          ctx.fillStyle = "#666";
+          ctx.font = `bold ${useTwoRows ? 17 : 22}px NotoSansTCBold`;
+          ctx.textAlign = "left";
+          ctx.fillText(
+            `x${sixItem.count}`,
+            cellX + iconSize + 6,
+            cellY + iconSize / 2 + 7,
+          );
+        }
+
+        if (sixSummary.length > maxDisplay) {
+          const remain = sixSummary.length - maxDisplay;
+          ctx.textAlign = "right";
+          ctx.fillStyle = "#888";
+          ctx.font = "16px NotoSans";
+          ctx.fillText(
+            `+${remain}`,
+            x + quickCardW - 10,
+            quickCardY + quickCardH - 10,
+          );
+        }
+      }
+
+      if (hiddenPoolsWithData.length > quickPoolsForOverview.length) {
+        const remain =
+          hiddenPoolsWithData.length - quickPoolsForOverview.length;
+        ctx.textAlign = "right";
+        ctx.fillStyle = "#888";
+        ctx.font = "22px NotoSans";
+        ctx.fillText(
+          (
+            tr?.("gacha_log_canvas_HistoryQuickMore") ?? "其餘 <count> 池"
+          ).replace("<count>", String(remain)),
+          width - padding,
+          quickTitleY,
+        );
       }
     }
   } else {
@@ -905,82 +1444,97 @@ export async function drawGachaStats(
 
     // Detailed Pool Group Header
     ctx.textAlign = "left";
+    const poolTitle = normalizeGachaText(group.title);
+    const detailedBannerUrl =
+      (group.pId && poolBannerUrlMap.get(group.pId)) || poolApiData?.up6_image;
     ctx.fillStyle = "#111";
-    ctx.font = "bold 44px NotoSansTCBold";
-    const poolTitle = `I ${group.title}`;
-    ctx.fillText(poolTitle, centerPadding, currentY);
+    ctx.font = "bold 52px NotoSansTCBold";
+    ctx.fillText("I", centerPadding, currentY);
+    const detailFallbackTitle = `I ${poolTitle}`;
 
-    const titleWidth = ctx.measureText(poolTitle).width;
-    let startX = centerPadding + titleWidth + 20;
+    let titleRight = centerPadding;
+    if (detailedBannerUrl) {
+      try {
+        const bannerImg = await fetchImage(
+          detailedBannerUrl,
+          `pool_detail_header_${group.pId || selectedPoolId || "current"}`,
+        );
+        const bHeight = 320;
+        const bWidth = 980;
+        const bX = centerPadding;
+        const bY = currentY - 170;
+
+        drawBannerContain(bannerImg, bX, bY, bWidth, bHeight);
+
+        ctx.save();
+        ctx.textAlign = "left";
+        ctx.fillStyle = "#000";
+        fillDynamicText(
+          ctx,
+          detailFallbackTitle,
+          centerPadding + 15,
+          currentY,
+          bWidth - 26,
+          50,
+          true,
+        );
+        ctx.restore();
+
+        titleRight = bX + bWidth;
+      } catch (e) {}
+    }
+
+    if (!detailedBannerUrl) {
+      ctx.fillText(detailFallbackTitle, centerPadding, currentY);
+      titleRight = centerPadding + ctx.measureText(detailFallbackTitle).width;
+    }
+
+    let startX = titleRight + 20;
+    let headerMetaY = currentY;
+    if (startX > centerPadding + 980) {
+      startX = centerPadding;
+      headerMetaY = currentY + 36;
+    }
     ctx.textBaseline = "alphabetic";
 
     // "總計"
     ctx.fillStyle = "#888";
     ctx.font = "28px NotoSans";
-    ctx.fillText("總計", startX, currentY);
+    ctx.fillText("總計", startX, headerMetaY);
     startX += ctx.measureText("總計").width + 8;
 
     // Non-free count
     ctx.fillStyle = "#444";
     ctx.font = "bold 28px NotoSansTCBold";
-    ctx.fillText(String(specificPoolTotal), startX, currentY);
+    ctx.fillText(String(specificPoolTotal), startX, headerMetaY);
     startX += ctx.measureText(String(specificPoolTotal)).width + 8;
 
     if (specificPoolFree > 0) {
       // "+"
       ctx.fillStyle = "#888";
       ctx.font = "24px NotoSans";
-      ctx.fillText("+", startX, currentY);
+      ctx.fillText("+", startX, headerMetaY);
       startX += ctx.measureText("+").width + 8;
 
       // Free count
       ctx.fillStyle = "#ffcc00";
       ctx.font = "bold 28px NotoSansTCBold";
-      ctx.fillText(String(specificPoolFree), startX, currentY);
+      ctx.fillText(String(specificPoolFree), startX, headerMetaY);
       startX += ctx.measureText(String(specificPoolFree)).width + 8;
 
       // "加急"
       ctx.fillStyle = "#ffcc00";
       ctx.font = "28px NotoSans";
-      ctx.fillText("加急", startX, currentY);
+      ctx.fillText("加急", startX, headerMetaY);
       startX += ctx.measureText("加急").width + 8;
     }
 
     // "抽"
     ctx.fillStyle = "#888";
     ctx.font = "28px NotoSans";
-    ctx.fillText("抽", startX, currentY);
+    ctx.fillText("抽", startX, headerMetaY);
 
-    if (poolApiData?.up6_image) {
-      try {
-        const bannerImg = await fetchImage(
-          poolApiData.up6_image,
-          `banner_${selectedPoolId}`,
-        );
-        const bHeight = 120; // Match the item box height
-        const bWidth = bannerImg.width * (bHeight / bannerImg.height);
-
-        // Align to the right edge of the grid grid
-        const gridRightEdge = centerPadding + itemW * 7 + gap * 6;
-        const bX = gridRightEdge - bWidth;
-        const bY = currentY - 60;
-
-        ctx.save();
-        ctx.beginPath();
-        const r = 15;
-        ctx.moveTo(bX + r, bY);
-        ctx.arcTo(bX + bWidth, bY, bX + bWidth, bY + bHeight, r);
-        ctx.arcTo(bX + bWidth, bY + bHeight, bX, bY + bHeight, r);
-        ctx.arcTo(bX, bY + bHeight, bX, bY, r);
-        ctx.arcTo(bX, bY, bX + bWidth, bY, r);
-        ctx.closePath();
-        ctx.clip();
-        ctx.drawImage(bannerImg, bX, bY, bWidth, bHeight);
-        ctx.restore();
-      } catch (e) {}
-    }
-
-    currentY += 70;
+    currentY = headerMetaY + 70;
 
     // --- PITY PLACEHOLDER (Detailed) ---
     const gSummary = stats[type === "weapon" ? "weapon" : "char"].summary;
@@ -1085,6 +1639,7 @@ export async function drawGachaStats(
           currentY + itemH / 2 + 30,
         );
       }
+
       ctx.restore();
 
       currentX += itemW + gap;
@@ -1092,11 +1647,9 @@ export async function drawGachaStats(
     // ------------------------------------
 
     for (const item of pagedItems) {
-      const isSix = item.rarity >= 6;
-      const isFive = item.rarity === 5;
-      const isFour = item.rarity === 4;
+      const isSix = Number(item.rarity || 0) >= 6;
+      const isFive = Number(item.rarity || 0) === 5;
 
-      // Check for row wrap: use symmetric right gutter
       if (currentX + itemW > width - (centerPadding - padding + rightGutter)) {
         currentX = centerPadding;
         currentY += itemH + gap;
@@ -1128,13 +1681,11 @@ export async function drawGachaStats(
 
       // Icon logic
       if (item.charId || item.weaponId) {
-        const cid = String(item.charId || item.weaponId).replace("icon_", "");
-        const iconUrl = item.charId
-          ? `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`
-          : `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`;
         try {
-          const cacheName = item.charId ? `icon_${cid}` : cid;
-          const icon = await fetchImage(iconUrl, cacheName);
+          const icon = await loadGachaIconImage(
+            !!item.charId,
+            String(item.charId || item.weaponId),
+          );
           ctx.save();
           ctx.beginPath();
           ctx.arc(centerX, centerY, radius - 4, 0, Math.PI * 2);
@@ -1315,25 +1866,14 @@ function drawOffRateBadge(
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = "#1e3a8a"; // Deep blue
-    ctx.fill();
-
-    // Text "L"
     ctx.fillStyle = "#fff";
     ctx.font = `bold ${Math.floor(radius * 1.3)}px NotoSansTCBold`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("L", 0, -1);
   } else {
-    // Background circle for "歪" (Chinese)
-    ctx.beginPath();
-    ctx.arc(0, 0, radius, 0, Math.PI * 2);
     ctx.fillStyle = "#ff0000";
     ctx.fill();
-
-    // Text "歪"
-    ctx.fillStyle = "#fff";
-    ctx.font = `bold ${Math.floor(radius * 1.1)}px NotoSansTCBold`;
-    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("歪", 0, -2.5);
   }

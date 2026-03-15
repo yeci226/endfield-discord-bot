@@ -240,6 +240,15 @@ const langs: Record<string, any> = {
     "❌ **無效的網址**\n請確保您貼上的是正確的抽卡紀錄網址。",
   gacha_log_load_Error:
     "❌ **獲取資料失敗**\n請檢查網址是否正確或稍後再試。原因：<error>",
+  gacha_log_load_pool_type_standard: "常駐池",
+  gacha_log_load_pool_type_limited: "限定池",
+  gacha_log_load_pool_type_beginner: "新手池",
+  gacha_log_load_progress_char: "正在載入角色池：<poolName>（第 <pageNo> 頁）",
+  gacha_log_load_progress_weapon:
+    "目前載入武器池：<poolName>（第 <pageNo> 頁）",
+  gacha_log_load_progress_weapon_list: "目前載入武器池列表...",
+  gacha_log_load_gap_warning:
+    "⚠️ 偵測到紀錄缺口：上次匯入距今已超過 90 天，中間遺失的抽卡紀錄無法再取得。\n保底計數已從本次可取得的最早紀錄重新計算，歷史紀錄仍完整保留。",
   gacha_log_NoData: "❌ **找不到數據**\n使用者 <user> 尚未載入過任何抽卡紀錄。",
   gacha_log_stats_SelectPool: "選擇欲查看的池種...",
   gacha_log_canvas_Title: "終末地工業 - 招募數據庫",
@@ -335,6 +344,10 @@ const langs: Record<string, any> = {
   gacha_log_canvas_Pulls_Suffix: " 抽",
   gacha_log_canvas_Total_Prefix: "總計 ",
   gacha_log_canvas_GuestAccount: "未綁定遊戲帳號",
+  gacha_log_canvas_HistoryQuickTitle: "過往卡池速覽",
+  gacha_log_canvas_HistoryQuickMore: "其餘 <count> 池",
+  gacha_log_canvas_HistoryQuickTotal: "總共 <nonFree><freePart> 抽",
+  gacha_log_canvas_HistoryQuickNoSix: "尚未抽到 6 星",
   gacha_log_migrate_Prompt:
     "檢測到您有訪客備份數據，請選擇要將數據合併到哪個正式帳號：",
   gacha_log_migrate_Success:

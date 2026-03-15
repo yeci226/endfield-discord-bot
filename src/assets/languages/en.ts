@@ -242,6 +242,16 @@ const langs: Record<string, any> = {
     "❌ **Invalid URL**\nPlease make sure you pasted the correct Gacha Record URL.",
   gacha_log_load_Error:
     "❌ **Failed to fetch records**\nPlease check the URL or try again later. Reason: <error>",
+  gacha_log_load_pool_type_standard: "Standard",
+  gacha_log_load_pool_type_limited: "Limited",
+  gacha_log_load_pool_type_beginner: "Beginner",
+  gacha_log_load_progress_char:
+    "Loading character pool: <poolName> (page <pageNo>)",
+  gacha_log_load_progress_weapon:
+    "Loading weapon pool: <poolName> (page <pageNo>)",
+  gacha_log_load_progress_weapon_list: "Loading weapon pool list...",
+  gacha_log_load_gap_warning:
+    "⚠️ Data gap detected: Your previous import was more than 90 days ago. Records from the gap period are no longer accessible.\nPity counters have been reset to the oldest available record in this import. Historical records are still preserved.",
   gacha_log_NoData:
     "❌ **No Data Found**\nUser <user> has not loaded any gacha records yet.",
   gacha_log_stats_SelectPool: "Select pool type...",
@@ -350,6 +360,10 @@ const langs: Record<string, any> = {
   gacha_log_canvas_Pulls_Suffix: " Pulls",
   gacha_log_canvas_Total_Prefix: "Total ",
   gacha_log_canvas_GuestAccount: "Unbound Game Account",
+  gacha_log_canvas_HistoryQuickTitle: "Past Pool Quick View",
+  gacha_log_canvas_HistoryQuickMore: "<count> more pools",
+  gacha_log_canvas_HistoryQuickTotal: "Total <nonFree><freePart> pulls",
+  gacha_log_canvas_HistoryQuickNoSix: "No 6★ yet",
   gacha_log_migrate_Prompt:
     "Found guest backup data. Please select which bound account to merge the data into:",
   gacha_log_migrate_Success:

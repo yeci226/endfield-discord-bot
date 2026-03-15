@@ -59,6 +59,11 @@ export interface GachaLogData {
     nickname?: string;
     avatarUrl?: string; // Store avatar URL in log data too
     export_timestamp: number;
+    // Pity reset boundaries: set when a data gap is detected between the previous
+    // import and the current API fetch (records older than 90 days are inaccessible).
+    // Pity counters restart from this seqId to prevent inflated/deflated pity readings.
+    charPityResetSeqId?: string;
+    weaponPityResetSeqId?: string;
   };
 }
 
@@ -81,14 +86,48 @@ function toTs(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Detects whether there is a seqId gap between existing DB records and
+ * newly fetched API records. Returns the oldest new record's seqId if a
+ * gap exists (i.e. the API window no longer covers the tail of old data),
+ * so pity counters can be reset at that boundary.
+ */
+function detectPityGapSeqId(
+  existingList: GachaRecord[],
+  newList: GachaRecord[],
+): string | undefined {
+  if (existingList.length === 0 || newList.length === 0) return undefined;
+
+  const existingMaxSeqId = existingList.reduce(
+    (max, r) => (Number(r.seqId) > max ? Number(r.seqId) : max),
+    0,
+  );
+  const newMinSeqId = newList.reduce(
+    (min, r) => (Number(r.seqId) < min ? Number(r.seqId) : min),
+    Infinity,
+  );
+
+  // If the oldest new API record is newer than all existing records, the two
+  // windows don't overlap — pulls between them are outside the 90-day limit
+  // and therefore lost. Pity must restart from newMinSeqId.
+  if (Number.isFinite(newMinSeqId) && newMinSeqId > existingMaxSeqId) {
+    return String(newMinSeqId);
+  }
+  return undefined;
+}
+
 async function persistSimPoolRecordsFromLog(
   db: CustomDatabase,
   uid: string,
   data: GachaLogData,
 ) {
   const key = `SIM_POOL_RECORDS.${uid}`;
+  const globalKey = "SIM_POOL_RECORDS.GLOBAL";
   const existing = (await db.get<Record<string, SimPoolRecord>>(key)) || {};
+  const globalExisting =
+    (await db.get<Record<string, SimPoolRecord>>(globalKey)) || {};
   const merged: Record<string, SimPoolRecord> = { ...existing };
+  const globalMerged: Record<string, SimPoolRecord> = { ...globalExisting };
 
   const byPool = new Map<string, GachaRecord[]>();
   for (const rec of data.characterList || []) {
@@ -162,9 +201,23 @@ async function persistSimPoolRecordsFromLog(
       featuredSixStar: topSix[0],
       featuredFiveStars: topFive,
     };
+
+    const oldGlobal = globalMerged[poolId];
+    if (!oldGlobal || (oldGlobal.lastSeenTs || 0) <= lastSeenTs) {
+      globalMerged[poolId] = {
+        poolId,
+        poolName,
+        poolType,
+        lastSeenTs,
+        featuredSixStar: topSix[0] || oldGlobal?.featuredSixStar,
+        featuredFiveStars:
+          topFive.length > 0 ? topFive : oldGlobal?.featuredFiveStars,
+      };
+    }
   }
 
   await db.set(key, merged);
+  await db.set(globalKey, globalMerged);
 }
 
 const POOL_TYPES = [
@@ -369,7 +422,18 @@ export async function fetchAndMergeGachaLog(
     }
   }
 
-  // 3. Merge and persist
+  // 3. Detect data gap BEFORE merging (compare existing vs newly fetched)
+  const charPityResetSeqId = detectPityGapSeqId(
+    existingData.characterList,
+    characterList,
+  );
+  const weaponPityResetSeqId = detectPityGapSeqId(
+    existingData.weaponList,
+    weaponList,
+  );
+  const hasDataGap = !!(charPityResetSeqId || weaponPityResetSeqId);
+
+  // 4. Merge and persist
   // We use a Map keyed by seqId to merge and update records
   const charMap = new Map<string, GachaRecord>();
   const weaponMap = new Map<string, GachaRecord>();
@@ -404,6 +468,8 @@ export async function fetchAndMergeGachaLog(
             : undefined,
       avatarUrl: avatarUrl || existingData.info.avatarUrl,
       export_timestamp: Date.now(),
+      charPityResetSeqId,
+      weaponPityResetSeqId,
     },
   };
 
@@ -429,6 +495,7 @@ export async function fetchAndMergeGachaLog(
     message: "Success",
     totalChar: newCharList.length,
     totalWeapon: newWeaponList.length,
+    hasDataGap,
     data: updatedData,
   };
 }
@@ -799,6 +866,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   const calculateDetailedHistory = (
     list: GachaRecord[],
     type: "char" | "weapon",
+    pityResetSeqId?: string,
   ) => {
     const pityGroups = new Map<string, GachaRecord[]>();
     list.forEach((r) => {
@@ -846,8 +914,24 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
       const poolSixStarPullCounters = new Map<string, number>(); // poolId -> non-free 6* count
       const poolFeaturedSixCounters = new Map<string, number>(); // poolId -> non-free featured 6* count
       let currentFreeBlock: any = null;
+      let pityResetApplied = false;
 
       for (const record of reversed) {
+        // If a data gap was detected on last import, reset all pity-state counters
+        // once we reach the first record that falls inside the gap-free window.
+        if (
+          pityResetSeqId &&
+          !pityResetApplied &&
+          Number(record.seqId) >= Number(pityResetSeqId)
+        ) {
+          pitySix = 0;
+          pityLabel = 0;
+          featuredPity = 0;
+          featuredCounters.clear();
+          hasFeaturedMap.clear();
+          pityResetApplied = true;
+        }
+
         if (record.poolId && record.poolName) {
           poolList.set(record.poolId, record.poolName);
         }
@@ -1091,6 +1175,11 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           ts: sample?.gachaTs || "",
           startTs,
           endTs,
+          bannerUrl:
+            poolMetaMap[id]?.up6_image ||
+            poolMetaMap[id]?.up5_image ||
+            poolMetaMap[id]?.banner_image ||
+            "",
         };
       })
       .sort((a, b) => {
@@ -1228,8 +1317,16 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
     };
   };
 
-  const charStats = calculateDetailedHistory(data.characterList, "char");
-  const weaponStats = calculateDetailedHistory(data.weaponList, "weapon");
+  const charStats = calculateDetailedHistory(
+    data.characterList,
+    "char",
+    data.info.charPityResetSeqId,
+  );
+  const weaponStats = calculateDetailedHistory(
+    data.weaponList,
+    "weapon",
+    data.info.weaponPityResetSeqId,
+  );
 
   return {
     uid: data.info.uid,

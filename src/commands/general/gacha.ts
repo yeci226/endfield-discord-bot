@@ -57,6 +57,7 @@ import {
   SIX_STAR_PITY_CAP,
   CURRENT_UP_HARD_PITY_CAP,
 } from "../../utils/gachaSimulatorUtils";
+import { createTranslator, toI18nLang } from "../../utils/i18n";
 import moment from "moment";
 import { CustomDatabase } from "../../utils/Database";
 
@@ -107,6 +108,50 @@ function getSimCurrentUpCounterKey(userId: string, poolId: string): string {
 
 function getDisplayedRemainingPulls(cap: number, pity: number): number {
   return Math.max(1, cap - pity);
+}
+
+function isBeginnerSimPool(pool: any): boolean {
+  const id = String(pool?.poolId || pool?.id || "").toLowerCase();
+  const name = String(pool?.poolName || pool?.name || "").toLowerCase();
+  const type = String(pool?.poolType || pool?.type || "").toLowerCase();
+  return (
+    id.includes("beginner") ||
+    id.includes("c_beginner") ||
+    name.includes("新手") ||
+    type.includes("beginner")
+  );
+}
+
+function isSpecialSimPool(pool: any): boolean {
+  const id = String(pool?.poolId || pool?.id || "").toLowerCase();
+  const name = String(pool?.poolName || pool?.name || "").toLowerCase();
+  const type = String(pool?.poolType || pool?.type || "").toLowerCase();
+  return (
+    id.includes("special") ||
+    type.includes("special") ||
+    name.includes("特選") ||
+    name.includes("限定") ||
+    name.includes("up")
+  );
+}
+
+function orderSimPools(records: any[]): any[] {
+  const dedup = new Map<string, any>();
+  for (const r of records || []) {
+    const poolId = String(r?.poolId || r?.id || "");
+    if (!poolId || isBeginnerSimPool(r)) continue;
+    const old = dedup.get(poolId);
+    if (!old || Number(old.lastSeenTs || 0) <= Number(r?.lastSeenTs || 0)) {
+      dedup.set(poolId, r);
+    }
+  }
+
+  return Array.from(dedup.values()).sort((a, b) => {
+    const aSpecial = isSpecialSimPool(a) ? 1 : 0;
+    const bSpecial = isSpecialSimPool(b) ? 1 : 0;
+    if (aSpecial !== bSpecial) return bSpecial - aSpecial;
+    return Number(b?.lastSeenTs || 0) - Number(a?.lastSeenTs || 0);
+  });
 }
 
 const command: Command = {
@@ -191,10 +236,35 @@ const command: Command = {
             .setNameLocalizations({
               "zh-TW": "載入",
             })
-            .setDescription("Load gacha log from URL via modal")
+            .setDescription("Load gacha log from URL")
             .setDescriptionLocalizations({
-              "zh-TW": "從網址載入抽卡紀錄 (彈出視窗)",
-            }),
+              "zh-TW": "從網址載入抽卡紀錄",
+            })
+            .addStringOption((option) =>
+              option
+                .setName("url")
+                .setNameLocalizations({
+                  "zh-TW": "網址",
+                })
+                .setDescription("Paste gacha log URL")
+                .setDescriptionLocalizations({
+                  "zh-TW": "貼上抽卡紀錄網址",
+                })
+                .setRequired(true),
+            )
+            .addStringOption((option) =>
+              option
+                .setName("account")
+                .setNameLocalizations({
+                  "zh-TW": "帳號",
+                })
+                .setDescription("Select account to import into")
+                .setDescriptionLocalizations({
+                  "zh-TW": "選擇要匯入的帳號",
+                })
+                .setAutocomplete(true)
+                .setRequired(false),
+            ),
         )
         .addSubcommand((sub) =>
           sub
@@ -443,15 +513,16 @@ const command: Command = {
                 value: "limited_char",
                 default: pageType === "limited_char",
               },
-              {
-                label: tr("gacha_log_stats_StandardCharPool"),
-                value: "standard_char",
-                default: pageType === "standard_char",
-              },
+
               {
                 label: tr("gacha_log_stats_WeaponPool"),
                 value: "weapon",
                 default: pageType === "weapon",
+              },
+              {
+                label: tr("gacha_log_stats_StandardCharPool"),
+                value: "standard_char",
+                default: pageType === "standard_char",
               },
               {
                 label: tr("gacha_log_stats_BeginnerCharPool"),
@@ -807,11 +878,77 @@ const command: Command = {
 
       console.log(`[Gacha Load] Starting merge for UID: ${selectedUid}`);
 
+      let latestProgress = tr("gacha_log_load_Loading");
+      let lastRenderedProgress = "";
+      let progressTimer: NodeJS.Timeout | null = null;
+      const isZhLocale = String(tr.lang || interaction.locale || "")
+        .toLowerCase()
+        .startsWith("zh");
+
+      const mapCharPoolTypeName = (rawPoolType: string): string => {
+        const t = String(rawPoolType || "");
+        if (t.includes("Standard"))
+          return tr("gacha_log_load_pool_type_standard");
+        if (t.includes("Special"))
+          return tr("gacha_log_load_pool_type_limited");
+        if (t.includes("Beginner"))
+          return tr("gacha_log_load_pool_type_beginner");
+        return t;
+      };
+
+      const formatProgress = (raw: string): string => {
+        const charMatch = raw.match(
+          /^Fetching character records \((.+), page (\d+)\)\.\.\.$/i,
+        );
+        if (charMatch) {
+          const poolName = mapCharPoolTypeName(charMatch[1]);
+          const pageNo = charMatch[2];
+          return tr("gacha_log_load_progress_char", {
+            poolName,
+            pageNo,
+          });
+        }
+
+        const weaponMatch = raw.match(
+          /^Fetching weapon records \((.+), page (\d+)\)\.\.\.$/i,
+        );
+        if (weaponMatch) {
+          const poolName = weaponMatch[1];
+          const pageNo = weaponMatch[2];
+          return tr("gacha_log_load_progress_weapon", {
+            poolName,
+            pageNo,
+          });
+        }
+
+        if (/^Fetching weapon pools/i.test(raw)) {
+          return tr("gacha_log_load_progress_weapon_list");
+        }
+
+        return raw;
+      };
+
+      const renderProgress = async () => {
+        const content = latestProgress;
+        if (content === lastRenderedProgress) return;
+        lastRenderedProgress = content;
+        try {
+          await interaction.editReply({ content });
+        } catch {}
+      };
+
       try {
-        await fetchAndMergeGachaLog(
+        await renderProgress();
+        progressTimer = setInterval(() => {
+          void renderProgress();
+        }, 5000);
+
+        const mergeResult = await fetchAndMergeGachaLog(
           db,
           url,
-          (msg) => console.log(msg),
+          (msg) => {
+            latestProgress = formatProgress(msg);
+          },
           selectedUid,
           tr.lang,
           interaction.user.displayAvatarURL({ extension: "png", size: 128 }),
@@ -819,14 +956,30 @@ const command: Command = {
           accountIndex && accountIndex > 0 ? accountIndex : undefined,
           nickname,
         );
+
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
         await showGachaStats(selectedUid, "limited_char", "", 0, "");
+
+        if (mergeResult.hasDataGap) {
+          await interaction.followUp({
+            content: tr("gacha_log_load_gap_warning"),
+            flags: MessageFlags.Ephemeral,
+          });
+        }
       } catch (error) {
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
         let errorMessage: string;
         if (error instanceof GachaApiError && error.apiCode === 40100) {
           errorMessage = TOKEN_EXPIRED_MESSAGE;
         } else {
           const err = error as Error;
-          errorMessage = err.message || "未知錯誤";
+          errorMessage = err.message || tr("UnknownError");
         }
         await interaction.followUp({
           content: errorMessage,
@@ -1053,31 +1206,14 @@ const command: Command = {
         const simPityKey = parts[4];
         const simCount = (parseInt(parts[5], 10) || 10) as 1 | 10;
         const simUserId = parts[2];
-        let simPoolsData: any;
-        try {
-          const simAccounts = await getAccounts(db, simUserId);
-          const simAccount = simAccounts?.[0];
-          if (simAccount?.cookie) {
-            simPoolsData = await withAutoRefresh(
-              client,
-              simUserId,
-              simAccount,
-              (c, s, o) => getCharacterPool(undefined, c, s, o),
-              tr.lang,
-            );
-          } else {
-            simPoolsData = await getCharacterPool();
-          }
-        } catch {}
-        let simPoolList: any[] = simPoolsData?.data?.list || [];
-        if (simPoolList.length === 0) {
-          const recs = await loadSimPoolRecords(db, simUserId);
-          simPoolList = recs.map((r) => ({
-            id: r.poolId,
-            name: r.poolName,
-            chars: [],
-          }));
-        }
+        const recs = orderSimPools(await loadSimPoolRecords(db, simUserId));
+        const simPoolList = recs.map((r) => ({
+          id: r.poolId,
+          name: r.poolName,
+          poolType: r.poolType,
+          type: r.poolType,
+          chars: [],
+        }));
         const foundSimPool = simPoolList.find((p: any) => p.id === simPoolId);
         if (!foundSimPool) {
           await btnInteraction.followUp({
@@ -1172,22 +1308,26 @@ const command: Command = {
         }
 
         if (subcommand === "load") {
-          const modal = new ModalBuilder()
-            .setCustomId("gacha:log_load")
-            .setTitle(tr("gacha_log_load_ModalTitle"));
+          const url = interaction.options.getString("url", true);
+          let selectedUid = interaction.options.getString("account");
 
-          const urlInput = new TextInputBuilder()
-            .setCustomId("url")
-            .setLabel(tr("gacha_log_load_UrlLabel"))
-            .setStyle(TextInputStyle.Paragraph)
-            .setPlaceholder("https://ef-webview.gryphline.com/...")
-            .setRequired(true);
+          if (!selectedUid) {
+            const allRoles = await getAllPossibleUserRoles(
+              interaction.user.id,
+              db,
+            );
+            if (allRoles.length > 0) {
+              selectedUid = allRoles[0].uid;
+            } else {
+              selectedUid = "CREATE_NEW_GUEST";
+            }
+          }
 
-          modal.addComponents(
-            new ActionRowBuilder<TextInputBuilder>().addComponents(urlInput),
-          );
-
-          await interaction.showModal(modal);
+          await interaction.deferReply();
+          await interaction.editReply({
+            content: tr("gacha_log_load_Loading"),
+          });
+          await doFetchGachaLog(url, selectedUid, interaction.user.id);
           return;
         }
 
@@ -1422,7 +1562,10 @@ const command: Command = {
 
         if (parts[2]) {
           // Direct load — uid was encoded in customId (re-entry or from view menu)
-          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          await interaction.deferReply();
+          await interaction.editReply({
+            content: tr("gacha_log_load_Loading"),
+          });
           await doFetchGachaLog(url, parts[2], userId);
           return;
         }
@@ -1521,8 +1664,6 @@ const command: Command = {
           charPoolData.data.list.length > 0
         ) {
           for (const charPool of charPoolData.data.list) {
-            const nowTs = Math.floor(Date.now() / 1000);
-
             // Asia (UTC+8) - base timestamp from API
             const asiaEndTs = Number(charPool.poolEndAtTs);
             // Americas/Europe - roughly 13 hours after Asia if local time is same
@@ -1595,35 +1736,22 @@ const command: Command = {
       const countOption = (interaction.options.getInteger("count") || 10) as
         | 1
         | 10;
-      let poolsData: any;
-      try {
-        const accounts = await getAccounts(db, userId);
-        const account = accounts?.[0];
-        if (account?.cookie) {
-          poolsData = await withAutoRefresh(
-            client,
-            userId,
-            account,
-            (c, s, opts) => getCharacterPool(interaction.locale, c, s, opts),
-            tr.lang,
-          );
-        } else {
-          poolsData = await getCharacterPool(interaction.locale);
-        }
-      } catch {}
-      let poolsList: any[] = poolsData?.data?.list || [];
-      if (poolsList.length === 0) {
-        const recs = await loadSimPoolRecords(db, userId);
-        poolsList = recs.map((r) => ({
-          id: r.poolId,
-          name: r.poolName,
-          chars: [],
-        }));
-      }
+      const recs = orderSimPools(await loadSimPoolRecords(db, userId));
+      const poolsList: any[] = recs.map((r) => ({
+        id: r.poolId,
+        name: r.poolName,
+        poolType: r.poolType,
+        type: r.poolType,
+        chars: [],
+      }));
       let targetSkPool = poolsList.find((p: any) => p.id === bannerOption);
       if (!targetSkPool && poolsList.length > 0) {
         targetSkPool =
-          poolsList.find((p: any) => p.id.includes("special")) || poolsList[0];
+          poolsList.find(
+            (p: any) =>
+              p.id.includes("special") ||
+              String(p.poolType || p.type || "").includes("Special"),
+          ) || poolsList[0];
       }
       if (!targetSkPool) {
         await interaction.editReply({
@@ -1701,10 +1829,15 @@ const command: Command = {
   },
 
   autocomplete: async (client, interaction, db) => {
+    const tr = createTranslator(toI18nLang(interaction.locale));
     const subcommand = interaction.options.getSubcommand(false);
     const focusedValue = interaction.options.getFocused();
 
-    if (subcommand === "view" || subcommand === "clear") {
+    if (
+      subcommand === "view" ||
+      subcommand === "clear" ||
+      subcommand === "load"
+    ) {
       const targetUser =
         (interaction.options.get("user")?.user as User) || interaction.user;
       const allRoles = await getAllPossibleUserRoles(targetUser.id, db);
@@ -1717,6 +1850,13 @@ const command: Command = {
         choices.push({
           name: `${role.nickname} (${role.rawUid})`,
           value: role.uid,
+        });
+      }
+
+      if (subcommand === "load") {
+        choices.push({
+          name: tr("gacha_log_load_CreateNewGuest"),
+          value: "CREATE_NEW_GUEST",
         });
       }
 
@@ -1760,24 +1900,13 @@ const command: Command = {
 
     if (subcommand === "simulate") {
       const choices: { name: string; value: string }[] = [];
-      const recs = await loadSimPoolRecords(db, interaction.user.id);
+      const recs = orderSimPools(
+        await loadSimPoolRecords(db, interaction.user.id),
+      );
       for (const r of recs) {
         if (!choices.some((c) => c.value === r.poolId)) {
           choices.push({ name: r.poolName || r.poolId, value: r.poolId });
         }
-      }
-
-      if (choices.length === 0) {
-        try {
-          const simPools = await getCharacterPool(interaction.locale);
-          if (simPools?.code === 0 && simPools.data?.list) {
-            for (const p of simPools.data.list) {
-              if (!choices.some((c) => c.value === p.id)) {
-                choices.push({ name: p.name, value: p.id });
-              }
-            }
-          }
-        } catch {}
       }
 
       await interaction.respond(

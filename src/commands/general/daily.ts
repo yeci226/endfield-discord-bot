@@ -7,6 +7,8 @@ import {
   TextDisplayBuilder,
   ThumbnailBuilder,
   ModalSubmitInteraction,
+  ChannelType,
+  PermissionsBitField,
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
@@ -99,6 +101,17 @@ const command: Command = {
               { name: "私訊", value: "dm" },
               { name: "當前頻道", value: "channel" },
             )
+            .setRequired(false),
+        )
+        .addStringOption((op) =>
+          op
+            .setName("channel")
+            .setDescription("Target channel when notification method is channel")
+            .setNameLocalizations({ "zh-TW": "通知頻道" })
+            .setDescriptionLocalizations({
+              "zh-TW": "通知方式為頻道時，選擇要發送通知的頻道",
+            })
+            .setAutocomplete(true)
             .setRequired(false),
         ),
     )
@@ -279,6 +292,7 @@ async function handleSetup(
   const autoBalance = interaction.options.getBoolean("auto_balance");
   const notify = interaction.options.getBoolean("notify");
   const notifyMethod = interaction.options.getString("notify_method");
+  const selectedChannelId = interaction.options.getString("channel");
 
   // Load existing or default - Using granular keys
   const userConfig = (await db.get(`autoDaily.${userId}`)) || {
@@ -316,8 +330,41 @@ async function handleSetup(
   if (staminaThreshold !== null)
     userConfig.stamina_threshold = staminaThreshold;
 
-  // Always update channelId to current where command is run
-  userConfig.channelId = interaction.channelId;
+  if (selectedChannelId && interaction.guild) {
+    const channel = interaction.guild.channels.cache.get(selectedChannelId);
+    const member = interaction.member;
+    const botMember = interaction.guild.members.me;
+
+    const userCanSend =
+      !!channel &&
+      !!member &&
+      channel
+        .permissionsFor(member as any)
+        ?.has(PermissionsBitField.Flags.SendMessages);
+
+    if (!userCanSend) {
+      await interaction.reply({
+        content:
+          interaction.locale === "zh-TW"
+            ? "您沒有在該頻道發送訊息的權限，請改選其他頻道。"
+            : "You cannot send messages in the selected channel. Please choose another channel.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const botCanSend =
+      !!channel &&
+      !!botMember &&
+      channel
+        .permissionsFor(botMember)
+        ?.has(PermissionsBitField.Flags.SendMessages);
+
+    userConfig.channelId = selectedChannelId;
+    userConfig.channelBotCanSend = !!botCanSend;
+  } else if (!userConfig.channelId) {
+    userConfig.channelId = interaction.channelId;
+  }
 
   await db.set(`autoDaily.${userId}`, userConfig);
 
@@ -449,3 +496,62 @@ async function handleStatus(
 }
 
 export default command;
+
+command.autocomplete = async (client, interaction, db) => {
+  const subcommand = interaction.options.getSubcommand(false);
+  const focused = interaction.options.getFocused(true);
+
+  if (subcommand !== "setup" || focused.name !== "channel") {
+    await interaction.respond([]);
+    return;
+  }
+
+  if (!interaction.guild) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const me = interaction.guild.members.me;
+  const member = interaction.member;
+  const query = String(focused.value || "").toLowerCase();
+  const isZh = interaction.locale === "zh-TW";
+
+  const channels = interaction.guild.channels.cache
+    .filter(
+      (ch) =>
+        ch.type === ChannelType.GuildText ||
+        ch.type === ChannelType.GuildAnnouncement,
+    )
+    .map((ch) => {
+      const userCanSend =
+        !!member &&
+        ch
+          .permissionsFor(member as any)
+          ?.has(PermissionsBitField.Flags.SendMessages);
+      if (!userCanSend) return null;
+
+      const botCanSend =
+        !!me &&
+        ch.permissionsFor(me)?.has(PermissionsBitField.Flags.SendMessages);
+
+      const suffix = botCanSend
+        ? ""
+        : isZh
+          ? "（機器人無發送訊息權限）"
+          : " (Bot cannot send messages)";
+
+      return {
+        name: `${ch.name}${suffix}`.slice(0, 100),
+        value: ch.id,
+        rawName: ch.name.toLowerCase(),
+      };
+    })
+    .filter((x): x is { name: string; value: string; rawName: string } => !!x)
+    .filter(
+      (x) => x.rawName.includes(query) || x.value.toLowerCase().includes(query),
+    )
+    .slice(0, 25)
+    .map(({ name, value }) => ({ name, value }));
+
+  await interaction.respond(channels);
+};
