@@ -953,7 +953,10 @@ const command: Command = {
             return;
           }
         } catch (e) {
-          console.error("[Gacha Load] Fingerprint check failed, continue import", e);
+          console.error(
+            "[Gacha Load] Fingerprint check failed, continue import",
+            e,
+          );
         }
       }
 
@@ -1237,7 +1240,8 @@ const command: Command = {
 
         await btnInteraction.deferUpdate();
 
-        const isExpired = Date.now() - Number(pending.createdAt || 0) > 1000 * 60 * 15;
+        const isExpired =
+          Date.now() - Number(pending.createdAt || 0) > 1000 * 60 * 15;
         if (isExpired) {
           await db.delete(pendingKey);
           await btnInteraction.editReply({

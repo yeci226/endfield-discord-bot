@@ -264,7 +264,10 @@ function buildPoolDistMap(list: GachaRecord[]): Map<string, number> {
   return map;
 }
 
-function cosineSimilarity(a: Map<string, number>, b: Map<string, number>): number {
+function cosineSimilarity(
+  a: Map<string, number>,
+  b: Map<string, number>,
+): number {
   const keys = new Set<string>([...a.keys(), ...b.keys()]);
   if (keys.size === 0) return 0;
   let dot = 0;
@@ -337,14 +340,13 @@ export async function analyzeGachaImportFingerprint(
   for (const uid of uniqueCandidates) {
     const existing = await db.get<GachaLogData>(`GACHA_LOG_${uid}`);
     if (!existing) continue;
-    const existingList = [...existing.characterList, ...existing.weaponList].sort(
-      (a, b) => Number(b.seqId) - Number(a.seqId),
-    );
+    const existingList = [
+      ...existing.characterList,
+      ...existing.weaponList,
+    ].sort((a, b) => Number(b.seqId) - Number(a.seqId));
     if (existingList.length === 0) continue;
 
-    const existingSeqs = existingList
-      .slice(0, 300)
-      .map((r) => String(r.seqId));
+    const existingSeqs = existingList.slice(0, 300).map((r) => String(r.seqId));
     const seqOverlap = seqOverlapRatio(incomingSeqs, existingSeqs);
 
     const existingPoolDist = buildPoolDistMap(existingList);
@@ -363,7 +365,8 @@ export async function analyzeGachaImportFingerprint(
       existingEnd,
     );
 
-    const score = seqOverlap * 0.55 + poolSimilarity * 0.3 + timeSimilarity * 0.15;
+    const score =
+      seqOverlap * 0.55 + poolSimilarity * 0.3 + timeSimilarity * 0.15;
 
     matches.push({
       uid,
@@ -1271,10 +1274,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
               ) {
                 const recordCid = String(
                   record.charId || record.weaponId || "",
-                ).replace(
-                  "icon_",
-                  "",
-                );
+                ).replace("icon_", "");
                 if (STANDARD_SIX_STARS.includes(recordCid)) {
                   isOffRate = true;
                 } else {

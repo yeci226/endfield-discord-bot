@@ -198,7 +198,10 @@ export async function drawGachaStats(
       const prev = sixMap.get(key);
       if (prev) {
         prev.count += 1;
-        prev.latestTs = Math.max(prev.latestTs || 0, parseGachaTs(item.gachaTs));
+        prev.latestTs = Math.max(
+          prev.latestTs || 0,
+          parseGachaTs(item.gachaTs),
+        );
         prev.isOffRate = prev.isOffRate || !!item.isOffRate;
       } else {
         sixMap.set(key, {
@@ -1420,7 +1423,11 @@ export async function drawGachaStats(
           ctx.textAlign = "right";
           ctx.fillStyle = "#b0b5bf";
           ctx.font = "15px NotoSans";
-          ctx.fillText(quickTimeText, x + quickCardW - 10, quickCardY + quickCardH - 10);
+          ctx.fillText(
+            quickTimeText,
+            x + quickCardW - 10,
+            quickCardY + quickCardH - 10,
+          );
         }
       }
 
