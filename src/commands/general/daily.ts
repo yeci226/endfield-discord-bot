@@ -65,6 +65,15 @@ const command: Command = {
             .setDescriptionLocalizations({
               "zh-TW": "簽到時間 1-24 UTC+8",
             })
+            .addChoices(
+              ...Array.from({ length: 24 }, (_, i) => {
+                const hour = i + 1;
+                return {
+                  name: `${hour}`,
+                  value: hour,
+                };
+              }),
+            )
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(24),
@@ -305,6 +314,8 @@ async function handleSetup(
     channelId: interaction.channelId,
   };
 
+  userConfig.time = normalizeDailyHour(userConfig.time, 13);
+
   if (autoBalance) {
     userConfig.auto_balance = true;
     // Calculate best time
@@ -395,6 +406,43 @@ async function handleSetup(
     flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
     components: [container],
   });
+}
+
+function normalizeDailyHour(value: unknown, fallback: number): number {
+  const toHour = (raw: unknown): number | null => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const x = Math.floor(n);
+    if (x === 24) return 0;
+    if (x >= 0 && x <= 23) return x;
+    if (x >= 1 && x <= 24) return x % 24;
+    return null;
+  };
+
+  if (Array.isArray(value)) {
+    for (const it of value) {
+      const h = toHour(it);
+      if (h !== null) return h;
+    }
+    return fallback;
+  }
+
+  if (typeof value === "string") {
+    const tokens = value
+      .split(/[\s,，、;；|/]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+    for (const t of tokens) {
+      const h = toHour(t);
+      if (h !== null) return h;
+    }
+
+    return fallback;
+  }
+
+  const one = toHour(value);
+  return one === null ? fallback : one;
 }
 
 async function handleStatus(

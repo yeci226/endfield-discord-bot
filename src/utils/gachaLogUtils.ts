@@ -1052,7 +1052,8 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   const dynamicStandardSixStars = new Set<string>(STANDARD_SIX_STARS);
   for (const rec of data.characterList) {
     if (
-      (rec.poolType?.includes("Standard") || rec.poolType?.includes("Beginner")) &&
+      (rec.poolType?.includes("Standard") ||
+        rec.poolType?.includes("Beginner")) &&
       rec.rarity >= 6 &&
       !isPullFree(rec)
     ) {

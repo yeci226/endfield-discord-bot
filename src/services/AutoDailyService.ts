@@ -35,6 +35,45 @@ export class AutoDailyService {
   private isRunning: boolean = false;
   private logger: Logger;
 
+  private parseHourCandidates(value: unknown): number[] {
+    const toHour = (raw: unknown): number | null => {
+      const num = Number(raw);
+      if (!Number.isFinite(num)) return null;
+      const n = Math.floor(num);
+      if (n === 24) return 0;
+      if (n >= 0 && n <= 23) return n;
+      if (n >= 1 && n <= 24) return n % 24;
+      return null;
+    };
+
+    if (Array.isArray(value)) {
+      const arr = value
+        .map((x) => toHour(x))
+        .filter((x): x is number => x !== null);
+      return arr;
+    }
+
+    if (typeof value === "string") {
+      const parts = value
+        .split(/[\s,，、;；|/]+/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (parts.length > 1) {
+        return parts
+          .map((x) => toHour(x))
+          .filter((x): x is number => x !== null);
+      }
+    }
+
+    const one = toHour(value);
+    return one === null ? [] : [one];
+  }
+
+  private normalizeHour(value: unknown, fallback: number): number {
+    const parsed = this.parseHourCandidates(value);
+    return parsed.length > 0 ? parsed[0] : fallback;
+  }
+
   constructor(client: ExtendedClient) {
     this.client = client;
     this.logger = new Logger("AutoDaily");
@@ -93,8 +132,23 @@ export class AutoDailyService {
 
       const eligibleUsers = [];
       for (const { id, value: config } of dailyUsers) {
+        if (!config || typeof config !== "object") continue;
+
+        const normalizedTime = this.normalizeHour((config as any).time, 13);
+        const normalizedNotifyMethod =
+          (config as any).notify_method === "channel" ? "channel" : "dm";
+        const hasChanged =
+          (config as any).time !== normalizedTime ||
+          (config as any).notify_method !== normalizedNotifyMethod;
+
+        if (hasChanged) {
+          (config as any).time = normalizedTime;
+          (config as any).notify_method = normalizedNotifyMethod;
+          await this.client.db.set(id, config);
+        }
+
         const userId = id.replace("autoDaily.", "");
-        if (config.time !== currentHour) continue;
+        if ((config as any).time !== currentHour) continue;
 
         // Skip if already processed today
         const lastProcessed = await this.client.db.get(
@@ -384,8 +438,9 @@ export class AutoDailyService {
     const hourCounts = new Array(24).fill(0);
 
     dailyUsers.forEach(({ value: conf }) => {
-      if (conf.time >= 0 && conf.time < 24) {
-        hourCounts[conf.time]++;
+      const hour = this.normalizeHour((conf as any)?.time, -1);
+      if (hour >= 0 && hour < 24) {
+        hourCounts[hour]++;
       }
     });
 
