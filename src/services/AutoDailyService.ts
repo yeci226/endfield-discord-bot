@@ -128,8 +128,6 @@ export class AutoDailyService {
       const dailyUsers =
         await this.client.db.findByPrefix<AutoDailyConfig>("autoDaily.");
 
-      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
-
       const eligibleUsers = [];
       for (const { id, value: config } of dailyUsers) {
         if (!config || typeof config !== "object") continue;
@@ -149,14 +147,6 @@ export class AutoDailyService {
 
         const userId = id.replace("autoDaily.", "");
         if ((config as any).time !== currentHour) continue;
-
-        // Skip if already processed today
-        const lastProcessed = await this.client.db.get(
-          `${userId}.lastAutoDaily`,
-        );
-        if (lastProcessed === today) {
-          continue;
-        }
 
         eligibleUsers.push({ userId, config });
       }

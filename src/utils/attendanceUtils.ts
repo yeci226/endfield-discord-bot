@@ -47,7 +47,7 @@ export async function processRoleAttendance(
     let signedNow = false;
     let claimResult = null;
 
-    if (isClaim && !status.hasToday) {
+    if (isClaim) {
       claimResult = await executeAttendance(
         gameRoleStr,
         cookie,
