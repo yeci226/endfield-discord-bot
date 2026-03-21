@@ -218,11 +218,15 @@ export async function buildDailyAttendanceCard(
     const isToday = i === 1;
     const isFuture = i >= 2;
     const isPast = i === 0;
+    const todayClaimedNow = !!payload.todayClaimedNow;
     const todayIsClaimed = !!(payload.todayClaimedNow || item.done);
 
     roundedRect(ctx, x, y, cardW, cardH, 18);
     if (isToday) {
-      if (todayIsClaimed) {
+      if (todayClaimedNow) {
+        ctx.fillStyle = "rgba(64, 138, 96, 0.30)";
+        ctx.strokeStyle = "rgba(147, 243, 183, 0.56)";
+      } else if (todayIsClaimed) {
         ctx.fillStyle = "rgba(50, 93, 115, 0.28)";
         ctx.strokeStyle = "rgba(122, 188, 226, 0.42)";
       } else {
@@ -270,9 +274,12 @@ export async function buildDailyAttendanceCard(
     }
 
     if (isToday) {
-      const todayIsClaimed = !!(payload.todayClaimedNow || item.done);
       ctx.font = "20px NotoSans";
-      ctx.fillStyle = todayIsClaimed ? "#a9cce1" : "rgba(220, 255, 236, 0.82)";
+      ctx.fillStyle = todayClaimedNow
+        ? "#b8ffd5"
+        : todayIsClaimed
+          ? "#a9cce1"
+          : "rgba(220, 255, 236, 0.82)";
       ctx.fillText(
         todayIsClaimed
           ? payload.tr("daily_canvas_Claimed")

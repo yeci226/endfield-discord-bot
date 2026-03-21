@@ -158,10 +158,12 @@ export async function processRoleAttendance(
             ? firstUndoneIndex
             : resolvedLastDoneIndex;
 
-    const checkedDaysThisMonth = todayAnchorIndex >= 0 ? todayAnchorIndex + 1 : 0;
+    const checkedDaysThisMonth =
+      todayAnchorIndex >= 0 ? todayAnchorIndex + 1 : 0;
     const missedDaysThisMonth =
       todayAnchorIndex > 0
-        ? status.calendar.slice(0, todayAnchorIndex).filter((d) => !d.done).length
+        ? status.calendar.slice(0, todayAnchorIndex).filter((d) => !d.done)
+            .length
         : 0;
 
     const yesterdayRewardEntry =
