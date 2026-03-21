@@ -47,7 +47,7 @@ export async function processRoleAttendance(
     let signedNow = false;
     let claimResult = null;
 
-    if (isClaim) {
+    if (isClaim && !status.hasToday) {
       claimResult = await executeAttendance(
         gameRoleStr,
         cookie,
@@ -61,7 +61,7 @@ export async function processRoleAttendance(
         claimResult &&
         (claimResult.code === 0 || claimResult.code === 10001)
       ) {
-        signedNow = true;
+        signedNow = claimResult.code === 0;
 
         if (claimResult.code === 0 && claimResult.data?.awardIds) {
           // If we got reward info in the response, we can use it directly
@@ -127,16 +127,42 @@ export async function processRoleAttendance(
     const rewardName =
       rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
 
-    const currentRewardEntry =
-      status.calendar.find((r) => r.available) ||
-      [...status.calendar].find((r) => !r.done) ||
-      [...status.calendar].reverse().find((r) => r.done);
+    const availableIndex = status.calendar.findIndex((r) => r.available);
+    const firstUndoneIndex = status.calendar.findIndex((r) => !r.done);
+    const lastDoneIndex = [...status.calendar]
+      .reverse()
+      .findIndex((r) => r.done);
+    const resolvedLastDoneIndex =
+      lastDoneIndex >= 0 ? status.calendar.length - 1 - lastDoneIndex : -1;
 
-    const currentIndex = currentRewardEntry
-      ? status.calendar.findIndex(
-          (r) => r.awardId === currentRewardEntry.awardId,
-        )
-      : -1;
+    // If today's attendance is already done, the current reward should be the latest done day,
+    // not the first pending day.
+    const currentIndex =
+      status.hasToday || signedNow
+        ? resolvedLastDoneIndex
+        : availableIndex >= 0
+          ? availableIndex
+          : firstUndoneIndex >= 0
+            ? firstUndoneIndex
+            : resolvedLastDoneIndex;
+
+    const currentRewardEntry =
+      currentIndex >= 0 ? status.calendar[currentIndex] : null;
+
+    const todayAnchorIndex =
+      availableIndex >= 0
+        ? availableIndex
+        : status.hasToday || signedNow
+          ? currentIndex
+          : firstUndoneIndex >= 0
+            ? firstUndoneIndex
+            : resolvedLastDoneIndex;
+
+    const checkedDaysThisMonth = todayAnchorIndex >= 0 ? todayAnchorIndex + 1 : 0;
+    const missedDaysThisMonth =
+      todayAnchorIndex > 0
+        ? status.calendar.slice(0, todayAnchorIndex).filter((d) => !d.done).length
+        : 0;
 
     const yesterdayRewardEntry =
       currentIndex > 0
@@ -167,21 +193,22 @@ export async function processRoleAttendance(
       done: !!yesterdayRewardEntry?.done,
     };
 
-    const pendingRewards = status.calendar.filter((d) => !d.done);
-    const nextRewards = pendingRewards.slice(1, 4).map((dayReward) => {
-      const reward = status.resourceInfoMap?.[dayReward.awardId];
-      if (!reward) {
-        return {
-          name: tr("None") || "None",
-          icon: "",
-        };
-      }
+    const nextRewards = status.calendar
+      .slice(currentIndex + 1, currentIndex + 4)
+      .map((dayReward) => {
+        const reward = status.resourceInfoMap?.[dayReward.awardId];
+        if (!reward) {
+          return {
+            name: tr("None") || "None",
+            icon: "",
+          };
+        }
 
-      return {
-        name: `${reward.name} x${reward.count}`,
-        icon: reward.icon,
-      };
-    });
+        return {
+          name: `${reward.name} x${reward.count}`,
+          icon: reward.icon,
+        };
+      });
 
     let firstRewardName = "";
     if (status.first && status.first.length > 0) {
@@ -214,6 +241,8 @@ export async function processRoleAttendance(
       yesterdayReward,
       todayReward,
       nextRewards,
+      checkedDaysThisMonth,
+      missedDaysThisMonth,
       firstRewardName: firstRewardName,
       error: !status.hasToday && !signedNow && isClaim,
       message: claimResult?.message,

@@ -27,6 +27,8 @@ export interface DailyCardPayload {
   totalDays: number;
   calendarTotalDays: number;
   todayClaimedNow?: boolean;
+  checkedDaysThisMonth?: number;
+  missedDaysThisMonth?: number;
   yesterdayReward: DailyRewardItem;
   todayReward: DailyRewardItem;
   nextRewards: DailyRewardItem[];
@@ -194,6 +196,12 @@ export async function buildDailyAttendanceCard(
     payload.nextRewards[1] || { name: "-", icon: "" },
     payload.nextRewards[2] || { name: "-", icon: "" },
   ];
+  const textMax = cardW - 32;
+  const unifiedNameFontSize = items.reduce((minSize, item) => {
+    const name = item.name || "-";
+    const size = fitText(ctx, name, textMax, 34, 18);
+    return Math.min(minSize, size);
+  }, 34);
 
   ctx.fillStyle = "#d7e5f2";
   ctx.font = "bold 30px NotoSansBold";
@@ -247,24 +255,18 @@ export async function buildDailyAttendanceCard(
     ctx.fillText(labels[i], x + 18, y + 36);
 
     const text = item.name || "-";
-    const textMax = cardW - 32;
-    const fSize = fitText(ctx, text, textMax, 34, 18);
-    ctx.font = `bold ${fSize}px NotoSansBold`;
+    ctx.font = `bold ${unifiedNameFontSize}px NotoSansBold`;
     ctx.fillStyle = isFuture ? "#bac3cf" : "#ffffff";
     const subLabelY = y + cardH - 24;
     const nameY = subLabelY - 26;
     ctx.fillText(text, x + 16, nameY);
 
     if (isPast) {
-      ctx.font = "20px NotoSans";
-      ctx.fillStyle = item.done ? "#a9cce1" : "#9aa1ad";
-      ctx.fillText(
-        item.done
-          ? payload.tr("daily_canvas_Claimed")
-          : payload.tr("daily_canvas_NotClaimed"),
-        x + 16,
-        subLabelY,
-      );
+      if (item.done) {
+        ctx.font = "20px NotoSans";
+        ctx.fillStyle = "#a9cce1";
+        ctx.fillText(payload.tr("daily_canvas_Claimed"), x + 16, subLabelY);
+      }
     }
 
     if (isToday) {

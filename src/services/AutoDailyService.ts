@@ -209,6 +209,15 @@ export class AutoDailyService {
 
   public async processUser(userId: string, config: AutoDailyConfig) {
     try {
+      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
+      const lastAutoDaily = await this.client.db.get(`${userId}.lastAutoDaily`);
+      if (lastAutoDaily === today) {
+        this.logger.info(
+          `Skipping user ${userId}: already processed for ${today}.`,
+        );
+        return;
+      }
+
       const accounts = await getAccounts(this.client.db, userId);
       if (!accounts || accounts.length === 0) return;
 
@@ -226,6 +235,8 @@ export class AutoDailyService {
         totalDays: number;
         calendarTotalDays: number;
         todayClaimedNow: boolean;
+        checkedDaysThisMonth?: number;
+        missedDaysThisMonth?: number;
         yesterdayReward?: { name: string; icon?: string; done?: boolean };
         todayReward?: { name: string; icon?: string; done?: boolean };
         nextRewards?: { name: string; icon?: string; done?: boolean }[];
@@ -332,6 +343,8 @@ export class AutoDailyService {
                     totalDays: res.totalDays,
                     calendarTotalDays: res.calendarTotalDays || 0,
                     todayClaimedNow: !!res.signedNow,
+                    checkedDaysThisMonth: res.checkedDaysThisMonth,
+                    missedDaysThisMonth: res.missedDaysThisMonth,
                     yesterdayReward: res.yesterdayReward,
                     todayReward: res.todayReward,
                     nextRewards: res.nextRewards,
@@ -389,7 +402,6 @@ export class AutoDailyService {
       );
 
       // Mark as processed for today
-      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
       await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
       if (config.notify && results.length > 0) {
@@ -404,6 +416,8 @@ export class AutoDailyService {
               totalDays: Number(res.totalDays || 0),
               calendarTotalDays: Number(res.calendarTotalDays || 0),
               todayClaimedNow: !!res.todayClaimedNow,
+              checkedDaysThisMonth: Number(res.checkedDaysThisMonth || 0),
+              missedDaysThisMonth: Number(res.missedDaysThisMonth || 0),
               yesterdayReward: {
                 name: res.yesterdayReward?.name || tr("None") || "None",
                 icon: res.yesterdayReward?.icon || "",

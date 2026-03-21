@@ -397,6 +397,7 @@ const langs: Record<string, any> = {
   daily_canvas_CanClaim: "Claimable",
   daily_canvas_AvailableTomorrow: "Available Tomorrow",
   daily_canvas_NotYetAvailable: "Not Yet Available",
+  daily_canvas_MissedThisMonth: "Missed This Month",
 };
 
 export default langs;
