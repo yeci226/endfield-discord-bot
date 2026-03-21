@@ -18,6 +18,7 @@ import {
   buildDailyAttendanceCard,
   DailyCardPayload,
 } from "../utils/dailyCanvasUtils";
+import { Readable } from "stream";
 
 interface AutoDailyConfig {
   time: number; // 0-23
@@ -522,12 +523,37 @@ export class AutoDailyService {
           return;
         }
 
-        // Serialize files to base64 to pass through broadcastEval
+        // Serialize files to base64 to pass through broadcastEval.
+        // AttachmentBuilder bytes are stored on `attachment`, not always on `data`.
+        const serializeAttachment = async (file: AttachmentBuilder) => {
+          const attachment = (file as any).attachment;
+          let buffer = Buffer.alloc(0);
+
+          if (Buffer.isBuffer(attachment)) {
+            buffer = Buffer.from(attachment);
+          } else if (attachment instanceof Uint8Array) {
+            buffer = Buffer.from(attachment);
+          } else if (attachment instanceof Readable) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of attachment) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            buffer = Buffer.concat(chunks);
+          }
+
+          return {
+            buffer: buffer.toString("base64"),
+            name: file.name,
+            description: file.description,
+          };
+        };
+
         const serializedFiles = payload.files
-          ? payload.files.map((file: AttachmentBuilder) => ({
-              buffer: (file as any).data?.toString('base64') || '',
-              name: file.name,
-            }))
+          ? await Promise.all(
+              payload.files.map((file: AttachmentBuilder) =>
+                serializeAttachment(file),
+              ),
+            )
           : [];
 
         const serializedPayload = {
@@ -539,13 +565,17 @@ export class AutoDailyService {
           async (c: any, context: any) => {
             const channel = c.channels.cache.get(context.channelId);
             if (!channel) return false;
-            
+
             // Reconstruct AttachmentBuilder objects from serialized data
-            const { AttachmentBuilder } = await import('discord.js');
-            const reconstructedFiles = context.payload.files.map((file: any) => 
-              new AttachmentBuilder(Buffer.from(file.buffer, 'base64'), { name: file.name })
+            const { AttachmentBuilder } = await import("discord.js");
+            const reconstructedFiles = context.payload.files.map(
+              (file: any) =>
+                new AttachmentBuilder(Buffer.from(file.buffer, "base64"), {
+                  name: file.name,
+                  description: file.description,
+                }),
             );
-            
+
             await channel.send({
               content: context.payload.content,
               files: reconstructedFiles,
