@@ -2,10 +2,9 @@ import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
   MessageFlags,
+  AttachmentBuilder,
   ContainerBuilder,
-  SectionBuilder,
   TextDisplayBuilder,
-  ThumbnailBuilder,
   ModalSubmitInteraction,
   ChannelType,
   PermissionsBitField,
@@ -20,6 +19,7 @@ import {
 import { formatSkGameRole } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { processRoleAttendance } from "../../utils/attendanceUtils";
+import { buildDailyAttendanceCard } from "../../utils/dailyCanvasUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -80,16 +80,6 @@ const command: Command = {
         )
         .addBooleanOption((op) =>
           op
-            .setName("auto_balance")
-            .setDescription("Automatically choose the best time")
-            .setNameLocalizations({ "zh-TW": "自動選擇時間" })
-            .setDescriptionLocalizations({
-              "zh-TW": "自動選擇現有設定人數較少的時間簽到",
-            })
-            .setRequired(false),
-        )
-        .addBooleanOption((op) =>
-          op
             .setName("notify")
             .setDescription("Notify when signed in")
             .setNameLocalizations({ "zh-TW": "通知" })
@@ -125,15 +115,6 @@ const command: Command = {
             .setAutocomplete(true)
             .setRequired(false),
         ),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("status")
-        .setDescription("View real-time status of all bound accounts")
-        .setNameLocalizations({ "zh-TW": "狀態總覽" })
-        .setDescriptionLocalizations({
-          "zh-TW": "查看所有綁定帳號的理智、任務與簽到狀態",
-        }),
     ) as SlashCommandBuilder,
 
   execute: async (
@@ -152,40 +133,22 @@ const command: Command = {
       return;
     }
 
-    if (interaction.options.getSubcommand() === "status") {
-      await handleStatus(client, interaction, db, t);
-      return;
-    }
-
     await interaction.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
 
     const userId = interaction.user.id;
     const accounts = await getAccounts(db, userId);
 
     if (!accounts || accounts.length === 0) {
-      const container = new ContainerBuilder();
-      const textDisplay = new TextDisplayBuilder().setContent(
-        t("NoSetAccount"),
-      );
-      container.addTextDisplayComponents(textDisplay);
-
       await interaction.editReply({
-        content: "",
-        flags: MessageFlags.IsComponentsV2,
-        components: [container],
+        content: t("NoSetAccount"),
       });
       return;
     }
 
     const isClaim = interaction.options.getSubcommand() === "claim";
-    const container = new ContainerBuilder();
     let hasResult = false;
-
-    // Summary Section
-    const summaryText = new TextDisplayBuilder().setContent(
-      isClaim ? t("daily_Checking") : t("daily_Status"),
-    );
-    container.addTextDisplayComponents(summaryText);
+    const outputLines: string[] = [];
+    const files: AttachmentBuilder[] = [];
 
     const processedRoles = new Set<string>();
 
@@ -244,51 +207,57 @@ const command: Command = {
 
           if (!res) continue;
 
-          let statusText = "";
-          if (res.hasToday || res.signedNow) {
-            statusText = `## ${t("daily_Success")}\n### ${t("daily_TodayReward")}: \`${res.rewardName}\``;
-            if (res.firstRewardName) {
-              statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
-            }
-            statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
-          } else {
-            statusText = `## ${t("daily_Failed")}\n### ${t("daily_TodayPending")}: \`${res.rewardName}\``;
-            if (res.firstRewardName) {
-              statusText += `\n### ${t("daily_FirstReward")}: \`${res.firstRewardName}\``;
-            }
-            statusText += `\n### ${t("daily_TotalDays")}: \`${res.totalDays}\` ${t("Day")}`;
-            if (isClaim && !res.signedNow) {
-              statusText += `\n⚠️ ${t("Error")}: \`${res.message || t("UnknownError")}\``;
-            }
-          }
+          if (files.length < 10) {
+            const buffer = await buildDailyAttendanceCard({
+              roleName: `${role.nickname}`,
+              roleMeta: `Lv.${role.level} - ${role.serverName}`,
+              totalDays: Number(res.totalDays || 0),
+              calendarTotalDays: Number(res.calendarTotalDays || 0),
+              todayClaimedNow: !!res.signedNow,
+              yesterdayReward: {
+                name: res.yesterdayReward?.name || t("None") || "None",
+                icon: res.yesterdayReward?.icon || "",
+                done: !!res.yesterdayReward?.done,
+              },
+              todayReward: {
+                name:
+                  res.todayReward?.name ||
+                  res.rewardName ||
+                  t("None") ||
+                  "None",
+                icon: res.todayReward?.icon || res.rewardIcon || "",
+                done: !!res.todayReward?.done,
+              },
+              nextRewards: Array.isArray(res.nextRewards)
+                ? res.nextRewards
+                : [],
+              tr,
+            });
 
-          const textDisplay = new TextDisplayBuilder().setContent(
-            `**${role.nickname}** (Lv.${role.level}) - ${role.serverName}\n${statusText}`,
-          );
-          if (res.rewardIcon) {
-            const roleSection = new SectionBuilder()
-              .addTextDisplayComponents(textDisplay)
-              .setThumbnailAccessory(
-                new ThumbnailBuilder({ media: { url: res.rewardIcon } }),
-              );
-            container.addSectionComponents(roleSection);
-          } else {
-            container.addTextDisplayComponents(textDisplay);
+            files.push(
+              new AttachmentBuilder(buffer, {
+                name: `daily-${role.roleId}-${role.serverId}.png`,
+              }),
+            );
           }
         }
       }
     }
 
     if (!hasResult) {
-      container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(t("daily_RoleNotFound")),
-      );
+      await interaction.editReply({
+        content: t("daily_RoleNotFound"),
+      });
+      return;
+    }
+
+    if (files.length === 10) {
+      outputLines.push("- 已達附件上限 10 張，其餘角色請分批查詢。");
     }
 
     await interaction.editReply({
-      content: "",
-      flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-      components: [container],
+      content: outputLines.join("\n"),
+      files,
     });
   },
 };
@@ -300,7 +269,6 @@ async function handleSetup(
 ) {
   const userId = interaction.user.id;
   const time = interaction.options.getInteger("time");
-  const autoBalance = interaction.options.getBoolean("auto_balance");
   const notify = interaction.options.getBoolean("notify");
   const notifyMethod = interaction.options.getString("notify_method");
   const selectedChannelId = interaction.options.getString("channel");
@@ -308,7 +276,6 @@ async function handleSetup(
   // Load existing or default - Using granular keys
   const userConfig = (await db.get(`autoDaily.${userId}`)) || {
     time: 13,
-    auto_balance: false,
     notify: true,
     notify_method: "dm",
     channelId: interaction.channelId,
@@ -316,14 +283,12 @@ async function handleSetup(
 
   userConfig.time = normalizeDailyHour(userConfig.time, 13);
 
-  if (autoBalance) {
-    userConfig.auto_balance = true;
-    // Calculate best time
-    userConfig.time = await client.autoDailyService.getBalancedHour();
-  } else if (time !== null) {
-    userConfig.auto_balance = false;
+  if (time !== null) {
     userConfig.time = time; // 1-24 input
     if (userConfig.time === 24) userConfig.time = 0;
+  } else {
+    // If user doesn't specify time, auto-assign the least crowded hour.
+    userConfig.time = await client.autoDailyService.getBalancedHour();
   }
 
   if (notify !== null) {
@@ -443,106 +408,6 @@ function normalizeDailyHour(value: unknown, fallback: number): number {
 
   const one = toHour(value);
   return one === null ? fallback : one;
-}
-
-async function handleStatus(
-  client: ExtendedClient,
-  interaction: ChatInputCommandInteraction,
-  db: CustomDatabase,
-  tr: any,
-) {
-  const t = tr || ((key: string) => key);
-  await interaction.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
-
-  const userId = interaction.user.id;
-  const accounts = await getAccounts(db, userId);
-
-  if (!accounts || accounts.length === 0) {
-    await interaction.editReply(t("NoSetAccount"));
-    return;
-  }
-
-  const { getCardDetail, getAttendanceList } = require("../../utils/skportApi");
-  const container = new ContainerBuilder();
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(t("daily_StatusSummary")),
-  );
-
-  const processedRoles = new Set<string>();
-  const rows = [];
-
-  for (const account of accounts) {
-    if (account.invalid) continue;
-    await ensureAccountBinding(account, userId, db, t.lang);
-
-    const roles = account.roles;
-    if (!roles || roles.length === 0) continue;
-
-    for (const binding of roles) {
-      for (const role of binding.roles) {
-        const gameRoleStr = `3_${role.roleId}_${role.serverId}`;
-        if (processedRoles.has(gameRoleStr)) continue;
-        processedRoles.add(gameRoleStr);
-
-        try {
-          const [cardRes, attendRes] = (await Promise.all([
-            withAutoRefresh(client, userId, account, (c, s, options) =>
-              getCardDetail(
-                role.roleId,
-                role.serverId,
-                account.info?.id || role.roleId,
-                t.lang,
-                c,
-                s,
-                options,
-              ),
-            ),
-            withAutoRefresh(client, userId, account, (c, s, options) =>
-              getAttendanceList(
-                gameRoleStr,
-                account.cookie,
-                t.lang,
-                c,
-                s,
-                options,
-              ),
-            ),
-          ])) as any[];
-
-          if (cardRes?.code === 0 && cardRes.data?.detail) {
-            const d = cardRes.data.detail;
-            const stamina = `${d.dungeon.curStamina}/${d.dungeon.maxStamina}`;
-            const mission = `${d.dailyMission.dailyActivation}/${d.dailyMission.maxDailyActivation}`;
-            const bp = `Lv.${d.bpSystem.curLevel}`;
-            const checkin = attendRes?.data?.hasToday ? "✅" : "❌";
-
-            rows.push(
-              `**${role.nickname}**\n` +
-                `> 🔋 ${t("daily_Status_Stamina")}: \`${stamina}\` | 🎯 ${t("daily_Status_Missions")}: \`${mission}\`\n` +
-                `> 🎫 ${t("daily_Status_BP")}: \`${bp}\` | 🗓️ ${t("daily_Status_Checkin")}: ${checkin}`,
-            );
-          }
-        } catch (e) {
-          rows.push(`**${role.nickname}**: ⚠️ ${t("Error")}`);
-        }
-      }
-    }
-  }
-
-  if (rows.length === 0) {
-    await interaction.editReply(t("daily_RoleNotFound"));
-    return;
-  }
-
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(rows.join("\n\n")),
-  );
-
-  await interaction.editReply({
-    content: "",
-    flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-    components: [container],
-  });
 }
 
 export default command;

@@ -388,6 +388,15 @@ const langs: Record<string, any> = {
   gacha_log_fingerprint_switch_predicted: "Switch import to <uid>",
   gacha_log_fingerprint_expired:
     "This import confirmation has expired. Please run `/gacha log load` again.",
+
+  // Daily Canvas Labels
+  daily_canvas_TotalCheckIn: "Total Check-ins",
+  daily_canvas_CheckinRewards: "Check-in Rewards",
+  daily_canvas_Claimed: "Claimed",
+  daily_canvas_NotClaimed: "Not Claimed",
+  daily_canvas_CanClaim: "Claimable",
+  daily_canvas_AvailableTomorrow: "Available Tomorrow",
+  daily_canvas_NotYetAvailable: "Not Yet Available",
 };
 
 export default langs;

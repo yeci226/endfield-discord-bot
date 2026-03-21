@@ -10,16 +10,14 @@ import {
   withAutoRefresh,
 } from "../utils/accountUtils";
 import { createTranslator } from "../utils/i18n";
-import {
-  ContainerBuilder,
-  SectionBuilder,
-  TextDisplayBuilder,
-  ThumbnailBuilder,
-  MessageFlags,
-} from "discord.js";
+import { AttachmentBuilder } from "discord.js";
 import moment from "moment-timezone";
 import { Logger } from "../utils/Logger";
 import { processRoleAttendance } from "../utils/attendanceUtils";
+import {
+  buildDailyAttendanceCard,
+  DailyCardPayload,
+} from "../utils/dailyCanvasUtils";
 
 interface AutoDailyConfig {
   time: number; // 0-23
@@ -34,6 +32,9 @@ export class AutoDailyService {
   private interval: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
   private logger: Logger;
+  private cardCache = new Map<string, { buffer: Buffer; expireAt: number }>();
+  private readonly CARD_CACHE_TTL_MS = 10 * 60 * 1000;
+  private readonly CARD_CACHE_MAX_SIZE = 300;
 
   private parseHourCandidates(value: unknown): number[] {
     const toHour = (raw: unknown): number | null => {
@@ -77,6 +78,43 @@ export class AutoDailyService {
   constructor(client: ExtendedClient) {
     this.client = client;
     this.logger = new Logger("AutoDaily");
+  }
+
+  private makeCardCacheKey(payload: DailyCardPayload): string {
+    return JSON.stringify(payload);
+  }
+
+  private pruneCardCache(now: number) {
+    if (this.cardCache.size < this.CARD_CACHE_MAX_SIZE) return;
+
+    for (const [key, value] of this.cardCache.entries()) {
+      if (value.expireAt <= now) {
+        this.cardCache.delete(key);
+      }
+    }
+
+    while (this.cardCache.size > this.CARD_CACHE_MAX_SIZE) {
+      const oldestKey = this.cardCache.keys().next().value;
+      if (!oldestKey) break;
+      this.cardCache.delete(oldestKey);
+    }
+  }
+
+  private async renderCardWithCache(payload: DailyCardPayload): Promise<Buffer> {
+    const now = Date.now();
+    const key = this.makeCardCacheKey(payload);
+    const cached = this.cardCache.get(key);
+    if (cached && cached.expireAt > now) {
+      return cached.buffer;
+    }
+
+    const buffer = await buildDailyAttendanceCard(payload);
+    this.cardCache.set(key, {
+      buffer,
+      expireAt: now + this.CARD_CACHE_TTL_MS,
+    });
+    this.pruneCardCache(now);
+    return buffer;
   }
 
   public async start() {
@@ -177,11 +215,17 @@ export class AutoDailyService {
       this.logger.info(`Starting auto-daily processing for user ${userId}`);
       const results: {
         roleName: string;
+        roleMeta: string;
         rewardName: string;
         rewardIcon: string;
         firstRewardName?: string;
         firstRewardIcon?: string;
         totalDays: number;
+        calendarTotalDays: number;
+        todayClaimedNow: boolean;
+        yesterdayReward?: { name: string; icon?: string; done?: boolean };
+        todayReward?: { name: string; icon?: string; done?: boolean };
+        nextRewards?: { name: string; icon?: string; done?: boolean }[];
         status: string;
         isError?: boolean;
       }[] = [];
@@ -206,9 +250,12 @@ export class AutoDailyService {
             );
             results.push({
               roleName: `${account.info?.nickname || "Unknown"}`,
+              roleMeta: "",
               rewardName: "",
               rewardIcon: "",
               totalDays: 0,
+              calendarTotalDays: 0,
+              todayClaimedNow: false,
               status: tr("TokenExpired"),
               isError: true,
             });
@@ -220,9 +267,12 @@ export class AutoDailyService {
           if (!roles || roles.length === 0) {
             results.push({
               roleName: `${account.info?.nickname || "Unknown"}`,
+              roleMeta: "",
               rewardName: "",
               rewardIcon: "",
               totalDays: 0,
+              calendarTotalDays: 0,
+              todayClaimedNow: false,
               status: tr("Error") || "No roles found",
               isError: true,
             });
@@ -272,10 +322,16 @@ export class AutoDailyService {
 
                   results.push({
                     roleName: `${res.nickname} (Lv.${res.level})`,
+                    roleMeta: `Lv.${res.level} - ${role.serverName || "-"}`,
                     rewardName: displayedReward,
                     rewardIcon: res.rewardIcon,
                     firstRewardName: res.firstRewardName,
                     totalDays: res.totalDays,
+                    calendarTotalDays: res.calendarTotalDays || 0,
+                    todayClaimedNow: !!res.signedNow,
+                    yesterdayReward: res.yesterdayReward,
+                    todayReward: res.todayReward,
+                    nextRewards: res.nextRewards,
                     status: res.signedNow
                       ? tr("daily_Success")
                       : tr("daily_StatusAlready"),
@@ -293,9 +349,12 @@ export class AutoDailyService {
                 );
                 results.push({
                   roleName: `${role.nickname || "Unknown"}`,
+                  roleMeta: "",
                   rewardName: "",
                   rewardIcon: "",
                   totalDays: 0,
+                  calendarTotalDays: 0,
+                  todayClaimedNow: false,
                   status: tr("Error"),
                   isError: true,
                 });
@@ -309,9 +368,12 @@ export class AutoDailyService {
           );
           results.push({
             roleName: `${account.info?.nickname || "Unknown"}`,
+            roleMeta: "",
             rewardName: "",
             rewardIcon: "",
             totalDays: 0,
+            calendarTotalDays: 0,
+            todayClaimedNow: false,
             status: tr("Error"),
             isError: true,
           });
@@ -328,84 +390,57 @@ export class AutoDailyService {
       await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
       if (config.notify && results.length > 0) {
-        const container = new ContainerBuilder();
-        for (const res of results) {
-          const statusPrefix = res.isError ? "❌" : "✅";
-          let content = `# **${statusPrefix} ${res.roleName}** - ${res.status}`;
+        const files: AttachmentBuilder[] = [];
+        const lines: string[] = [];
 
-          if (!res.isError) {
-            content += `\n### ${tr("daily_TodayReward")}: \`${res.rewardName}\``;
+        for (const [idx, res] of results.entries()) {
+          if (!res.isError && files.length < 10) {
+            const payload: DailyCardPayload = {
+              roleName: res.roleName,
+              roleMeta: res.roleMeta || "",
+              totalDays: Number(res.totalDays || 0),
+              calendarTotalDays: Number(res.calendarTotalDays || 0),
+              todayClaimedNow: !!res.todayClaimedNow,
+              yesterdayReward: {
+                name: res.yesterdayReward?.name || tr("None") || "None",
+                icon: res.yesterdayReward?.icon || "",
+                done: !!res.yesterdayReward?.done,
+              },
+              todayReward: {
+                name:
+                  res.todayReward?.name || res.rewardName || tr("None") || "None",
+                icon: res.todayReward?.icon || res.rewardIcon || "",
+                done: !!res.todayReward?.done,
+              },
+              nextRewards: Array.isArray(res.nextRewards) ? res.nextRewards : [],
+              tr,
+            };
 
-            if (res.firstRewardName) {
-              content += `\n### ${tr("daily_FirstReward")}: \`${res.firstRewardName}\``;
-            }
-
-            content += `\n### ${tr("daily_TotalDays")}: \`${res.totalDays}\` ${tr("Day")}`;
-          }
-
-          const textDisplay = new TextDisplayBuilder().setContent(content);
-
-          if (res.rewardIcon) {
-            const section = new SectionBuilder()
-              .addTextDisplayComponents(textDisplay)
-              .setThumbnailAccessory(
-                new ThumbnailBuilder({ media: { url: res.rewardIcon } }),
-              );
-            container.addSectionComponents(section);
-          } else {
-            container.addTextDisplayComponents(textDisplay);
+            const cardBuffer = await this.renderCardWithCache(payload);
+            files.push(
+              new AttachmentBuilder(cardBuffer, {
+                name: `auto-daily-${userId}-${idx}.png`,
+              }),
+            );
+          } else if (res.isError) {
+            lines.push(`- ${res.roleName}: ${res.status}`);
           }
         }
 
+        if (results.length > files.length) {
+          lines.push("- 部分結果未附上圖片（錯誤或達附件上限）。");
+        }
+
         const payload = {
-          content: "",
-          flags: MessageFlags.IsComponentsV2,
-          components: [container],
+          content: lines.join("\n"),
+          files,
         };
 
         const notifyMethod = config.notify_method;
         const channelId = config.channelId;
 
         try {
-          await this.client.cluster.broadcastEval(
-            async (c: any, context: any) => {
-              try {
-                if (context.notifyMethod === "dm") {
-                  let user = c.users.cache.get(context.userId);
-                  if (!user) {
-                    try {
-                      user = await c.users.fetch(context.userId);
-                    } catch (e) {
-                      return false;
-                    }
-                  }
-                  if (user) {
-                    const dmChannel = await user.createDM();
-                    await dmChannel.send(context.payload);
-                    return true;
-                  }
-                } else if (
-                  context.notifyMethod === "channel" &&
-                  context.channelId
-                ) {
-                  const channel = c.channels.cache.get(context.channelId);
-                  if (channel) {
-                    await channel.send(context.payload);
-                    return true;
-                  }
-                }
-              } catch (e) {}
-              return false;
-            },
-            {
-              context: {
-                userId,
-                payload,
-                notifyMethod,
-                channelId,
-              },
-            },
-          );
+          await this.sendNotification(userId, config, payload);
         } catch (e) {
           this.logger.error(
             "Failed to broadcast notification: " +
@@ -456,45 +491,46 @@ export class AutoDailyService {
     const channelId = config.channelId;
 
     try {
-      await this.client.cluster.broadcastEval(
-        async (c: any, context: any) => {
-          try {
-            if (context.notifyMethod === "dm") {
-              let user = c.users.cache.get(context.userId);
-              if (!user) {
-                try {
-                  user = await c.users.fetch(context.userId);
-                } catch (e) {
-                  return false;
-                }
-              }
-              if (user) {
-                const dmChannel = await user.createDM();
-                await dmChannel.send(context.payload);
-                return true;
-              }
-            } else if (
-              context.notifyMethod === "channel" &&
-              context.channelId
-            ) {
-              const channel = c.channels.cache.get(context.channelId);
-              if (channel) {
-                await channel.send(context.payload);
-                return true;
-              }
-            }
-          } catch (e) {}
-          return false;
-        },
-        {
-          context: {
-            userId,
-            payload,
-            notifyMethod,
-            channelId,
+      if (notifyMethod === "dm") {
+        let user = this.client.users.cache.get(userId);
+        if (!user) {
+          user = await this.client.users.fetch(userId);
+        }
+        const dmChannel = await user.createDM();
+        await dmChannel.send(payload);
+        return;
+      }
+
+      if (notifyMethod === "channel" && channelId) {
+        const channelPresence = await this.client.cluster.broadcastEval(
+          (c: any, context: any) => c.channels.cache.has(context.channelId),
+          { context: { channelId } },
+        );
+
+        const targetCluster = channelPresence.findIndex(Boolean);
+        if (targetCluster < 0) {
+          this.logger.warn(
+            `No cluster has channel ${channelId} in cache. Skip notification for user ${userId}.`,
+          );
+          return;
+        }
+
+        await this.client.cluster.broadcastEval(
+          async (c: any, context: any) => {
+            const channel = c.channels.cache.get(context.channelId);
+            if (!channel) return false;
+            await channel.send(context.payload);
+            return true;
           },
-        },
-      );
+          {
+            cluster: targetCluster,
+            context: {
+              channelId,
+              payload,
+            },
+          },
+        );
+      }
     } catch (e) {
       this.logger.error(
         "Failed to broadcast notification: " +

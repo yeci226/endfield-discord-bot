@@ -372,6 +372,15 @@ const langs: Record<string, any> = {
   gacha_log_fingerprint_switch_predicted: "改為匯入建議帳號（<uid>）",
   gacha_log_fingerprint_expired:
     "這次匯入確認已逾時，請重新執行 `/gacha log load`。",
+
+  // Daily Canvas Labels
+  daily_canvas_TotalCheckIn: "累計簽到",
+  daily_canvas_CheckinRewards: "簽到獎勵",
+  daily_canvas_Claimed: "已領取",
+  daily_canvas_NotClaimed: "未領取",
+  daily_canvas_CanClaim: "可領取",
+  daily_canvas_AvailableTomorrow: "明日可領取",
+  daily_canvas_NotYetAvailable: "尚未開放",
 };
 
 export default langs;

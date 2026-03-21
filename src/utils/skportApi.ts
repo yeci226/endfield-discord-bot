@@ -685,8 +685,10 @@ export async function makeRequest<T>(
           logger.warn(`[401 Unauthorized] URL: ${url}`);
           return { code: 10000, status: 401, ...(resp?.data || {}) };
         } else if (resp?.status === 403) {
+          const role = headers?.["sk-game-role"] || "-";
+          const msg = resp?.data?.message || "Identity blocked or WAF triggered.";
           logger.error(
-            `[403 Forbidden] URL: ${url} - Identity blocked or WAF triggered.`,
+            `[403 Forbidden] ${method} ${url} role=${role} - ${msg}`,
           );
           return {
             code: -1,
@@ -1020,22 +1022,35 @@ export async function executeAttendance(
   options: any = {},
 ): Promise<{ code: number; message: string; data?: AttendanceResponse }> {
   const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
+  const body = { role: gameRole };
   const headers: any = {
     "sk-game-role": gameRole,
+    Accept: "*/*",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    Connection: "keep-alive",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    Origin: "https://game.skport.com",
+    Referer: "https://game.skport.com/",
+    vname: "1.0.0",
   };
   if (cookie) headers.Cookie = cookie;
 
   const res = await makeRequest<{
     code: number;
     message: string;
+    status?: number;
     data?: AttendanceResponse;
   }>("POST", url, {
     locale,
     cred,
     salt,
     headers,
+    data: body,
     ...options,
   });
+
   return res || { code: -1, message: "Request failed" };
 }
 

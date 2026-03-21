@@ -91,6 +91,9 @@ export async function processRoleAttendance(
 
     // Extract reward info
     const totalDays = status.calendar.filter((d) => d.done).length;
+    const calendarTotalDays = Array.isArray(status.calendar)
+      ? status.calendar.length
+      : 0;
 
     let rewards: string[] = [];
     let rewardIcon = "";
@@ -124,6 +127,62 @@ export async function processRoleAttendance(
     const rewardName =
       rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
 
+    const currentRewardEntry =
+      status.calendar.find((r) => r.available) ||
+      [...status.calendar].find((r) => !r.done) ||
+      [...status.calendar].reverse().find((r) => r.done);
+
+    const currentIndex = currentRewardEntry
+      ? status.calendar.findIndex((r) => r.awardId === currentRewardEntry.awardId)
+      : -1;
+
+    const yesterdayRewardEntry =
+      currentIndex > 0
+        ? status.calendar[currentIndex - 1]
+        : [...status.calendar].reverse().find((r) => r.done);
+
+    const currentResource = currentRewardEntry
+      ? status.resourceInfoMap?.[currentRewardEntry.awardId]
+      : null;
+
+    const todayReward = {
+      name: currentResource
+        ? `${currentResource.name} x${currentResource.count}`
+        : rewardName,
+      icon: currentResource?.icon || rewardIcon,
+      done: !!(status.hasToday || signedNow),
+    };
+
+    const yesterdayResource = yesterdayRewardEntry
+      ? status.resourceInfoMap?.[yesterdayRewardEntry.awardId]
+      : null;
+
+    const yesterdayReward = {
+      name: yesterdayResource
+        ? `${yesterdayResource.name} x${yesterdayResource.count}`
+        : tr("None") || "None",
+      icon: yesterdayResource?.icon || "",
+      done: !!yesterdayRewardEntry?.done,
+    };
+
+    const pendingRewards = status.calendar.filter((d) => !d.done);
+    const nextRewards = pendingRewards
+      .slice(1, 4)
+      .map((dayReward) => {
+        const reward = status.resourceInfoMap?.[dayReward.awardId];
+        if (!reward) {
+          return {
+            name: tr("None") || "None",
+            icon: "",
+          };
+        }
+
+        return {
+          name: `${reward.name} x${reward.count}`,
+          icon: reward.icon,
+        };
+      });
+
     let firstRewardName = "";
     if (status.first && status.first.length > 0) {
       // Find a newcomer reward that is either currently available or was just claimed
@@ -149,8 +208,12 @@ export async function processRoleAttendance(
       hasToday: status.hasToday || signedNow,
       signedNow: signedNow,
       totalDays: totalDays,
+      calendarTotalDays,
       rewardName: rewardName,
       rewardIcon: rewardIcon,
+      yesterdayReward,
+      todayReward,
+      nextRewards,
       firstRewardName: firstRewardName,
       error: !status.hasToday && !signedNow && isClaim,
       message: claimResult?.message,
