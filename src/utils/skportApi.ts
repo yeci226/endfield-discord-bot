@@ -686,7 +686,8 @@ export async function makeRequest<T>(
           return { code: 10000, status: 401, ...(resp?.data || {}) };
         } else if (resp?.status === 403) {
           const role = headers?.["sk-game-role"] || "-";
-          const msg = resp?.data?.message || "Identity blocked or WAF triggered.";
+          const msg =
+            resp?.data?.message || "Identity blocked or WAF triggered.";
           logger.error(
             `[403 Forbidden] ${method} ${url} role=${role} - ${msg}`,
           );

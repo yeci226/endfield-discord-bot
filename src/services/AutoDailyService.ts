@@ -100,7 +100,9 @@ export class AutoDailyService {
     }
   }
 
-  private async renderCardWithCache(payload: DailyCardPayload): Promise<Buffer> {
+  private async renderCardWithCache(
+    payload: DailyCardPayload,
+  ): Promise<Buffer> {
     const now = Date.now();
     const key = this.makeCardCacheKey(payload);
     const cached = this.cardCache.get(key);
@@ -408,11 +410,16 @@ export class AutoDailyService {
               },
               todayReward: {
                 name:
-                  res.todayReward?.name || res.rewardName || tr("None") || "None",
+                  res.todayReward?.name ||
+                  res.rewardName ||
+                  tr("None") ||
+                  "None",
                 icon: res.todayReward?.icon || res.rewardIcon || "",
                 done: !!res.todayReward?.done,
               },
-              nextRewards: Array.isArray(res.nextRewards) ? res.nextRewards : [],
+              nextRewards: Array.isArray(res.nextRewards)
+                ? res.nextRewards
+                : [],
               tr,
             };
 
@@ -515,18 +522,41 @@ export class AutoDailyService {
           return;
         }
 
+        // Serialize files to base64 to pass through broadcastEval
+        const serializedFiles = payload.files
+          ? payload.files.map((file: AttachmentBuilder) => ({
+              buffer: (file as any).data?.toString('base64') || '',
+              name: file.name,
+            }))
+          : [];
+
+        const serializedPayload = {
+          content: payload.content,
+          files: serializedFiles,
+        };
+
         await this.client.cluster.broadcastEval(
           async (c: any, context: any) => {
             const channel = c.channels.cache.get(context.channelId);
             if (!channel) return false;
-            await channel.send(context.payload);
+            
+            // Reconstruct AttachmentBuilder objects from serialized data
+            const { AttachmentBuilder } = await import('discord.js');
+            const reconstructedFiles = context.payload.files.map((file: any) => 
+              new AttachmentBuilder(Buffer.from(file.buffer, 'base64'), { name: file.name })
+            );
+            
+            await channel.send({
+              content: context.payload.content,
+              files: reconstructedFiles,
+            });
             return true;
           },
           {
             cluster: targetCluster,
             context: {
               channelId,
-              payload,
+              payload: serializedPayload,
             },
           },
         );

@@ -165,7 +165,11 @@ export async function buildDailyAttendanceCard(
 
   ctx.fillStyle = "#b8ffdd";
   ctx.font = "25px NotoSans";
-  ctx.fillText(payload.tr("daily_canvas_TotalCheckIn"), badgeX + 24, badgeY + 33);
+  ctx.fillText(
+    payload.tr("daily_canvas_TotalCheckIn"),
+    badgeX + 24,
+    badgeY + 33,
+  );
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 36px NotoSansBold";
   const totalLabel =
@@ -193,7 +197,11 @@ export async function buildDailyAttendanceCard(
 
   ctx.fillStyle = "#d7e5f2";
   ctx.font = "bold 30px NotoSansBold";
-  ctx.fillText(payload.tr("daily_canvas_CheckinRewards"), leftStartX, timelineY - 170);
+  ctx.fillText(
+    payload.tr("daily_canvas_CheckinRewards"),
+    leftStartX,
+    timelineY - 170,
+  );
 
   for (let i = 0; i < items.length; i++) {
     const x = leftStartX + i * (cardW + cardGap);
@@ -250,22 +258,38 @@ export async function buildDailyAttendanceCard(
     if (isPast) {
       ctx.font = "20px NotoSans";
       ctx.fillStyle = item.done ? "#a9cce1" : "#9aa1ad";
-      ctx.fillText(item.done ? payload.tr("daily_canvas_Claimed") : payload.tr("daily_canvas_NotClaimed"), x + 16, subLabelY);
+      ctx.fillText(
+        item.done
+          ? payload.tr("daily_canvas_Claimed")
+          : payload.tr("daily_canvas_NotClaimed"),
+        x + 16,
+        subLabelY,
+      );
     }
 
     if (isToday) {
       const todayIsClaimed = !!(payload.todayClaimedNow || item.done);
       ctx.font = "20px NotoSans";
-      ctx.fillStyle = todayIsClaimed
-        ? "#a9cce1"
-        : "rgba(220, 255, 236, 0.82)";
-      ctx.fillText(todayIsClaimed ? payload.tr("daily_canvas_Claimed") : payload.tr("daily_canvas_CanClaim"), x + 16, subLabelY);
+      ctx.fillStyle = todayIsClaimed ? "#a9cce1" : "rgba(220, 255, 236, 0.82)";
+      ctx.fillText(
+        todayIsClaimed
+          ? payload.tr("daily_canvas_Claimed")
+          : payload.tr("daily_canvas_CanClaim"),
+        x + 16,
+        subLabelY,
+      );
     }
 
     if (isFuture) {
       ctx.font = "20px NotoSans";
       ctx.fillStyle = "#8f98a5";
-      ctx.fillText(i === 2 ? payload.tr("daily_canvas_AvailableTomorrow") : payload.tr("daily_canvas_NotYetAvailable"), x + 16, subLabelY);
+      ctx.fillText(
+        i === 2
+          ? payload.tr("daily_canvas_AvailableTomorrow")
+          : payload.tr("daily_canvas_NotYetAvailable"),
+        x + 16,
+        subLabelY,
+      );
     }
 
     if (i < items.length - 1) {

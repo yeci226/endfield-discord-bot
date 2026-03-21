@@ -133,7 +133,9 @@ export async function processRoleAttendance(
       [...status.calendar].reverse().find((r) => r.done);
 
     const currentIndex = currentRewardEntry
-      ? status.calendar.findIndex((r) => r.awardId === currentRewardEntry.awardId)
+      ? status.calendar.findIndex(
+          (r) => r.awardId === currentRewardEntry.awardId,
+        )
       : -1;
 
     const yesterdayRewardEntry =
@@ -166,22 +168,20 @@ export async function processRoleAttendance(
     };
 
     const pendingRewards = status.calendar.filter((d) => !d.done);
-    const nextRewards = pendingRewards
-      .slice(1, 4)
-      .map((dayReward) => {
-        const reward = status.resourceInfoMap?.[dayReward.awardId];
-        if (!reward) {
-          return {
-            name: tr("None") || "None",
-            icon: "",
-          };
-        }
-
+    const nextRewards = pendingRewards.slice(1, 4).map((dayReward) => {
+      const reward = status.resourceInfoMap?.[dayReward.awardId];
+      if (!reward) {
         return {
-          name: `${reward.name} x${reward.count}`,
-          icon: reward.icon,
+          name: tr("None") || "None",
+          icon: "",
         };
-      });
+      }
+
+      return {
+        name: `${reward.name} x${reward.count}`,
+        icon: reward.icon,
+      };
+    });
 
     let firstRewardName = "";
     if (status.first && status.first.length > 0) {
