@@ -219,10 +219,10 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "Asia: Will end at <asiaEndTs> (<asiaEndTsRelative>)",
   gacha_log_how_Title: "❓ **How to get Gacha Log**",
   gacha_log_how_Steps:
-    "1. Open the Gacha Record page in the game.\n2. Open PowerShell on your computer.\n3. Copy and paste the following command and execute it:\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/yeci226/endfield-discord-bot/refs/heads/main/getGacha.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. After execution, the Gacha Record URL will be copied to your clipboard automatically.\n5. Use `/gacha log load` and paste the URL to import your records.",
+    '1. Log in to your account at <https://game.skport.com/endfield/sign-in>\n2. Show the bookmarks bar (press **Ctrl+Shift+B**).\n3. Click **Add page**, give it any name, then paste the following code into the URL field:\n```\njavascript:(async()=>{try{let e=null;for(let[t,n]of Object.entries(sessionStorage))if(t.startsWith("APP_ROLE_U8_TOKEN:")){e=n.toString().split(":")[0];break}if(!e)throw new Error("Token not found. Please log in and refresh the page.");await navigator.clipboard.writeText(e),alert("Success! Token copied to clipboard.")}catch(e){alert("Error: "+e.message)}})();\n```\n4. While on the website, click that bookmark — the token will be copied to your clipboard.\n5. Use `/gacha log load` and paste the token to import your records.',
   gacha_log_load_Loading: "🔄 **Fetching gacha records...**",
   gacha_log_load_ModalTitle: "Import Gacha Records",
-  gacha_log_load_UrlLabel: "Please paste the Gacha Record URL",
+  gacha_log_load_UrlLabel: "Please paste your Token (or gacha log URL)",
   gacha_log_load_Success:
     "✅ **Import Successful**\nGacha records for account **<uid>** have been updated.\nAdded **<charCount>** character records and **<weaponCount>** weapon records.\n*Note: Gacha records are permanently saved in the bot and will not be affected even if they expire (90 days) in-game.*",
   gacha_log_stats_Title: "<uid>'s Gacha Statistics",
@@ -282,7 +282,7 @@ const langs: Record<string, any> = {
   gacha_log_load_SelectAccount:
     "Select which account to import the records into:",
   gacha_log_token_expired_message:
-    'The gacha record token has expired\n\n**"Invalid token" error**\nIf you see the "Invalid token" error, your token has expired. Please follow these steps to get a new token:\n\n1. Fully close the game\n2. Search for `%localappdata%` in Windows and open the shown folder\n3. Go back one level, then open `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. Delete the file `HGWebview.log`\n5. Open the game and go directly to **Headhunt > History** to regenerate the file\n6. Run the PowerShell script again to get a new token',
+    "If you see the this error, your token has expired. Please follow these steps to get a new token:\n\n1. Go to https://game.skport.com/endfield/sign-in and log in again\n2. Refresh the page\n3. Click the bookmark you saved earlier to copy a new token\n4. Use `/gacha log load` and paste the new token",
   gacha_sim_only_initiator:
     "⚠️ Only the user who started the command can continue pulling.",
   gacha_sim_pool_missing_ended:

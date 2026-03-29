@@ -109,69 +109,144 @@ async function fetchRawGachaFromUrl(
   onProgress?: (message: string) => void,
   locale?: string,
 ): Promise<RawFetchedGacha> {
-  const url = new URL(urlStr);
-  const token =
-    url.searchParams.get("token") || url.searchParams.get("u8_token");
-  const lang = locale
-    ? mapLocaleToLang(locale)
-    : url.searchParams.get("lang") || "en-us";
-  const serverId =
-    url.searchParams.get("server_id") || url.searchParams.get("server");
-  const apiDomain = `${url.protocol}//${url.host}`;
+  const isRawToken = !urlStr.trimStart().startsWith("http");
 
-  if (!token || !serverId) {
-    throw new Error("Invalid URL: Missing token or server_id");
-  }
+  let token: string;
+  let lang: string;
+  let serverId: string;
+  let apiDomain: string;
+  let host: string;
+  let inferredUid: string;
 
-  const host = url.host;
-  let inferredUid = `EF_${serverId}`;
-  if (host.includes("hypergryph")) {
-    inferredUid = `EF_CN_${serverId}`;
+  if (isRawToken) {
+    // New bookmarklet method: raw token pasted directly
+    // Token may be full "part1:part2" format — only the first part is needed
+    // decodeURIComponent handles browsers that store URL-encoded tokens in sessionStorage
+    const rawPart = urlStr.split(":")[0].trim();
+    try {
+      token = decodeURIComponent(rawPart);
+    } catch {
+      token = rawPart;
+    }
+    lang = locale ? mapLocaleToLang(locale) : "en-us";
+    apiDomain = "https://ef-webview.gryphline.com";
+    host = "ef-webview.gryphline.com";
+
+    // Auto-detect server ID by trying all candidates
+    // Note: 40100 per server may mean "no account on this server", not a globally invalid token
+    if (onProgress) onProgress("Detecting server region...");
+    const serverCandidates = ["3", "2", "1"];
+    let detectedServer: string | null = null;
+    for (const candidate of serverCandidates) {
+      try {
+        const probeRes = await axios.get(`${apiDomain}/api/record/char`, {
+          params: {
+            token,
+            lang,
+            server_id: candidate,
+            pool_type: POOL_TYPES[0],
+          },
+        });
+        if (probeRes.data.code === 0) {
+          detectedServer = candidate;
+          break;
+        }
+        // Any non-zero code (including 40100) just means this server didn't work —
+        // continue trying the next candidate
+      } catch {
+        // Network error — try next candidate
+      }
+    }
+
+    if (!detectedServer) {
+      throw new GachaApiError(
+        "Unable to import records. Token may be invalid or expired.",
+        40100,
+      );
+    }
+
+    serverId = detectedServer;
+    inferredUid = `EF_${serverId}`;
+  } else {
+    // Legacy URL method (backward compatible)
+    const url = new URL(urlStr);
+    const rawToken =
+      url.searchParams.get("token") || url.searchParams.get("u8_token");
+    const rawServerId =
+      url.searchParams.get("server_id") || url.searchParams.get("server");
+
+    if (!rawToken || !rawServerId) {
+      throw new Error("Invalid URL: Missing token or server_id");
+    }
+
+    token = rawToken;
+    serverId = rawServerId;
+    lang = locale
+      ? mapLocaleToLang(locale)
+      : url.searchParams.get("lang") || "en-us";
+    apiDomain = `${url.protocol}//${url.host}`;
+    host = url.host;
+    inferredUid = `EF_${serverId}`;
+    if (host.includes("hypergryph")) {
+      inferredUid = `EF_CN_${serverId}`;
+    }
   }
 
   const characterList: GachaRecord[] = [];
   const weaponList: GachaRecord[] = [];
 
-  for (const poolType of POOL_TYPES) {
-    let hasMore = true;
-    let lastSeqId: string | undefined = undefined;
-    let page = 1;
+  // Fetch all character pool types in parallel
+  const charResults = await Promise.all(
+    POOL_TYPES.map(async (poolType) => {
+      const records: GachaRecord[] = [];
+      let hasMore = true;
+      let lastSeqId: string | undefined = undefined;
+      let page = 1;
 
-    while (hasMore) {
-      if (onProgress)
-        onProgress(`Fetching character records (${poolType}, page ${page})...`);
+      while (hasMore) {
+        if (onProgress)
+          onProgress(
+            `Fetching character records (${poolType}, page ${page})...`,
+          );
 
-      const res = await axios.get(`${apiDomain}/api/record/char`, {
-        params: {
-          token,
-          lang,
-          server_id: serverId,
-          pool_type: poolType,
-          seq_id: lastSeqId,
-        },
-      });
+        const res = await axios.get(`${apiDomain}/api/record/char`, {
+          params: {
+            token,
+            lang,
+            server_id: serverId,
+            pool_type: poolType,
+            seq_id: lastSeqId,
+          },
+        });
 
-      const data = res.data;
-      if (data.code !== 0) {
-        throw new GachaApiError(
-          data.msg || data.message || "API Error",
-          data.code,
-        );
-      }
-
-      const list = data.data.list as GachaRecord[];
-      if (list && list.length > 0) {
-        for (const item of list) {
-          item.poolType = poolType;
-          item.isFree = isPullFree(item);
-          characterList.push(item);
+        const data = res.data;
+        if (data.code !== 0) {
+          throw new GachaApiError(
+            data.msg || data.message || "API Error",
+            data.code,
+          );
         }
-        lastSeqId = list[list.length - 1].seqId;
+
+        const list = data.data.list as GachaRecord[];
+        if (list && list.length > 0) {
+          for (const item of list) {
+            item.poolType = poolType;
+            item.isFree = isPullFree(item);
+            records.push(item);
+          }
+          lastSeqId = list[list.length - 1].seqId;
+        }
+        hasMore = data.data.hasMore;
+        page++;
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      hasMore = data.data.hasMore;
-      page++;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+
+      return records;
+    }),
+  );
+
+  for (const records of charResults) {
+    characterList.push(...records);
   }
 
   if (onProgress) onProgress("Fetching weapon pools...");
@@ -181,43 +256,56 @@ async function fetchRawGachaFromUrl(
 
   if (wpRes.data.code === 0) {
     const weaponPools = wpRes.data.data;
-    for (const pool of weaponPools) {
-      const poolId = pool.poolId;
-      const poolName = pool.poolName;
-      let hasMore = true;
-      let lastSeqId: string | undefined = undefined;
-      let page = 1;
 
-      while (hasMore) {
-        if (onProgress)
-          onProgress(`Fetching weapon records (${poolName}, page ${page})...`);
+    // Fetch all weapon pools in parallel
+    const weaponResults = await Promise.all(
+      weaponPools.map(async (pool: any) => {
+        const records: GachaRecord[] = [];
+        const poolId = pool.poolId;
+        const poolName = pool.poolName;
+        let hasMore = true;
+        let lastSeqId: string | undefined = undefined;
+        let page = 1;
 
-        const res = await axios.get(`${apiDomain}/api/record/weapon`, {
-          params: {
-            token,
-            lang,
-            server_id: serverId,
-            pool_id: poolId,
-            seq_id: lastSeqId,
-          },
-        });
+        while (hasMore) {
+          if (onProgress)
+            onProgress(
+              `Fetching weapon records (${poolName}, page ${page})...`,
+            );
 
-        const data = res.data;
-        if (data.code !== 0) break;
+          const res = await axios.get(`${apiDomain}/api/record/weapon`, {
+            params: {
+              token,
+              lang,
+              server_id: serverId,
+              pool_id: poolId,
+              seq_id: lastSeqId,
+            },
+          });
 
-        const list = data.data.list as GachaRecord[];
-        if (list && list.length > 0) {
-          for (const item of list) {
-            item.poolType = "WeaponPool";
-            item.isFree = isPullFree(item);
-            weaponList.push(item);
+          const data = res.data;
+          if (data.code !== 0) break;
+
+          const list = data.data.list as GachaRecord[];
+          if (list && list.length > 0) {
+            for (const item of list) {
+              item.poolType = "WeaponPool";
+              item.isFree = isPullFree(item);
+              records.push(item);
+            }
+            lastSeqId = list[list.length - 1].seqId;
           }
-          lastSeqId = list[list.length - 1].seqId;
+          hasMore = data.data.hasMore;
+          page++;
+          await new Promise((resolve) => setTimeout(resolve, 50));
         }
-        hasMore = data.data.hasMore;
-        page++;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
+
+        return records;
+      }),
+    );
+
+    for (const records of weaponResults) {
+      weaponList.push(...records);
     }
   }
 

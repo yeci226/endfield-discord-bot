@@ -217,10 +217,10 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "亞洲：將在 <asiaEndTs> (<asiaEndTsRelative>) 結束",
   gacha_log_how_Title: "❓ **如何獲取抽卡紀錄**",
   gacha_log_how_Steps:
-    "1. 打開遊戲中的抽卡紀錄頁面。\n2. 在電腦上打開 PowerShell。\n3. 複製並貼上以下指令並執行：\n```powershell\nSet-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; $scriptUrl='https://raw.githubusercontent.com/yeci226/endfield-discord-bot/refs/heads/main/getGacha.ps1'; $scriptText=(Invoke-WebRequest -UseBasicParsing -Uri $scriptUrl).Content; Invoke-Expression $scriptText\n```\n4. 執行後，抽卡紀錄網址會自動複製到剪貼簿。\n5. 使用 `/gacha log load` 並貼上網址以匯入資料。",
+    '1. 前往 <https://game.skport.com/endfield/sign-in> 登入您的帳號。\n2. 顯示書籤列（按 **Ctrl+Shift+B**）。\n3. 點擊**新增頁面**，輸入任意名稱，然後將以下程式碼貼入網址欄：\n```\njavascript:(async()=>{try{let e=null;for(let[t,n]of Object.entries(sessionStorage))if(t.startsWith("APP_ROLE_U8_TOKEN:")){e=n.toString().split(":")[0];break}if(!e)throw new Error("Token not found. Please log in and refresh the page.");await navigator.clipboard.writeText(e),alert("Success! Token copied to clipboard.")}catch(e){alert("Error: "+e.message)}})();\n```\n4. 在網站上點擊該書籤 — 令牌將自動複製到剪貼簿。\n5. 使用 `/gacha log load` 並貼上令牌以匯入資料。',
   gacha_log_load_Loading: "🔄 **正在獲取抽卡紀錄...**",
   gacha_log_load_ModalTitle: "匯入抽卡紀錄",
-  gacha_log_load_UrlLabel: "請貼上抽卡紀錄網址 (URL)",
+  gacha_log_load_UrlLabel: "請貼上令牌 (Token)（或抽卡紀錄網址）",
   gacha_log_load_Success:
     "✅ **匯入成功**\n帳號 **<uid>** 的抽卡紀錄已更新。\n新增了 **<charCount>** 筆角色紀錄與 **<weaponCount>** 筆武器紀錄。\n*備註：抽卡紀錄會永久保存在機器人中，即使遊戲內過期（90天）也不受影響。*",
   gacha_log_stats_Title: "<uid> 的抽卡數據統計",
@@ -276,7 +276,7 @@ const langs: Record<string, any> = {
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount: "請選擇要將紀錄匯入至哪個帳號：",
   gacha_log_token_expired_message:
-    "獲取抽卡紀錄令牌已過期\n\n**「令牌無效」錯誤**\n如果您看到「令牌無效」錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 完全關閉遊戲\n2. 在Windows中搜尋 `%localappdata%` 並打開顯示的資料夾\n3. 返回上一級資料夾，然後進入 `LocalLow\\Gryphline\\Endfield\\sdklogs`\n4. 刪除檔案 `HGWebview.log`\n5. 打開遊戲，直接進入**尋訪 > 歷史記錄**以重新生成檔案\n6. 再次執行PowerShell腳本獲取新令牌",
+    "如果您看到該錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 前往 https://game.skport.com/endfield/sign-in 重新登入\n2. 重新整理頁面\n3. 點擊您先前儲存的書籤以複製新令牌\n4. 使用 `/gacha log load` 並貼上新令牌",
   gacha_sim_only_initiator: "⚠️ 只有指令發起者可以繼續抽卡。",
   gacha_sim_pool_missing_ended: "⚠️ 找不到卡池資料，可能已結束。",
   gacha_sim_pool_missing_retry: "⚠️ 找不到卡池資料，請稍後再試。",

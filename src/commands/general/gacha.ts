@@ -237,19 +237,19 @@ const command: Command = {
             .setNameLocalizations({
               "zh-TW": "載入",
             })
-            .setDescription("Load gacha log from URL")
+            .setDescription("Load gacha log from token or URL")
             .setDescriptionLocalizations({
-              "zh-TW": "從網址載入抽卡紀錄",
+              "zh-TW": "從令牌或網址載入抽卡紀錄",
             })
             .addStringOption((option) =>
               option
                 .setName("url")
                 .setNameLocalizations({
-                  "zh-TW": "網址",
+                  "zh-TW": "令牌",
                 })
-                .setDescription("Paste gacha log URL")
+                .setDescription("Paste your token or gacha log URL")
                 .setDescriptionLocalizations({
-                  "zh-TW": "貼上抽卡紀錄網址",
+                  "zh-TW": "貼上令牌或抽卡紀錄網址",
                 })
                 .setRequired(true),
             )
@@ -960,7 +960,8 @@ const command: Command = {
         }
       }
 
-      let latestProgress = tr("gacha_log_load_Loading");
+      const poolProgressMap = new Map<string, string>();
+      let miscProgress = "";
       let lastRenderedProgress = "";
       let progressTimer: NodeJS.Timeout | null = null;
       const isZhLocale = String(tr.lang || interaction.locale || "")
@@ -978,17 +979,19 @@ const command: Command = {
         return t;
       };
 
-      const formatProgress = (raw: string): string => {
+      const onProgressUpdate = (raw: string) => {
         const charMatch = raw.match(
           /^Fetching character records \((.+), page (\d+)\)\.\.\.$/i,
         );
         if (charMatch) {
           const poolName = mapCharPoolTypeName(charMatch[1]);
           const pageNo = charMatch[2];
-          return tr("gacha_log_load_progress_char", {
-            poolName,
-            pageNo,
-          });
+          poolProgressMap.set(
+            charMatch[1],
+            tr("gacha_log_load_progress_char", { poolName, pageNo }),
+          );
+          miscProgress = "";
+          return;
         }
 
         const weaponMatch = raw.match(
@@ -997,21 +1000,29 @@ const command: Command = {
         if (weaponMatch) {
           const poolName = weaponMatch[1];
           const pageNo = weaponMatch[2];
-          return tr("gacha_log_load_progress_weapon", {
-            poolName,
-            pageNo,
-          });
+          poolProgressMap.set(
+            `weapon_${poolName}`,
+            tr("gacha_log_load_progress_weapon", { poolName, pageNo }),
+          );
+          miscProgress = "";
+          return;
         }
 
         if (/^Fetching weapon pools/i.test(raw)) {
-          return tr("gacha_log_load_progress_weapon_list");
+          miscProgress = tr("gacha_log_load_progress_weapon_list");
+          return;
         }
 
-        return raw;
+        miscProgress = raw;
       };
 
       const renderProgress = async () => {
-        const content = latestProgress;
+        const lines = [tr("gacha_log_load_Loading")];
+        if (miscProgress) lines.push(miscProgress);
+        for (const line of poolProgressMap.values()) {
+          lines.push(line);
+        }
+        const content = lines.join("\n");
         if (content === lastRenderedProgress) return;
         lastRenderedProgress = content;
         try {
@@ -1028,9 +1039,7 @@ const command: Command = {
         const mergeResult = await fetchAndMergeGachaLog(
           db,
           url,
-          (msg) => {
-            latestProgress = formatProgress(msg);
-          },
+          onProgressUpdate,
           selectedUid,
           tr.lang,
           interaction.user.displayAvatarURL({ extension: "png", size: 128 }),
