@@ -26,6 +26,7 @@ interface AutoDailyConfig {
   notify: boolean;
   notify_method: "dm" | "channel";
   channelId?: string;
+  mention?: boolean;
 }
 
 export class AutoDailyService {
@@ -187,13 +188,17 @@ export class AutoDailyService {
         const normalizedTime = this.normalizeHour((config as any).time, 13);
         const normalizedNotifyMethod =
           (config as any).notify_method === "channel" ? "channel" : "dm";
+        const normalizedMention = (config as any).mention !== false;
+        
         const hasChanged =
           (config as any).time !== normalizedTime ||
-          (config as any).notify_method !== normalizedNotifyMethod;
+          (config as any).notify_method !== normalizedNotifyMethod ||
+          (config as any).mention !== normalizedMention;
 
         if (hasChanged) {
           (config as any).time = normalizedTime;
           (config as any).notify_method = normalizedNotifyMethod;
+          (config as any).mention = normalizedMention;
           await this.client.db.set(id, config);
         }
 
@@ -471,7 +476,9 @@ export class AutoDailyService {
         }
 
         const payload = {
-          content: lines.join("\n"),
+          content:
+            (config.mention !== false ? `<@${userId}>\n` : "") +
+            lines.join("\n"),
           files,
         };
 

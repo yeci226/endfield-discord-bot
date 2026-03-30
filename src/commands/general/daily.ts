@@ -114,6 +114,16 @@ const command: Command = {
             })
             .setAutocomplete(true)
             .setRequired(false),
+        )
+        .addBooleanOption((op) =>
+          op
+            .setName("mention")
+            .setDescription("Mention user when signing in")
+            .setNameLocalizations({ "zh-TW": "提及模式" })
+            .setDescriptionLocalizations({
+              "zh-TW": "是否在簽到完成後提及您",
+            })
+            .setRequired(false),
         ),
     ) as SlashCommandBuilder,
 
@@ -272,6 +282,7 @@ async function handleSetup(
   const notify = interaction.options.getBoolean("notify");
   const notifyMethod = interaction.options.getString("notify_method");
   const selectedChannelId = interaction.options.getString("channel");
+  const mention = interaction.options.getBoolean("mention");
 
   // Load existing or default - Using granular keys
   const userConfig = (await db.get(`autoDaily.${userId}`)) || {
@@ -279,6 +290,7 @@ async function handleSetup(
     notify: true,
     notify_method: "dm",
     channelId: interaction.channelId,
+    mention: true,
   };
 
   userConfig.time = normalizeDailyHour(userConfig.time, 13);
@@ -307,6 +319,12 @@ async function handleSetup(
   if (missionNotify !== null) userConfig.mission_notify = missionNotify;
   if (staminaThreshold !== null)
     userConfig.stamina_threshold = staminaThreshold;
+
+  if (mention !== null) {
+    userConfig.mention = mention;
+  } else if (userConfig.mention === undefined) {
+    userConfig.mention = true;
+  }
 
   if (selectedChannelId && interaction.guild) {
     const channel = interaction.guild.channels.cache.get(selectedChannelId);
@@ -356,6 +374,7 @@ async function handleSetup(
     `### ${t("daily_SetupSuccess")}\n` +
     `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
     `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
+    `**${t("daily_SetupMention")}**: \`${userConfig.mention ? t("True") : t("False")}\`\n` +
     `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\` `;
 
   if (userConfig.notify_method !== "dm") {

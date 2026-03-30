@@ -1,4 +1,3 @@
-
 import { ExtendedClient } from "./structures/Client";
 import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
@@ -57,14 +56,12 @@ dotenv.config();
           const stats = optimizations.commandUsageTracker?.getStats();
           if (stats && Object.keys(stats).length > 0) {
             // 計算聚合統計
-            const totalCommands = Object.values(stats as Record<string, any>).reduce(
-              (sum: number, cmd: any) => sum + (cmd.count || 0),
-              0
-            );
-            const totalErrors = Object.values(stats as Record<string, any>).reduce(
-              (sum: number, cmd: any) => sum + (cmd.errors || 0),
-              0
-            );
+            const totalCommands = Object.values(
+              stats as Record<string, any>,
+            ).reduce((sum: number, cmd: any) => sum + (cmd.count || 0), 0);
+            const totalErrors = Object.values(
+              stats as Record<string, any>,
+            ).reduce((sum: number, cmd: any) => sum + (cmd.errors || 0), 0);
 
             const headers: Record<string, string> = {
               "Content-Type": "application/json",
@@ -87,9 +84,10 @@ dotenv.config();
                     .map(([name, data]: [string, any]) => ({
                       name,
                       count: data.count || 0,
-                      avgTimeMs: data.count > 0
-                        ? Math.round(data.totalExecutionMs / data.count)
-                        : 0,
+                      avgTimeMs:
+                        data.count > 0
+                          ? Math.round(data.totalExecutionMs / data.count)
+                          : 0,
                       errors: data.errors || 0,
                     }))
                     .sort((a, b) => b.count - a.count)
@@ -99,10 +97,11 @@ dotenv.config();
                       name,
                       count: data.count || 0,
                       errors: data.errors || 0,
-                      avgTimeMs: data.count > 0
-                        ? Math.round(data.totalExecutionMs / data.count)
-                        : 0,
-                    })
+                      avgTimeMs:
+                        data.count > 0
+                          ? Math.round(data.totalExecutionMs / data.count)
+                          : 0,
+                    }),
                   ),
                 },
               }),
@@ -117,13 +116,13 @@ dotenv.config();
     } else if (!STATS_API) {
       logger.error("STATS_API_URL is not set, stats push is disabled");
     }
-
-    // Graceful Shutdown
     const shutdown = async () => {
       logger.info("Shutdown signal received. Cleaning up...");
       if (statsInterval) clearInterval(statsInterval);
       client.newsService.stop();
       client.autoDailyService.stop();
+      client.monitorService.stop();
+      client.wikiService.stop();
       client.stop(); // Stop memory monitoring
       await optimizations.shutdown();
       client.destroy();

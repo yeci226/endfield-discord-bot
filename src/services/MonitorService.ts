@@ -252,4 +252,12 @@ export class MonitorService {
       this.logger.error("Failed to broadcast monitor notification: " + e);
     }
   }
+
+  public stop() {
+    if (this.interval) {
+      clearTimeout(this.interval);
+      this.interval = null;
+    }
+    this.logger.info("Service stopped.");
+  }
 }
