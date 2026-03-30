@@ -30,8 +30,8 @@ const manager = new ClusterManager(
     mode: "process", // or 'worker'
     token: token,
     execArgv: isDev
-      ? ["-r", "ts-node/register", "--max-old-space-size=2048"]
-      : ["--max-old-space-size=2048"],
+      ? ["-r", "ts-node/register", "--max-old-space-size=2048", "--expose-gc"]
+      : ["--max-old-space-size=2048", "--expose-gc"],
   },
 );
 

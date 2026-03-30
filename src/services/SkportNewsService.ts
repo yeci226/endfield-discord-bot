@@ -115,6 +115,12 @@ export class SkportNewsService {
       for (const news of top3) {
         await this.processNews(news);
       }
+
+      // 新聞處理完成後手動觸發垃圾回收 (GC)
+      if (typeof global.gc === "function") {
+        this.logger.info("Triggering manual garbage collection after news check...");
+        global.gc();
+      }
     } catch (error: any) {
       this.logger.error(`Error checking Skport news: ${error.message}`);
     }

@@ -32,10 +32,11 @@ export class AutoDailyService {
   private client: ExtendedClient;
   private interval: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
+  private isReady: boolean = false;
   private logger: Logger;
   private cardCache = new Map<string, { buffer: Buffer; expireAt: number }>();
   private readonly CARD_CACHE_TTL_MS = 10 * 60 * 1000;
-  private readonly CARD_CACHE_MAX_SIZE = 300;
+  private readonly CARD_CACHE_MAX_SIZE = 50;
 
   private parseHourCandidates(value: unknown): number[] {
     const toHour = (raw: unknown): number | null => {
@@ -127,7 +128,17 @@ export class AutoDailyService {
     await this.runHourlyCheck();
 
     this.scheduleNextRun();
+    this.isReady = true;
     this.logger.success("Service started.");
+  }
+
+  public stop() {
+    if (this.interval) {
+      clearTimeout(this.interval);
+      this.interval = null;
+    }
+    this.isReady = false;
+    this.logger.info("Service stopped.");
   }
 
   private scheduleNextRun() {
@@ -196,6 +207,12 @@ export class AutoDailyService {
 
       for (const { userId, config } of eligibleUsers) {
         await this.processUser(userId, config);
+      }
+
+      // 簽到任務完成後手動觸發垃圾回收 (GC)
+      if (typeof global.gc === "function") {
+        this.logger.info("Triggering manual garbage collection after hourly check...");
+        global.gc();
       }
     } catch (error) {
       this.logger.error(

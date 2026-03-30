@@ -25,6 +25,7 @@ export class ExtendedClient extends Client {
   public wikiService!: CharacterWikiService;
   public cluster: ClusterClient<Client>;
   private logger!: Logger;
+  private memoryInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     const isSharded = process.env.CLUSTER !== undefined;
@@ -75,7 +76,7 @@ export class ExtendedClient extends Client {
     );
 
     // Memory monitoring
-    setInterval(
+    this.memoryInterval = setInterval(
       () => {
         const used = process.memoryUsage();
         const heapUsedMB = (used.heapUsed / 1024 / 1024).toFixed(2);
@@ -87,5 +88,12 @@ export class ExtendedClient extends Client {
       },
       15 * 60 * 1000,
     ); // Every 15 minutes
+  }
+
+  public stop() {
+    if (this.memoryInterval) {
+      clearInterval(this.memoryInterval);
+      this.memoryInterval = null;
+    }
   }
 }

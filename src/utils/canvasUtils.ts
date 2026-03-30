@@ -234,6 +234,8 @@ export async function drawDashboard(
           "act_bp_val",
         ],
         operatorsTitle: ["operatorsTitle", "operators_title"],
+        achieveTitle: ["achieveTitle", "achieve_hex", "achieve_title_text"],
+        achieveBox: ["achieveBox", "achieve_bg", "achieve_count"],
       };
 
       const keysToSearch = sectionMapping[key] || [key];

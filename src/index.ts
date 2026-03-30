@@ -38,24 +38,21 @@ dotenv.config();
   const verifyClient = new VerificationClient(client);
 
   // 只有在 Cluster 0 啟動全域服務
-
-    // Process Error Handling
+  if (client.cluster.id === 0) {
     const logger = new Logger("Process");
     const webhook = process.env.ERRWEBHOOK
       ? new WebhookClient({ url: process.env.ERRWEBHOOK })
       : null;
 
-  // ====================================
-  // 設置統計數據推送到 personalWeb
-  // ====================================
-  if (client.cluster.id === 0 && optimizations.commandUsageTracker) {
+    // ====================================
+    // 設置統計數據推送到 personalWeb
+    // ====================================
     const STATS_API = process.env.STATS_API_URL;
     const STATS_API_TOKEN = process.env.STATS_API_TOKEN;
 
-    if (!STATS_API) {
-      logger.error("STATS_API_URL is not set, stats push is disabled");
-    } else {
-      setInterval(async () => {
+    let statsInterval: NodeJS.Timeout | null = null;
+    if (STATS_API && optimizations.commandUsageTracker) {
+      statsInterval = setInterval(async () => {
         try {
           const stats = optimizations.commandUsageTracker?.getStats();
           if (stats && Object.keys(stats).length > 0) {
@@ -116,19 +113,43 @@ dotenv.config();
         } catch (error) {
           logger.error(`Error pushing stats: ${(error as Error).message}`);
         }
-      }, 60_000); // 每 60 秒推送一次
+      }, 60_000);
+    } else if (!STATS_API) {
+      logger.error("STATS_API_URL is not set, stats push is disabled");
     }
-  }
-  if (client.cluster.id === 0) {
+
+    // Graceful Shutdown
+    const shutdown = async () => {
+      logger.info("Shutdown signal received. Cleaning up...");
+      if (statsInterval) clearInterval(statsInterval);
+      client.newsService.stop();
+      client.autoDailyService.stop();
+      client.stop(); // Stop memory monitoring
+      await optimizations.shutdown();
+      client.destroy();
+      logger.success("Cleanup complete. Exiting.");
+      process.exit(0);
+    };
+
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    // 啟動服務
     webManager.start();
     verifyClient.start();
     client.newsService.start();
     client.autoDailyService.start();
     // client.monitorService.start();
     // client.wikiService.start();
+
+    // Re-expose logger and webhook for the unhandled handlers below
+    (global as any).processLogger = logger;
+    (global as any).processWebhook = webhook;
   }
 
   process.on("unhandledRejection", async (reason: any, promise) => {
+    const logger = (global as any).processLogger || new Logger("Process");
+    const webhook = (global as any).processWebhook;
     logger.error(`Unhandled Rejection: ${reason}`);
     logger.error(reason);
     if (webhook) {
@@ -149,6 +170,8 @@ dotenv.config();
   });
 
   process.on("uncaughtException", async (error: Error) => {
+    const logger = (global as any).processLogger || new Logger("Process");
+    const webhook = (global as any).processWebhook;
     logger.error(`Uncaught Exception: ${error.message}`);
     logger.error(error);
     if (webhook) {

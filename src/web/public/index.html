@@ -608,6 +608,23 @@
             </div>
           </div>
 
+          <div id="group-style-panel" class="panel" style="display: none">
+            <div class="panel-h" onclick="togglePanel(this)">群組快速樣式</div>
+            <div class="panel-content">
+              <div class="prop-row">
+                <label>背景色</label>
+                <input type="color" id="gs-bg" oninput="applyGroupStyle('bg', this.value)" />
+              </div>
+              <div class="prop-row">
+                <label>主要文字色</label>
+                <input type="color" id="gs-text-primary" oninput="applyGroupStyle('text-primary', this.value)" />
+              </div>
+              <div class="prop-row">
+                <label>標籤文字色</label>
+                <input type="color" id="gs-text-label" oninput="applyGroupStyle('text-label', this.value)" />
+              </div>
+            </div>
+          </div>
           <div id="style-panel" class="panel" style="display: none">
             <div class="panel-h" onclick="togglePanel(this)">樣式與內容</div>
             <div class="panel-content">
@@ -937,6 +954,7 @@
           token: new URLSearchParams(window.location.search).get("token"),
           registry: {},
           clipboard: null,
+          subTarget: null,
         },
         history: {
           stack: [],
@@ -1575,9 +1593,10 @@
           ].includes(key);
 
           if (isBlockLevel && result.type === "group") {
-            result.lockScalingX = true;
-            result.lockScalingY = true;
-            result.lockRotation = true;
+            // Enable sub-target checking for all block-level groups except the large/complex ones
+            if (!["operatorsGrid", "achieveBox"].includes(key)) {
+              result.subTargetCheck = true;
+            }
           } else if (!isBlockLevel) {
             applyProtection(result, key);
           }
@@ -2231,33 +2250,41 @@
         return ctx.fillStyle;
       };
 
-      function fillInspector(obj) {
+      function fillInspector(obj, parentGroup) {
         if (!obj) return;
 
+        const isSubTarget = !!parentGroup || (Editor.state.subTarget && Editor.state.subTarget.obj === obj);
+        const effectiveGroup = parentGroup || (isSubTarget ? Editor.state.subTarget?.group : null);
         const isMulti = obj.type === "activeSelection";
         const target = isMulti ? obj.getObjects()[0] : obj;
 
-        document.getElementById("sel-name").innerText = isMulti
-          ? `多選 (${obj.getObjects().length} 個)`
-          : obj.data?.key || obj.type;
+        // Label in selector
+        if (isSubTarget && effectiveGroup) {
+          document.getElementById("sel-name").innerText =
+            (effectiveGroup.data?.key || "group") + " ▸ " + (obj.data?.key || obj.type);
+        } else {
+          document.getElementById("sel-name").innerText = isMulti
+            ? `多選 (${obj.getObjects().length} 個)`
+            : obj.data?.key || obj.type;
+        }
+
+        // Position fields: for sub-targets show local coords (read-only feel), for top-level show normal
         document.getElementById("p-x").value = Math.round(obj.left);
         document.getElementById("p-y").value = Math.round(obj.top);
-        document.getElementById("p-s").value = parseFloat(obj.scaleX).toFixed(
-          2,
-        );
+        document.getElementById("p-s").value = parseFloat(obj.scaleX || 1).toFixed(2);
         document.getElementById("p-rot").value = Math.round(obj.angle || 0);
-        document.getElementById("p-o").value = parseFloat(obj.opacity).toFixed(
-          1,
-        );
+        document.getElementById("p-o").value = parseFloat(obj.opacity || 1).toFixed(1);
 
         const stylePanel = document.getElementById("style-panel");
         const gridPanel = document.getElementById("grid-controls");
+        const groupStylePanel = document.getElementById("group-style-panel");
         const rowFill = document.getElementById("row-fill");
         const rowText = document.getElementById("row-text");
         const rowFS = document.getElementById("row-fontSize");
         const rowFF = document.getElementById("row-fontFamily");
 
         stylePanel.style.display = "none";
+        if (groupStylePanel) groupStylePanel.style.display = "none";
         gridPanel.style.display =
           !isMulti && obj.data?.key === "operatorsGrid" ? "block" : "none";
         if (gridPanel.style.display === "block") {
@@ -2273,31 +2300,27 @@
         rowFS.style.display = "none";
         rowFF.style.display = "none";
 
-        // Populate Shadow/Border
+        // Shadow/Border
         const shadow = target.shadow || {};
         document.getElementById("p-shadowOffset").value = shadow.offsetX || 0;
         document.getElementById("p-shadowBlur").value = shadow.blur || 0;
-        document.getElementById("p-strokeWidth").value =
-          target.strokeWidth || 0;
-        document.getElementById("p-stroke").value = toHex(
-          target.stroke || "#000000",
-        );
+        document.getElementById("p-strokeWidth").value = target.strokeWidth || 0;
+        document.getElementById("p-stroke").value = toHex(target.stroke || "#000000");
 
         let showStyle = false;
-        // Text properties
-        if (target.type.includes("text")) {
+
+        if (target.type && target.type.includes("text")) {
           showStyle = true;
           rowFill.style.display = "flex";
-          rowText.style.display = isMulti ? "none" : "flex";
           rowFS.style.display = "flex";
           rowFF.style.display = "flex";
           document.getElementById("p-fill").value = toHex(target.fill);
+          document.getElementById("p-fontSize").value = target.fontSize;
+          document.getElementById("p-fontFamily").value = target.fontFamily;
 
           const key = target.data?.key || "";
-          const isAPI =
-            key === "name" ||
-            key === "badge" ||
-            key === "box_content" ||
+          const isAPIValue =
+            ["name", "badge"].includes(key) ||
             key.startsWith("stat_") ||
             key.startsWith("level_") ||
             key.startsWith("stamina_") ||
@@ -2305,48 +2328,134 @@
             key.startsWith("char_") ||
             key.includes("_val") ||
             key.includes("_cur") ||
-            key.includes("_max");
+            key.includes("_max") ||
+            key.includes("_count");
 
-          // Custom text is NOT API bound if it doesn't match these patterns
-          const canEditLabel = !isAPI;
-
-          rowText.style.display = canEditLabel ? "flex" : "none";
-
+          // Allow text content editing only for non-API-value elements
+          rowText.style.display = isMulti ? "none" : "flex";
           const textInput = document.getElementById("p-text");
           textInput.value = target.text || "";
-          textInput.readOnly = !canEditLabel;
+          textInput.readOnly = isAPIValue;
+          textInput.style.opacity = isAPIValue ? "0.5" : "1";
 
-          document.getElementById("p-fontSize").value = target.fontSize;
-          document.getElementById("p-fontFamily").value = target.fontFamily;
         } else if (
-          target.set &&
-          (target.type === "rect" ||
-            target.type === "circle" ||
-            target.type === "path" ||
-            target.type === "group")
+          target.type === "rect" ||
+          target.type === "circle" ||
+          target.type === "path" ||
+          target.type === "polygon" ||
+          target.type === "group" ||
+          target.type === "image"
         ) {
           showStyle = true;
           rowFill.style.display = "flex";
           document.getElementById("p-fill").value = toHex(target.fill);
         }
+
         if (showStyle) stylePanel.style.display = "block";
+
+        // Quick Style panel: show for top-level group selections (not sub-targets, not operators/achieve)
+        if (
+          !isSubTarget &&
+          !isMulti &&
+          obj.type === "group" &&
+          obj._objects &&
+          !["operatorsGrid", "achieveBox"].includes(obj.data?.key || "")
+        ) {
+          if (groupStylePanel) {
+            groupStylePanel.style.display = "block";
+            syncGroupStylePanel(obj);
+          }
+        }
       }
+
+      function findGroupChild(group, keySuffixes) {
+        if (!group._objects) return null;
+        const suffixes = Array.isArray(keySuffixes) ? keySuffixes : [keySuffixes];
+        for (const obj of group._objects) {
+          const k = obj.data?.key || "";
+          if (suffixes.some((s) => k.endsWith(s) || k.includes(s))) return obj;
+        }
+        return null;
+      }
+
+      function syncGroupStylePanel(group) {
+        const bgChild = findGroupChild(group, ["_bg"]);
+        const primChild = findGroupChild(group, ["_val", "_content", "_count", "_cur"]);
+        const labelChild = findGroupChild(group, ["_label"]);
+
+        const bgEl = document.getElementById("gs-bg");
+        const primEl = document.getElementById("gs-text-primary");
+        const labelEl = document.getElementById("gs-text-label");
+
+        if (bgEl) bgEl.value = bgChild ? toHex(bgChild.fill || "#333333") : "#333333";
+        if (primEl) primEl.value = primChild ? toHex(primChild.fill || "#ffffff") : "#ffffff";
+        if (labelEl) labelEl.value = labelChild ? toHex(labelChild.fill || "#888888") : "#888888";
+      }
+
+      window.applyGroupStyle = (type, value) => {
+        const active = Editor.canvas.getActiveObject();
+        if (!active || active.type !== "group") return;
+
+        active._objects.forEach((o) => {
+          const k = o.data?.key || "";
+          if (type === "bg" && k.endsWith("_bg")) {
+            o.set("fill", value);
+          } else if (type === "text-primary" && o.type && o.type.includes("text")) {
+            if (
+              k.includes("_val") ||
+              k.includes("_content") ||
+              k.includes("_count") ||
+              k.includes("_cur") ||
+              k.includes("_max")
+            ) {
+              o.set("fill", value);
+            }
+          } else if (type === "text-label" && o.type && o.type.includes("text")) {
+            if (k.includes("_label")) {
+              o.set("fill", value);
+            }
+          }
+        });
+
+        active.dirty = true;
+        Editor.canvas.requestRenderAll();
+        saveState();
+      };
 
       // --- Selection Handling & Tab Switching ---
       Editor.canvas.on("selection:created", (e) => {
+        // Clear sub-target when a new top-level selection is made
+        if (Editor.state.subTarget) {
+          Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0, strokeDashArray: null });
+          Editor.state.subTarget = null;
+        }
         if (e.selected[0]) {
           fillInspector(e.selected[0]);
           updateLayers();
         }
       });
       Editor.canvas.on("selection:updated", (e) => {
+        // Clear sub-target when selection changes to a different top-level object
+        if (Editor.state.subTarget) {
+          const newObj = e.selected[0];
+          if (newObj !== Editor.state.subTarget.group) {
+            Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0, strokeDashArray: null });
+            Editor.state.subTarget = null;
+          }
+        }
         if (e.selected[0]) {
           fillInspector(e.selected[0]);
           updateLayers();
         }
       });
       Editor.canvas.on("selection:cleared", () => {
+        if (Editor.state.subTarget) {
+          Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0, strokeDashArray: null });
+          Editor.state.subTarget = null;
+        }
         document.getElementById("sel-name").innerText = "無 None";
+        const gsp = document.getElementById("group-style-panel");
+        if (gsp) gsp.style.display = "none";
         updateLayers();
       });
 
@@ -2377,13 +2486,42 @@
 
       Editor.canvas.on("mouse:dblclick", (e) => {
         const obj = e.target;
-        if (obj && obj.type === "group") {
+        if (!obj || obj.type !== "group") return;
+
+        const key = obj.data?.key || "";
+
+        // For block-level groups with subTargetCheck: enter sub-element edit mode
+        if (obj.subTargetCheck && !["operatorsGrid", "achieveBox"].includes(key)) {
+          const subTarget = (e.subTargets || [])[0];
+          if (!subTarget) return;
+
+          // Clear any previous sub-edit highlight
+          if (Editor.state.subTarget) {
+            Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0 });
+          }
+
+          Editor.state.subTarget = { obj: subTarget, group: obj };
+          obj.set({ stroke: "#3498db", strokeWidth: 3, strokeDashArray: [10, 5] });
+          Editor.canvas.requestRenderAll();
+          switchTab("inspector");
+          fillInspector(subTarget, obj);
+          return;
+        }
+
+        // For custom groups (no recognized block key): explode
+        if (!["operatorsGrid", "achieveBox", "statsGrid", "missionBox", "authLevelBox",
+              "realtimeTitle", "staminaBox", "activityBpBox", "achieveTitle",
+              "operatorsTitle", "avatar", "name", "badge"].includes(key)) {
           const items = obj._objects.slice();
           obj._restoreObjectsState();
           Editor.canvas.remove(obj);
           items.forEach((item) => Editor.canvas.add(item));
+          const sel = new fabric.ActiveSelection(items, { canvas: Editor.canvas });
+          Editor.canvas.setActiveObject(sel);
           Editor.canvas.requestRenderAll();
-          alert("群組已解散！元素已保持在原位。");
+          saveState();
+          switchTab("inspector");
+          if (items[0]) fillInspector(sel);
         }
       });
 
@@ -3005,10 +3143,10 @@
         const valFF = document.getElementById("p-fontFamily").value;
 
         const applyTo = (obj) => {
-          if (obj.type.includes("text")) {
+          if (obj.type && obj.type.includes("text")) {
             const key = obj.data?.key || "";
-            const isAPI =
-              ["name", "badge", "box_content"].includes(key) ||
+            const isAPIValue =
+              ["name", "badge"].includes(key) ||
               key.startsWith("stat_") ||
               key.startsWith("level_") ||
               key.startsWith("stamina_") ||
@@ -3016,9 +3154,10 @@
               key.startsWith("char_") ||
               key.includes("_val") ||
               key.includes("_cur") ||
-              key.includes("_max");
+              key.includes("_max") ||
+              key.includes("_count");
 
-            if (!isAPI && valText !== undefined && valText !== null)
+            if (!isAPIValue && valText !== undefined && valText !== null)
               obj.set("text", valText);
             if (valFill) obj.set("fill", valFill);
             if (!isNaN(valFS)) obj.set("fontSize", valFS);
@@ -3028,6 +3167,7 @@
             (obj.type === "rect" ||
               obj.type === "circle" ||
               obj.type === "path" ||
+              obj.type === "polygon" ||
               obj.type === "group" ||
               obj.type === "image")
           ) {
@@ -3058,6 +3198,21 @@
           obj.set("stroke", strokeWidth > 0 ? strokeColor : null);
           obj.set("strokeWidth", strokeWidth);
         };
+
+        // If in sub-target edit mode, apply style changes to the sub-object
+        if (Editor.state.subTarget) {
+          const sub = Editor.state.subTarget.obj;
+          const grp = Editor.state.subTarget.group;
+          applyTo(sub);
+          // x/y in sub-target mode adjusts local position within group
+          if (!isNaN(valX)) sub.set("left", valX);
+          if (!isNaN(valY)) sub.set("top", valY);
+          if (!isNaN(valO)) sub.set("opacity", valO);
+          grp.dirty = true;
+          Editor.canvas.requestRenderAll();
+          saveState();
+          return;
+        }
 
         if (active.type === "activeSelection") {
           active.getObjects().forEach(applyTo);
