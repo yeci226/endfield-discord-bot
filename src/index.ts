@@ -116,22 +116,6 @@ dotenv.config();
     } else if (!STATS_API) {
       logger.error("STATS_API_URL is not set, stats push is disabled");
     }
-    const shutdown = async () => {
-      logger.info("Shutdown signal received. Cleaning up...");
-      if (statsInterval) clearInterval(statsInterval);
-      client.newsService.stop();
-      client.autoDailyService.stop();
-      client.monitorService.stop();
-      client.wikiService.stop();
-      client.stop(); // Stop memory monitoring
-      await optimizations.shutdown();
-      client.destroy();
-      logger.success("Cleanup complete. Exiting.");
-      process.exit(0);
-    };
-
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
 
     // 啟動服務
     webManager.start();

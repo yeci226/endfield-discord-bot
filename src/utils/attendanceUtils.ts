@@ -67,6 +67,12 @@ export async function processRoleAttendance(
           // If we got reward info in the response, we can use it directly
           status.awardIds = claimResult.data.awardIds;
           status.hasToday = true;
+          // Also mark the calendar entry as done so totalDays counts correctly
+          const availableEntry = status.calendar.find((d: any) => d.available);
+          if (availableEntry) {
+            availableEntry.done = true;
+            availableEntry.available = false;
+          }
           // Optionally update resourceInfoMap if it's also provided in the claim response
           if (claimResult.data.resourceInfoMap) {
             status.resourceInfoMap = {
@@ -167,9 +173,7 @@ export async function processRoleAttendance(
         : 0;
 
     const yesterdayRewardEntry =
-      currentIndex > 0
-        ? status.calendar[currentIndex - 1]
-        : [...status.calendar].reverse().find((r) => r.done);
+      currentIndex > 0 ? status.calendar[currentIndex - 1] : null;
 
     const currentResource = currentRewardEntry
       ? status.resourceInfoMap?.[currentRewardEntry.awardId]
@@ -195,22 +199,19 @@ export async function processRoleAttendance(
       done: !!yesterdayRewardEntry?.done,
     };
 
-    const nextRewards = status.calendar
+    const nextRewardsRaw = status.calendar
       .slice(currentIndex + 1, currentIndex + 4)
       .map((dayReward) => {
         const reward = status.resourceInfoMap?.[dayReward.awardId];
         if (!reward) {
-          return {
-            name: tr("None") || "None",
-            icon: "",
-          };
+          return { name: tr("None") || "None", icon: "" };
         }
-
-        return {
-          name: `${reward.name} x${reward.count}`,
-          icon: reward.icon,
-        };
+        return { name: `${reward.name} x${reward.count}`, icon: reward.icon };
       });
+
+    const nextRewards = Array.from({ length: 3 }, (_, i) =>
+      nextRewardsRaw[i] ?? { name: "-", icon: "", endOfPeriod: true },
+    );
 
     let firstRewardName = "";
     if (status.first && status.first.length > 0) {

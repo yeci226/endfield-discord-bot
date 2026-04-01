@@ -19,6 +19,7 @@ export interface DailyRewardItem {
   name: string;
   icon?: string;
   done?: boolean;
+  endOfPeriod?: boolean;
 }
 
 export interface DailyCardPayload {
@@ -293,9 +294,11 @@ export async function buildDailyAttendanceCard(
       ctx.font = "20px NotoSans";
       ctx.fillStyle = "#8f98a5";
       ctx.fillText(
-        i === 2
-          ? payload.tr("daily_canvas_AvailableTomorrow")
-          : payload.tr("daily_canvas_NotYetAvailable"),
+        item.endOfPeriod
+          ? payload.tr("daily_canvas_NextPeriod")
+          : i === 2
+            ? payload.tr("daily_canvas_AvailableTomorrow")
+            : payload.tr("daily_canvas_NotYetAvailable"),
         x + 16,
         subLabelY,
       );

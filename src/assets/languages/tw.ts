@@ -385,6 +385,7 @@ const langs: Record<string, any> = {
   daily_canvas_AvailableTomorrow: "明日可領取",
   daily_canvas_NotYetAvailable: "尚未開放",
   daily_canvas_MissedThisMonth: "本月漏簽",
+  daily_canvas_NextPeriod: "換期後揭曉",
 };
 
 export default langs;

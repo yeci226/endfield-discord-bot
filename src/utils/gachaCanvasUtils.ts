@@ -115,7 +115,7 @@ export async function drawGachaStats(
   }
 
   const width = 2400;
-  const height = 1400;
+  let height = 1400;
   const padding = 80;
 
   if (!stats) {
@@ -409,6 +409,27 @@ export async function drawGachaStats(
       gId,
       pId: selectedPoolId,
     });
+  }
+
+  // Dynamically expand canvas height to fit all 6★ items in overview mode.
+  // Overhead estimate: listY(580) + column header(100) + pity placeholder(85) + padded bar(75) = 840
+  // Each 6★ card: rectH(110) + gap(15) = 125px
+  // Bottom reserve: quick strip(240) + margin(60) = 300
+  if (!selectedPoolId && visualGroups.length > 0) {
+    const OVERHEAD_PER_COL = 840;
+    const CARD_SPACING = 125;
+    const BOTTOM_RESERVE = 300;
+    let maxColH = 0;
+    for (const group of visualGroups) {
+      const sixItemCount = group.items.filter(
+        (item: any) => !item.isExpeditedBlock,
+      ).length;
+      maxColH = Math.max(
+        maxColH,
+        OVERHEAD_PER_COL + sixItemCount * CARD_SPACING,
+      );
+    }
+    height = Math.max(height, maxColH + BOTTOM_RESERVE);
   }
 
   const canvas = createCanvas(width, height);

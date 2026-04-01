@@ -477,7 +477,7 @@
     <header>
       <h1>
         ENDFIELD INDUSTRIES
-        <span style="color: rgb(255, 255, 255)">v0.1.1</span>
+        <span style="color: rgb(255, 255, 255)">v0.1.2</span>
         <span style="color: rgba(255, 255, 255, 0.37); font-size: 12px"
           >目前編輯器與機器人實際產出有些微誤差或錯位 敬請見諒，遇到問題請至
           <a
@@ -504,8 +504,13 @@
 
     <main>
       <div id="editor-area">
-        <div id="canvas-wrapper">
+        <div id="canvas-wrapper" style="position:relative;">
           <canvas id="c"></canvas>
+          <!-- Server-rendered preview overlay -->
+          <div id="preview-overlay" style="display:none; position:absolute; inset:0; z-index:10; background:#000; overflow:hidden;">
+            <img id="preview-overlay-img" src="" alt="" style="width:100%; height:100%; object-fit:contain;" />
+            <div id="preview-overlay-status" style="position:absolute; top:10px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.7); color:#fff; padding:6px 14px; border-radius:20px; font-size:13px; white-space:nowrap;"></div>
+          </div>
         </div>
       </div>
 
@@ -934,12 +939,25 @@
 
         <div class="footer-btns">
           <button class="success" onclick="save()">儲存同步 Save Layout</button>
+          <button class="ghost" onclick="showPreview()">預覽 Preview</button>
           <button class="ghost" onclick="resetTemplate()">
             重設預設模板 Reset Template
           </button>
         </div>
       </div>
     </main>
+
+    <!-- Preview Modal -->
+    <div id="preview-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:9999; overflow-y:auto; padding:20px; box-sizing:border-box;">
+      <div style="max-width:900px; margin:0 auto; position:relative;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <button onclick="document.getElementById('preview-modal').style.display='none'"
+            style="background:#333; color:#fff; border:none; padding:8px 16px; border-radius:8px; cursor:pointer; font-size:14px;">✕ 關閉</button>
+        </div>
+        <div id="preview-status" style="color:#aaa; font-size:14px; margin-bottom:8px;"></div>
+        <img id="preview-img" src="" alt="preview" style="width:100%; border-radius:12px; display:none;" />
+      </div>
+    </div>
 
     <script>
       const Editor = {
@@ -955,6 +973,7 @@
           registry: {},
           clipboard: null,
           subTarget: null,
+          groupEditMode: null,
         },
         history: {
           stack: [],
@@ -1029,6 +1048,12 @@
       Editor.canvas.on("object:modified", scheduleSave);
       Editor.canvas.on("object:added", scheduleSave);
       Editor.canvas.on("object:removed", scheduleSave);
+
+      // Auto-refresh preview overlay after element moves (debounced 1.5s)
+      Editor.canvas.on("object:modified", () => {
+        clearTimeout(_previewDebounceTimer);
+        _previewDebounceTimer = setTimeout(fetchAndShowPreviewOverlay, 1500);
+      });
 
       // Image Loader with Robustness & Timeout
       const loadImg = (url) =>
@@ -1416,7 +1441,6 @@
               fill: el.name.color || "#fff",
               fontFamily: "Noto Sans TC",
               fontWeight: "bold",
-              originY: "bottom",
             }),
           el.name,
         );
@@ -1443,7 +1467,6 @@
               fontSize: el.badge.fontSize || 36,
               fill: el.badge.color || "#aaa",
               fontFamily: "Noto Sans TC",
-              originY: "bottom",
             }),
           el.badge,
         );
@@ -1491,6 +1514,7 @@
           async () =>
             createActivity(
               detail.dailyMission,
+              detail.weeklyMission,
               detail.bpSystem,
               el.activityBpBox,
             ),
@@ -1847,13 +1871,21 @@
         const curVal = parseInt(s.curStamina);
         const maxVal = parseInt(s.maxStamina);
         let recText = "完全恢復";
+        let diff = 0;
         if (maxTs > now && curVal < maxVal) {
-          const diff = maxTs - now;
+          diff = maxTs - now;
           const h = Math.floor(diff / 3600);
           const m = Math.floor((diff % 3600) / 60);
           recText = `${h}小時${m}分`;
         }
 
+        // Dynamic dot color — green (full) → red (empty), matches bot
+        const maxRecoverySec = (maxVal / 10) * 60 * 60;
+        const ratio = maxRecoverySec > 0 ? Math.min(diff / maxRecoverySec, 1) : 0;
+        const hue = Math.round(120 * (1 - ratio));
+        const dotColor = `hsl(${hue}, 100%, 50%)`;
+
+        const dotR = 8;
         const pillX = w - 200 - 30;
         objs.push(
           new fabric.Rect({
@@ -1865,6 +1897,16 @@
             left: pillX,
             top: 30,
             data: { key: "rec_pill_bg" },
+          }),
+        );
+        // Dot center: pillX+20+dotR x, vertically centered in pill (top 30, height 50 → center y=55)
+        objs.push(
+          new fabric.Circle({
+            radius: dotR,
+            fill: dotColor,
+            left: pillX + 20,
+            top: 55 - dotR,
+            data: { key: "rec_dot" },
           }),
         );
         objs.push(
@@ -1881,7 +1923,7 @@
         return new fabric.Group(objs);
       }
 
-      async function createActivity(d, b, cfg) {
+      async function createActivity(daily, weekly, bp, cfg) {
         const w = cfg.width || 1450;
         const objs = [];
 
@@ -1895,52 +1937,50 @@
             data: { key: "activity_bg" },
           }),
         );
-        objs.push(
-          new fabric.Text(`${d.dailyActivation}/${d.maxDailyActivation}`, {
-            left: w / 4,
-            top: 35,
-            fontSize: 60,
-            fill: "#fff",
-            fontWeight: "bold",
-            originX: "center",
-            fontFamily: "Noto Sans TC",
-            data: { key: "act_daily_val" },
-          }),
-        );
-        objs.push(
-          new fabric.Text("活躍度", {
-            left: w / 4,
-            top: 100,
-            fontSize: 28,
-            fill: "#888",
-            originX: "center",
-            fontFamily: "Noto Sans TC",
-            data: { key: "act_daily_label" },
-          }),
-        );
-        objs.push(
-          new fabric.Text(`${b.curLevel}/${b.maxLevel}`, {
-            left: (w / 4) * 3,
-            top: 35,
-            fontSize: 60,
-            fill: "#fff",
-            fontWeight: "bold",
-            originX: "center",
-            fontFamily: "Noto Sans TC",
-            data: { key: "act_bp_val" },
-          }),
-        );
-        objs.push(
-          new fabric.Text("通行證等級", {
-            left: (w / 4) * 3,
-            top: 100,
-            fontSize: 28,
-            fill: "#888",
-            originX: "center",
-            fontFamily: "Noto Sans TC",
-            data: { key: "act_bp_label" },
-          }),
-        );
+
+        const cols = [];
+        if (daily) cols.push({ label: "活躍度", value: `${daily.dailyActivation}/${daily.maxDailyActivation}`, key: "daily" });
+        if (weekly) cols.push({ label: "每周任務", value: `${weekly.score}/${weekly.total}`, key: "weekly" });
+        if (bp) cols.push({ label: "通行證等級", value: `${bp.curLevel}/${bp.maxLevel}`, key: "bp" });
+
+        const colW = cols.length > 0 ? w / cols.length : w;
+        cols.forEach((col, i) => {
+          if (i > 0) {
+            objs.push(
+              new fabric.Rect({
+                left: colW * i,
+                top: 20,
+                width: 1,
+                height: 140,
+                fill: "rgba(255,255,255,0.15)",
+                data: { key: `act_div_${i}` },
+              }),
+            );
+          }
+          objs.push(
+            new fabric.Text(col.value, {
+              left: colW * i + colW / 2,
+              top: 35,
+              fontSize: 60,
+              fill: "#fff",
+              fontWeight: "bold",
+              originX: "center",
+              fontFamily: "Noto Sans TC",
+              data: { key: `act_${col.key}_val` },
+            }),
+          );
+          objs.push(
+            new fabric.Text(col.label, {
+              left: colW * i + colW / 2,
+              top: 100,
+              fontSize: 28,
+              fill: "#888",
+              originX: "center",
+              fontFamily: "Noto Sans TC",
+              data: { key: `act_${col.key}_label` },
+            }),
+          );
+        });
 
         return new fabric.Group(objs);
       }
@@ -2010,11 +2050,10 @@
           ),
         ];
         const phases = [
-          ...new Set(
-            activeChars
-              .map((c) => Number(c.evolvePhase) || 0)
-              .filter((p) => p > 0),
-          ),
+          ...new Set(activeChars.map((c) => Number(c.evolvePhase) || 0)),
+        ];
+        const ranks = [
+          ...new Set(activeChars.map((c) => c.potentialLevel ?? 0)),
         ];
 
         await Promise.all([
@@ -2023,7 +2062,7 @@
           ...propKeys.map((k) => loadIcon(`/assets/element/${k}.jpg`)),
           ...weaponKeys.map((k) => loadIcon(`/assets/weapon/black/${k}.png`)),
           ...phases.map((p) => loadIcon(`/assets/phase/${p}.png`)),
-          loadIcon(`/assets/phase/bg.png`),
+          ...ranks.map((r) => loadIcon(`/assets/rank/${r}.png`)),
         ]);
 
         for (let i = 0; i < activeChars.length; i++) {
@@ -2127,8 +2166,9 @@
               top: ry + cw - 18,
               fontSize: 18,
               fill: "#fff",
-              stroke: "#000",
-              strokeWidth: 3,
+              stroke: "rgba(0,0,0,0.6)",
+              strokeWidth: 1.5,
+              strokeLineJoin: "round",
               fontFamily: "Noto Sans TC",
               originY: "bottom",
               data: { key: `${cardKey}_lv_label` },
@@ -2142,55 +2182,84 @@
               fontSize: 28,
               fontWeight: "bold",
               fill: "#fff",
-              stroke: "#000",
-              strokeWidth: 3,
+              stroke: "rgba(0,0,0,0.6)",
+              strokeWidth: 1.5,
+              strokeLineJoin: "round",
               fontFamily: "Noto Sans TC",
               originY: "bottom",
               data: { key: `${cardKey}_level` },
             }),
           );
 
-          const phase = Number(char.evolvePhase) || 0;
-          if (phase > 0) {
-            const phaseBg = await loadIcon(`/assets/phase/bg.png`);
-            const phaseNum = await loadIcon(`/assets/phase/${phase}.png`);
-            if (phaseBg && phaseNum) {
-              const phaseSize = 32;
-              const pX = rx + cw - 45;
-              const pY = ry + cw - 40;
-              const pBgObj = await new Promise((r) =>
-                phaseBg.clone((c) => r(c)),
-              );
-              pBgObj.set({
+          // Phase + Rank pill (bottom-right), matches bot drawDashboard
+          {
+            const pillIconSize = 28;
+            const cellPad = 5;
+            const cellW = pillIconSize + cellPad * 2; // 38
+            const containerH = pillIconSize + cellPad * 2; // 38
+            const containerW = cellW * 2 + 2; // 78
+            const pX = rx + cw - containerW - 6;
+            const pY = ry + cw - containerH - 6;
+
+            finalObjs.push(
+              new fabric.Rect({
                 left: pX,
                 top: pY,
-                scaleX: phaseSize / pBgObj.width,
-                scaleY: phaseSize / pBgObj.height,
-              });
-              finalObjs.push(pBgObj);
-              const numSize = phaseSize * (204 / 336);
-              const nX = pX + (phaseSize - numSize) / 2;
-              const nY = pY + (phaseSize - numSize) / 2;
-              const pNumObj = await new Promise((r) =>
-                phaseNum.clone((c) => r(c)),
+                width: containerW,
+                height: containerH,
+                fill: "rgba(30,30,30,0.82)",
+                rx: 8,
+                ry: 8,
+                data: { key: `${cardKey}_pill_bg` },
+              }),
+            );
+            finalObjs.push(
+              new fabric.Rect({
+                left: pX + cellW,
+                top: pY + 4,
+                width: 2,
+                height: containerH - 8,
+                fill: "rgba(255,255,255,0.15)",
+                data: { key: `${cardKey}_pill_div` },
+              }),
+            );
+
+            const phaseVal = Number(char.evolvePhase) || 0;
+            const phaseIcon = await loadIcon(`/assets/phase/${phaseVal}.png`);
+            if (phaseIcon) {
+              const phaseObj = await new Promise((r) =>
+                phaseIcon.clone((c) => r(c)),
               );
-              pNumObj.set({
-                left: nX,
-                top: nY,
-                scaleX: numSize / pNumObj.width,
-                scaleY: numSize / pNumObj.height,
+              phaseObj.set({
+                left: pX + cellPad,
+                top: pY + cellPad,
+                scaleX: pillIconSize / phaseObj.width,
+                scaleY: pillIconSize / phaseObj.height,
+                data: { key: `${cardKey}_phase` },
               });
-              finalObjs.push(pNumObj);
+              finalObjs.push(phaseObj);
+            }
+
+            const rankVal = char.potentialLevel ?? 0;
+            const rankIcon = await loadIcon(`/assets/rank/${rankVal}.png`);
+            if (rankIcon) {
+              const rankObj = await new Promise((r) =>
+                rankIcon.clone((c) => r(c)),
+              );
+              rankObj.set({
+                left: pX + cellW + 2 + cellPad,
+                top: pY + cellPad,
+                scaleX: pillIconSize / rankObj.width,
+                scaleY: pillIconSize / rankObj.height,
+                data: { key: `${cardKey}_rank` },
+              });
+              finalObjs.push(rankObj);
             }
           }
 
-          const rarity = parseInt(char.charData.rarity?.value) || 3;
-          let rColor = "#ccc";
-          if (rarity === 6) rColor = "#ff7100";
-          if (rarity === 5) rColor = "#ffcc00";
-          if (rarity === 4) rColor = "#b380ff";
-          if (rarity === 3) rColor = "#33c2ff";
-          if (rarity === 2) rColor = "#b4d945";
+          const rarity = parseInt(char.charData.rarity?.value) || 0;
+          const rarityColors = { 6: "#ff7100", 5: "#ffcc00", 4: "#b380ff", 3: "#33c2ff", 2: "#b4d945", 1: "#b2b2b2" };
+          const rColor = rarityColors[rarity] || "#b2b2b2";
           finalObjs.push(
             new fabric.Rect({
               left: rx,
@@ -2423,6 +2492,17 @@
       };
 
       // --- Selection Handling & Tab Switching ---
+      function exitGroupEditMode() {
+        const gm = Editor.state.groupEditMode;
+        if (!gm) return;
+        gm.group.set({ stroke: null, strokeWidth: 0, strokeDashArray: null, subTargetCheck: false });
+        Editor.state.groupEditMode = null;
+        if (Editor.state.subTarget?.group === gm.group) {
+          Editor.state.subTarget = null;
+        }
+        Editor.canvas.requestRenderAll();
+      }
+
       Editor.canvas.on("selection:created", (e) => {
         // Clear sub-target when a new top-level selection is made
         if (Editor.state.subTarget) {
@@ -2435,6 +2515,12 @@
         }
       });
       Editor.canvas.on("selection:updated", (e) => {
+        // Exit group edit mode if selection moved away from the group
+        if (Editor.state.groupEditMode) {
+          if (e.selected[0] !== Editor.state.groupEditMode.group) {
+            exitGroupEditMode();
+          }
+        }
         // Clear sub-target when selection changes to a different top-level object
         if (Editor.state.subTarget) {
           const newObj = e.selected[0];
@@ -2449,6 +2535,7 @@
         }
       });
       Editor.canvas.on("selection:cleared", () => {
+        exitGroupEditMode();
         if (Editor.state.subTarget) {
           Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0, strokeDashArray: null });
           Editor.state.subTarget = null;
@@ -2508,20 +2595,39 @@
           return;
         }
 
-        // For custom groups (no recognized block key): explode
+        // For custom groups (no recognized block key): enter group edit mode
         if (!["operatorsGrid", "achieveBox", "statsGrid", "missionBox", "authLevelBox",
               "realtimeTitle", "staminaBox", "activityBpBox", "achieveTitle",
               "operatorsTitle", "avatar", "name", "badge"].includes(key)) {
-          const items = obj._objects.slice();
-          obj._restoreObjectsState();
-          Editor.canvas.remove(obj);
-          items.forEach((item) => Editor.canvas.add(item));
-          const sel = new fabric.ActiveSelection(items, { canvas: Editor.canvas });
-          Editor.canvas.setActiveObject(sel);
+          obj.set({ subTargetCheck: true, stroke: "#3498db", strokeWidth: 3, strokeDashArray: [10, 5] });
+          Editor.state.groupEditMode = { group: obj };
+          const subTarget = (e.subTargets || [])[0];
+          if (subTarget) {
+            if (Editor.state.subTarget) {
+              Editor.state.subTarget.group.set({ stroke: null, strokeWidth: 0 });
+            }
+            Editor.state.subTarget = { obj: subTarget, group: obj };
+          }
           Editor.canvas.requestRenderAll();
-          saveState();
           switchTab("inspector");
-          if (items[0]) fillInspector(sel);
+          fillInspector(subTarget || obj, subTarget ? obj : null);
+        }
+      });
+
+      // Single-click within group edit mode to switch selected sub-element
+      Editor.canvas.on("mouse:down", (e) => {
+        const gm = Editor.state.groupEditMode;
+        if (!gm) return;
+        if (e.target === gm.group) {
+          const subTarget = (e.subTargets || [])[0];
+          if (subTarget && subTarget !== Editor.state.subTarget?.obj) {
+            Editor.state.subTarget = { obj: subTarget, group: gm.group };
+            gm.group.set({ stroke: "#3498db", strokeWidth: 3, strokeDashArray: [10, 5] });
+            Editor.canvas.requestRenderAll();
+            fillInspector(subTarget, gm.group);
+          }
+        } else if (e.target !== gm.group) {
+          exitGroupEditMode();
         }
       });
 
@@ -3239,6 +3345,12 @@
 
       // Keyboard Shortcuts
       window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && Editor.state.groupEditMode) {
+          exitGroupEditMode();
+          e.preventDefault();
+          return;
+        }
+
         const active = Editor.canvas.getActiveObject();
         if (!active || document.activeElement.tagName === "INPUT") return;
 
@@ -3367,6 +3479,8 @@
               btn.innerText = oldText;
               btn.disabled = false;
             }, 2000);
+            // Auto-refresh preview after save
+            showPreview(true);
           } else {
             throw new Error(data.error || "Unknown error");
           }
@@ -3374,6 +3488,116 @@
           alert("Save failed: " + e.message);
           btn.innerText = oldText;
           btn.disabled = false;
+        }
+      };
+
+      // Extract current template from canvas (mirrors save() logic)
+      function extractCurrentTemplate() {
+        const template = JSON.parse(JSON.stringify(Editor.state.sessionData?.template || {}));
+        const tElements = template.elements || {};
+        Editor.canvas.getObjects().forEach((obj) => {
+          if (obj.data && obj.data.key) {
+            const key = obj.data.key;
+            if (tElements[key]) {
+              tElements[key].x = Math.round(obj.left);
+              tElements[key].y = Math.round(obj.top);
+              tElements[key].visible = obj.visible;
+              tElements[key].scaleX = obj.scaleX;
+              tElements[key].scaleY = obj.scaleY;
+              tElements[key].angle = obj.angle;
+              if (obj.type && obj.type.includes("text")) {
+                tElements[key].fontSize = obj.fontSize;
+                tElements[key].color = obj.fill;
+              }
+            }
+          }
+        });
+        // Canvas dimensions
+        if (!template.canvas) template.canvas = { padding: 80 };
+        template.canvas.width = Editor.canvas.getWidth();
+        template.canvas.height = Editor.canvas.getHeight();
+        // Background position
+        const bg = Editor.canvas.backgroundImage;
+        if (bg && template.background) {
+          template.background.x = Math.round(bg.left);
+          template.background.y = Math.round(bg.top);
+          template.background.scale = bg.scaleX;
+        }
+        // Include custom fabric objects
+        template.fabricJson = Editor.canvas.toJSON(["data"]);
+        return template;
+      }
+
+      // Fetch preview from server and update the overlay image
+      let _previewDebounceTimer = null;
+      async function fetchAndShowPreviewOverlay() {
+        if (!Editor.state.token) return;
+        const overlay = document.getElementById("preview-overlay");
+        const img = document.getElementById("preview-overlay-img");
+        const status = document.getElementById("preview-overlay-status");
+        if (overlay.style.display === "none") return; // Not in preview mode
+
+        status.innerText = "渲染中…";
+        try {
+          const template = extractCurrentTemplate();
+          const res = await fetch(`/api/preview/${Editor.state.token}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ template }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            status.innerText = `渲染失敗: ${err.error || res.status}`;
+            return;
+          }
+          const blob = await res.blob();
+          const newUrl = URL.createObjectURL(blob);
+          if (img._previewUrl) URL.revokeObjectURL(img._previewUrl);
+          img._previewUrl = newUrl;
+          img.src = newUrl;
+          status.innerText = "實際渲染結果 ✓";
+          setTimeout(() => { if (status.innerText === "實際渲染結果 ✓") status.innerText = ""; }, 2000);
+        } catch (e) {
+          status.innerText = `錯誤: ${e.message}`;
+        }
+      }
+
+      window.showPreview = async (autoOpen = false) => {
+        if (!Editor.state.token) return;
+        const modal = document.getElementById("preview-modal");
+        const img = document.getElementById("preview-img");
+        const status = document.getElementById("preview-status");
+
+        if (!autoOpen) modal.style.display = "block";
+        img.style.display = "none";
+        status.innerText = "渲染中，請稍候… Rendering…";
+        modal.style.display = "block";
+
+        try {
+          const template = extractCurrentTemplate();
+
+          const res = await fetch(`/api/preview/${Editor.state.token}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ template }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            status.innerText = `渲染失敗: ${err.error || res.status}`;
+            return;
+          }
+
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          if (img._previewUrl) URL.revokeObjectURL(img._previewUrl);
+          img._previewUrl = url;
+          img.src = url;
+          img.style.display = "block";
+          status.innerText = "機器人使用現有模板實際輸出的範例";
+          modal.style.display = "block";
+        } catch (e) {
+          status.innerText = `錯誤: ${e.message}`;
         }
       };
 

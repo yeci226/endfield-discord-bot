@@ -10,6 +10,8 @@ import {
   ensureAccountBinding,
   withAutoRefresh,
 } from "../utils/accountUtils";
+import { drawDashboard } from "../utils/canvasUtils";
+import { createTranslator } from "../utils/i18n";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -231,6 +233,47 @@ export class WebManager {
     };
     this.app.post("/api/profile/:token", saveProfileHandler);
     this.app.post("/endfield/api/profile/:token", saveProfileHandler);
+
+    // API: Render preview image using actual drawDashboard()
+    const previewHandler = async (
+      req: express.Request,
+      res: express.Response,
+    ) => {
+      const token = req.params.token as string;
+      const session = await this.client.db.get(`profile_edit_token:${token}`);
+      if (!session || session.expiresAt < Date.now()) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+      }
+
+      const cached = this.dataCache.get(token);
+      if (!cached) {
+        return res.status(404).json({ error: "No data cached, reload the editor page first" });
+      }
+
+      const { template: bodyTemplate } = req.body;
+      if (!bodyTemplate) {
+        return res.status(400).json({ error: "Missing template" });
+      }
+
+      const detail = cached.data.detail;
+      if (!detail) {
+        return res.status(404).json({ error: "No card detail available" });
+      }
+
+      try {
+        const locale = cached.data.user?.locale || "tw";
+        const tr = createTranslator(locale);
+        const buffer = await drawDashboard(detail, tr, bodyTemplate);
+        res.setHeader("Content-Type", "image/webp");
+        res.setHeader("Cache-Control", "no-store");
+        res.send(buffer);
+      } catch (err: any) {
+        this.logger.error(`Preview render failed: ${err.message}`);
+        res.status(500).json({ error: "Render failed", detail: err.message });
+      }
+    };
+    this.app.post("/api/preview/:token", previewHandler);
+    this.app.post("/endfield/api/preview/:token", previewHandler);
 
     // Serve HTML
     const editorHandler = (req: express.Request, res: express.Response) => {
