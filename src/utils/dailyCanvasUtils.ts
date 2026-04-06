@@ -18,7 +18,10 @@ GlobalFonts.registerFromPath(
 const redditFontCandidates = [
   path.join(fontDir, "RedditSans-VariableFont_wght.ttf"),
   path.join(process.cwd(), "src/assets/fonts/RedditSans-VariableFont_wght.ttf"),
-  path.join(process.cwd(), "dist/assets/fonts/RedditSans-VariableFont_wght.ttf"),
+  path.join(
+    process.cwd(),
+    "dist/assets/fonts/RedditSans-VariableFont_wght.ttf",
+  ),
 ];
 
 for (const fontPath of redditFontCandidates) {
@@ -350,11 +353,7 @@ export async function buildDailyAttendanceCard(
       isFuture,
     );
 
-    ctx.fillStyle = isToday
-      ? isArknights
-        ? "#f3f6fb"
-        : "#e9fff3"
-      : "#d5deeb";
+    ctx.fillStyle = isToday ? (isArknights ? "#f3f6fb" : "#e9fff3") : "#d5deeb";
     ctx.font = `bold 28px ${textFontBold}`;
     ctx.fillText(labels[i], x + 18, y + 36);
 

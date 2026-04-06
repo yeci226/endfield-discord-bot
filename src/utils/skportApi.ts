@@ -5,7 +5,6 @@ import { Logger } from "./Logger";
 
 const logger = new Logger("SkportAPI");
 
-
 export async function getCardDetail(
   roleId: string,
   serverId: string,
@@ -390,6 +389,7 @@ export async function getUserInfo(
 }
 
 /**
+ * Calls web/v1/user/check which the Skland browser uses after login.
  * Helper to construct the sk-game-role header value
  */
 export function formatSkGameRole(
@@ -400,15 +400,25 @@ export function formatSkGameRole(
   return `${gameId}_${roleId}_${serverId || ""}`;
 }
 
+// Server time offset (in seconds) to compensate for clock skew causing 10003 errors.
+let serverTimeOffsetSeconds = 0;
+
+function getAdjustedTimestamp(): string {
+  return Math.floor(Date.now() / 1000 + serverTimeOffsetSeconds).toString();
+}
+
 // Core Helper
 function getCommonHeaders(cred: string | undefined, locale?: string) {
-  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const timestamp = getAdjustedTimestamp();
   return {
     "user-agent":
-      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 SKPort/1.1.1(100101011)",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
     accept: "*/*",
     "accept-language": formatAcceptLanguage(locale),
     "accept-encoding": "gzip, deflate, br",
+    "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
@@ -419,7 +429,7 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     vname: "1.0.0",
     origin: "https://game.skport.com",
     referer: "https://game.skport.com/",
-    priority: "u=3, i",
+    priority: "u=1, i",
   };
 }
 
@@ -462,10 +472,12 @@ export function generateSignV2(
 export async function refreshSkToken(
   cred: string,
   platform: string = "3",
+  salt?: string,
 ): Promise<string | null> {
   const url = "https://zonai.skport.com/web/v1/auth/refresh";
   const res = await makeRequest<any>("GET", url, {
     cred,
+    salt,
     params: { platform },
   });
 
@@ -487,10 +499,14 @@ export async function refreshAccountToken(
       headers: {
         Accept: "application/json",
         Cookie: cookie,
-        Origin: "https://www.skport.com",
-        Referer: "https://www.skport.com/",
+        Origin: "https://game.skport.com",
+        Referer: "https://game.skport.com/",
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        "x-language": "zh-tw",
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
       },
     });
 
@@ -553,7 +569,7 @@ export async function ensureValidTokens(
 
   // 3. Refresh Salt using Cred
   if (currentCred) {
-    const newSalt = await refreshSkToken(currentCred, platform);
+    const newSalt = await refreshSkToken(currentCred, platform, options.salt);
     if (newSalt) {
       return { cred: currentCred, salt: newSalt };
     }
@@ -648,7 +664,17 @@ export async function makeRequest<T>(
       const resp = error.response;
       if (resp?.status !== 404) {
         if (resp?.status === 401) {
-          logger.warn(`[401 Unauthorized] URL: ${url}`);
+          logger.warn(`[401 Unauthorized] URL: ${url} | body: ${JSON.stringify(resp?.data)}`);
+          // code 10003 = server rejects our timestamp (clock skew). Calibrate offset.
+          if (resp?.data?.code === 10003 && resp?.data?.timestamp) {
+            const serverTs = parseInt(resp.data.timestamp, 10);
+            const localTs = Math.floor(Date.now() / 1000);
+            const newOffset = serverTs - localTs;
+            if (Math.abs(newOffset - serverTimeOffsetSeconds) > 2) {
+              serverTimeOffsetSeconds = newOffset;
+              logger.warn(`[10003] 校正伺服器時間偏移: ${newOffset}s (本地=${localTs}, 伺服器=${serverTs})`);
+            }
+          }
           return { code: 10000, status: 401, ...(resp?.data || {}) };
         } else if (resp?.status === 403) {
           const role = headers?.["sk-game-role"] || "-";
@@ -673,9 +699,14 @@ export async function makeRequest<T>(
 
   let result: any = await execute();
 
-  // Only retry on genuine token expiry (code 10000).
-  // Other 401 sub-codes (e.g. 10003 "請勿修改設備本地時間") are server-side
-  // validation failures — refreshing the token won't help and wastes API calls.
+  // Retry once on clock-skew error (10003) — offset was just calibrated above.
+  if (result && result.code === 10003 && !(options as any)._isRetrying) {
+    (options as any)._isRetrying = true;
+    logger.info(`[10003] 以校正後時間重試請求: ${url}`);
+    result = await execute();
+  }
+
+  // Retry on genuine token expiry (code 10000).
   const isStale = result && result.code === 10000;
   const isBlocked = result && result.status === 403;
 
@@ -727,7 +758,7 @@ export interface SkPoolResponse {
 /**
  * Gryphline OAuth Grant to get exchange code
  */
-async function grantOAuthCode(
+export async function grantOAuthCode(
   token: string,
   appCode: string = "6eb76d4e13aa36e6",
   type: number = 0,
@@ -753,7 +784,7 @@ async function grantOAuthCode(
  */
 async function generateCredByCode(code: string, locale?: string) {
   const url = "https://zonai.skport.com/web/v1/user/auth/generate_cred_by_code";
-  return makeRequest<any>("POST", url, {
+  const res = await makeRequest<any>("POST", url, {
     locale,
     headers: {
       platform: "3",
@@ -770,6 +801,7 @@ async function generateCredByCode(code: string, locale?: string) {
       kind: 1,
     },
   });
+  return res;
 }
 
 export async function verifyToken(cookie: string, locale?: string) {
@@ -848,8 +880,8 @@ export async function verifyToken(cookie: string, locale?: string) {
     if (credResult && credResult.code === 0 && credResult.data?.cred) {
       return {
         ...basicResult,
-        cred: credResult.data.cred, // Attach the user-specific cred
-        token: credResult.data.token, // Attach the salt/token
+        cred: credResult.data.cred,
+        token: credResult.data.token,
       };
     }
   }
@@ -884,24 +916,32 @@ export async function getGamePlayerBinding(
   salt?: string,
   options: any = {},
 ): Promise<GameBinding[] | null> {
-  const url = "https://zonai.skport.com/api/v1/game/player/binding";
-  const headers: any = {};
-  if (cookie) headers.Cookie = cookie;
+  const res = await getGamePlayerBindingResponse(cookie, locale, cred, salt, options);
+  if (res && res.code === 0 && res.data?.list) {
+    return res.data.list;
+  }
+  return null;
+}
 
-  const res = await makeRequest<{
+export async function getGamePlayerBindingResponse(
+  _cookie: string | undefined,
+  locale?: string,
+  cred?: string,
+  salt?: string,
+  options: any = {},
+): Promise<{ code: number; status?: number; data?: { list: GameBinding[] } } | null> {
+  const url = "https://zonai.skport.com/api/v1/game/player/binding";
+  // Do NOT send Cookie header — the browser doesn't and the WAF blocks requests that do.
+  // cred+sign authentication is sufficient.
+  return makeRequest<{
     code: number;
     data: { list: GameBinding[] };
   }>("GET", url, {
     locale,
     cred,
     salt,
-    headers,
     ...options,
   });
-  if (res && res.code === 0) {
-    return res.data.list;
-  }
-  return null;
 }
 
 export async function getWeaponPool(
@@ -1125,19 +1165,21 @@ export async function loginByEmailPassword(
   try {
     const response = await axios.post(url, data, {
       headers: {
-        "accept": "application/json",
+        accept: "application/json",
         "accept-language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6",
         "content-type": "application/json",
-        "origin": "https://www.skport.com",
-        "priority": "u=1, i",
-        "referer": "https://www.skport.com/",
-        "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+        origin: "https://www.skport.com",
+        priority: "u=1, i",
+        referer: "https://www.skport.com/",
+        "sec-ch-ua":
+          '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "cross-site",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
         "x-language": "zh-tw",
       },
     });

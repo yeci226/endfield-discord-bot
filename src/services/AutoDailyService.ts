@@ -266,7 +266,7 @@ export class AutoDailyService {
           (config as any).game_scope,
           "arknights",
         );
-        
+
         const hasChanged =
           (config as any).time !== normalizedTime ||
           (config as any).notify_method !== normalizedNotifyMethod ||
@@ -295,7 +295,9 @@ export class AutoDailyService {
 
       // 簽到任務完成後手動觸發垃圾回收 (GC)
       if (typeof global.gc === "function") {
-        this.logger.info("Triggering manual garbage collection after hourly check...");
+        this.logger.info(
+          "Triggering manual garbage collection after hourly check...",
+        );
         global.gc();
       }
     } catch (error) {
@@ -394,14 +396,25 @@ export class AutoDailyService {
             this.logger.warn(
               `Skipping unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
             );
-            results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("TokenExpired")));
+            results.push(
+              this.makeErrorResult(
+                account.info?.nickname || "Unknown",
+                tr("TokenExpired"),
+              ),
+            );
             failCount++;
             continue;
           }
 
-          const gameScope = this.normalizeGameScope(config.game_scope, "arknights");
+          const gameScope = this.normalizeGameScope(
+            config.game_scope,
+            "arknights",
+          );
 
-          let roles = this.normalizeAttendanceBindings(account.roles, gameScope);
+          let roles = this.normalizeAttendanceBindings(
+            account.roles,
+            gameScope,
+          );
           try {
             const liveBindings = await withAutoRefresh(
               this.client,
@@ -423,7 +436,12 @@ export class AutoDailyService {
           }
 
           if (!roles || roles.length === 0) {
-            results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("Error") || "No roles found"));
+            results.push(
+              this.makeErrorResult(
+                account.info?.nickname || "Unknown",
+                tr("Error") || "No roles found",
+              ),
+            );
             failCount++;
             continue;
           }
@@ -504,7 +522,9 @@ export class AutoDailyService {
                 this.logger.error(
                   `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
                 );
-                results.push(this.makeErrorResult(role.nickname || "Unknown", tr("Error")));
+                results.push(
+                  this.makeErrorResult(role.nickname || "Unknown", tr("Error")),
+                );
                 failCount++;
               }
             }
@@ -513,7 +533,12 @@ export class AutoDailyService {
           this.logger.error(
             `Error processing account ${account.info?.id} for user ${userId}: ${accError}`,
           );
-          results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("Error")));
+          results.push(
+            this.makeErrorResult(
+              account.info?.nickname || "Unknown",
+              tr("Error"),
+            ),
+          );
           failCount++;
         }
       }

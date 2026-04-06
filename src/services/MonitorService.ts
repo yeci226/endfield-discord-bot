@@ -1,6 +1,10 @@
 import { ExtendedClient } from "../structures/Client";
 import { getCardDetail } from "../utils/skportApi";
-import { getAccounts, withAutoRefresh } from "../utils/accountUtils";
+import {
+  getAccounts,
+  getPrimaryBindingRole,
+  withAutoRefresh,
+} from "../utils/accountUtils";
 import { createTranslator } from "../utils/i18n";
 import { Logger } from "../utils/Logger";
 import { ContainerBuilder, MessageFlags, TextDisplayBuilder } from "discord.js";
@@ -84,10 +88,8 @@ export class MonitorService {
       for (const account of accounts) {
         if (account.invalid) continue;
 
-        const roles = account.roles;
-        if (!roles || roles.length === 0) continue;
-
-        const role = roles[0]?.roles?.[0]; // Monitor primary role
+        const primaryBinding = getPrimaryBindingRole(account.roles);
+        const role = primaryBinding?.role; // Monitor primary role
         if (!role) continue;
 
         const cardRes = (await withAutoRefresh(

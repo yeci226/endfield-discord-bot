@@ -14,6 +14,7 @@ import { ExtendedClient } from "../../structures/Client";
 import {
   ensureAccountBinding,
   getAccounts,
+  normalizeBindingEntries,
   saveAccounts,
   withAutoRefresh,
 } from "../../utils/accountUtils";
@@ -269,24 +270,8 @@ const command: Command = {
       // AUTO-MIGRATION & REBIND LOGIC - ensures account.roles is updated if possible
       await ensureAccountBinding(account, userId, db, t.lang);
 
-      // Prefer live bindings so AK + Endfield can both be processed.
-      let roles = normalizeAttendanceBindings(account.roles, gameScope);
-      try {
-        const liveBindings = await withAutoRefresh(
-          client,
-          userId,
-          account,
-          (c: string, s: string, options: any) =>
-            getGamePlayerBinding(account.cookie, t.lang, c, s, options),
-          t.lang,
-        );
-        const liveRoles = normalizeAttendanceBindings(liveBindings, gameScope);
-        if (liveRoles.length > 0) {
-          roles = liveRoles;
-        }
-      } catch {
-        // Fallback to stored roles when binding refresh fails.
-      }
+      // ensureAccountBinding 已同步最新 roles，直接使用儲存的資料
+      const roles = normalizeAttendanceBindings(account.roles, gameScope);
 
       if (!roles || roles.length === 0) continue;
 
@@ -584,11 +569,7 @@ function normalizeAttendanceBindings(
         ? [entry.defaultRole]
         : [];
 
-    if (
-      roles.length === 0 &&
-      gameId === 1 &&
-      (entry?.uid || entry?.nickName)
-    ) {
+    if (roles.length === 0 && gameId === 1 && (entry?.uid || entry?.nickName)) {
       roles = [
         {
           roleId: String(entry?.uid || ""),
@@ -662,35 +643,48 @@ command.autocomplete = async (client, interaction, db) => {
 
     const query = String(focused.value || "").toLowerCase();
     const isZh = interaction.locale === "zh-TW";
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
     let hasRoleUpdates = false;
     const accountLabels = await Promise.all(
       accounts.map(async (acc: any, index: number) => {
-        let previewBindings = acc?.roles;
-        try {
-          const liveBindings = await withAutoRefresh(
-            client,
-            interaction.user.id,
-            acc,
-            (c: string, s: string, options: any) =>
-              getGamePlayerBinding(acc.cookie, interaction.locale, c, s, options),
-            interaction.locale,
-          );
+        const isRecent = Date.now() - (acc.lastRefresh || 0) < TWO_HOURS;
 
-          if (Array.isArray(liveBindings) && liveBindings.length > 0) {
-            previewBindings = liveBindings;
-            const oldValue = JSON.stringify(acc.roles || []);
-            const newValue = JSON.stringify(liveBindings);
-            if (oldValue !== newValue) {
-              acc.roles = liveBindings;
-              hasRoleUpdates = true;
+        // 若 roles 已在 2 小時內同步過，直接用快取，不重打 API
+        if (!isRecent || !Array.isArray(acc.roles) || acc.roles.length === 0) {
+          try {
+            const liveBindings = await withAutoRefresh(
+              client,
+              interaction.user.id,
+              acc,
+              (c: string, s: string, options: any) =>
+                getGamePlayerBinding(
+                  acc.cookie,
+                  interaction.locale,
+                  c,
+                  s,
+                  options,
+                ),
+              interaction.locale,
+            );
+
+            const normalizedBindings = normalizeBindingEntries(liveBindings);
+
+            if (normalizedBindings.length > 0) {
+              const oldValue = JSON.stringify(acc.roles || []);
+              const newValue = JSON.stringify(normalizedBindings);
+              if (oldValue !== newValue) {
+                acc.roles = normalizedBindings;
+                acc.lastRefresh = Date.now();
+                hasRoleUpdates = true;
+              }
             }
+          } catch {
+            // Keep cached bindings if live query fails.
           }
-        } catch {
-          // Keep cached bindings if live query fails.
         }
 
         return {
-          name: buildAccountAutocompleteLabel(acc, previewBindings, isZh),
+          name: buildAccountAutocompleteLabel(acc, acc.roles, isZh),
           value: String(index),
         };
       }),

@@ -23,6 +23,7 @@ import { ExtendedClient } from "../../structures/Client";
 import { getCardDetail, CardDetailResponse } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
+import { getPrimaryBindingRole } from "../../utils/accountUtils";
 import {
   ProfileTemplate,
   ProfileElement,
@@ -157,7 +158,7 @@ const command: Command = {
             targetUserId,
             account,
             (c: string, s: string, options: any) =>
-              getCardDetail(roleId, serverId, uid, tr.lang, c, s, options),
+              getCardDetail(roleId, serverId, account.info?.id || uid, tr.lang, c, s, options),
             tr.lang,
           );
         } catch (e: any) {
@@ -243,7 +244,7 @@ const command: Command = {
           targetUserId,
           account,
           (c: string, s: string, options: any) =>
-            getCardDetail(roleId, serverId, uid, tr.lang, c, s, options),
+            getCardDetail(roleId, serverId, account.info?.id || uid, tr.lang, c, s, options),
           tr.lang,
         );
       } catch (e: any) {
@@ -504,8 +505,9 @@ const command: Command = {
       return;
     }
 
-    const role = account.roles[0]?.roles?.[0];
-    const uid = account.roles[0].uid || account.info?.id;
+    const primaryBinding = getPrimaryBindingRole(account.roles);
+    const role = primaryBinding?.role;
+    const uid = primaryBinding?.binding?.uid || account.info?.id;
 
     if (!role) {
       if (!(interaction.deferred && (interaction as any).ephemeral)) {

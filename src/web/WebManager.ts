@@ -8,6 +8,7 @@ import { getCardDetail } from "../utils/skportApi";
 import {
   getAccounts,
   ensureAccountBinding,
+  getPrimaryBindingRole,
   withAutoRefresh,
 } from "../utils/accountUtils";
 import { drawDashboard } from "../utils/canvasUtils";
@@ -167,10 +168,11 @@ export class WebManager {
       if (!account) return res.status(404).json({ error: "Account not found" });
 
       await ensureAccountBinding(account, userId, this.client.db, "tw");
-      const role = account.roles?.[0]?.roles?.[0];
+      const primaryBinding = getPrimaryBindingRole(account.roles);
+      const role = primaryBinding?.role;
       if (!role) return res.status(404).json({ error: "Role not found" });
 
-      const uid = account.info?.id || account.roles?.[0]?.uid;
+      const uid = account.info?.id || primaryBinding?.binding?.uid;
       const cardRes = await withAutoRefresh(
         this.client,
         userId,

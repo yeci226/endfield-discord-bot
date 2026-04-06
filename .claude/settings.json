@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ':*)",
+      "Bash(pm2 restart:*)",
+      "Bash(npx pm2:*)",
+      "Bash(/c/Users/shawn/.pm2/..)",
+      "Bash(PM2_HOME=/c/Users/shawn/.pm2 node /c/Users/shawn/AppData/Local/npm-cache/_npx/5f7878ce38f1eb13/node_modules/.bin/pm2 list)",
+      "Bash(PM2_HOME=/c/Users/shawn/.pm2 node /c/Users/shawn/AppData/Local/npm-cache/_npx/5f7878ce38f1eb13/node_modules/pm2/bin/pm2 list)",
+      "Bash(sqlite3 json.sqlite \".tables\")"
+    ]
+  }
+}

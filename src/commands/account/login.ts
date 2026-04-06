@@ -63,7 +63,12 @@ async function fetchBindingSnapshot(
   locale: string,
   cred: string,
   salt?: string,
-): Promise<{ roles: any[]; raw: any[]; source: "cookie" | "no-cookie" | "none" }> {
+): Promise<{
+  roles: any[];
+  raw: any[];
+  source: "cookie" | "no-cookie" | "none";
+}> {
+  // Skport binding API — no Cookie header (WAF blocks requests that include it)
   const first = await getGamePlayerBinding(cookie, locale, cred, salt);
   let flattened = flattenBindingList(first);
   if (flattened.length > 0) {
@@ -698,7 +703,9 @@ const command: Command = {
             result.token,
           );
           const roles = snapshot.roles;
-          const previousRoles = Array.isArray(exists?.roles) ? exists.roles : [];
+          const previousRoles = Array.isArray(exists?.roles)
+            ? exists.roles
+            : [];
           const mergedRoles = roles.length > 0 ? roles : previousRoles;
 
           const accountData = {
@@ -741,10 +748,7 @@ const command: Command = {
 
           // Construct Container
           const container = new ContainerBuilder();
-          const gameSummary = formatBoundGamesSummary(
-            mergedRoles,
-            tr,
-          );
+          const gameSummary = formatBoundGamesSummary(mergedRoles, tr);
           const bindingDebug =
             mergedRoles.length === 0
               ? `\n\`\`\`${formatBindingDebugLog(snapshot.raw)}\`\`\``
@@ -896,10 +900,7 @@ async function handleLoginSuccess(
     await saveAccounts(db, userId, accounts);
 
     const container = new ContainerBuilder();
-    const gameSummary = formatBoundGamesSummary(
-      mergedRoles,
-      tr,
-    );
+    const gameSummary = formatBoundGamesSummary(mergedRoles, tr);
     const bindingDebug =
       mergedRoles.length === 0
         ? `\n\`\`\`${formatBindingDebugLog(snapshot.raw)}\`\`\``

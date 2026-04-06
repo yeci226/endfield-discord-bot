@@ -167,7 +167,8 @@ export async function processRoleAttendance(
       }
     }
 
-    const rewardName = rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
+    const rewardName =
+      rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
 
     const availableIndex = calendar.findIndex((r) => r.available);
     const firstUndoneIndex = calendar.findIndex((r) => !r.done);
@@ -184,7 +185,8 @@ export async function processRoleAttendance(
             ? firstUndoneIndex
             : resolvedLastDoneIndex;
 
-    const currentRewardEntry = currentIndex >= 0 ? calendar[currentIndex] : null;
+    const currentRewardEntry =
+      currentIndex >= 0 ? calendar[currentIndex] : null;
 
     const todayAnchorIndex =
       availableIndex >= 0
@@ -246,8 +248,9 @@ export async function processRoleAttendance(
         };
       });
 
-    const nextRewards = Array.from({ length: 3 }, (_, i) =>
-      nextRewardsRaw[i] ?? { name: "-", icon: "", endOfPeriod: true },
+    const nextRewards = Array.from(
+      { length: 3 },
+      (_, i) => nextRewardsRaw[i] ?? { name: "-", icon: "", endOfPeriod: true },
     );
 
     let firstRewardName = "";

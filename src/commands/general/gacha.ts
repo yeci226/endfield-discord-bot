@@ -27,6 +27,7 @@ import { getCharacterPool, getWeaponPool } from "../../utils/skportApi";
 import {
   ensureAccountBinding,
   getAccounts,
+  getPrimaryBindingRole,
   withAutoRefresh,
 } from "../../utils/accountUtils";
 import {
@@ -1482,10 +1483,10 @@ const command: Command = {
           let targetUid = targetUidOption;
           if (!targetUid) {
             const accounts = await getAccounts(db, interaction.user.id);
-            const firstRole = accounts?.[0]?.roles?.[0]?.roles?.[0];
-            const firstBinding = accounts?.[0]?.roles?.[0];
-            const gameUid =
-              firstRole?.roleId || firstRole?.uid || firstBinding?.uid;
+            const primaryBinding = getPrimaryBindingRole(accounts?.[0]?.roles);
+            const firstRole = primaryBinding?.role;
+            const firstBinding = primaryBinding?.binding;
+            const gameUid = firstRole?.roleId || firstBinding?.uid;
             if (gameUid) targetUid = `EF_${gameUid}`;
           }
 

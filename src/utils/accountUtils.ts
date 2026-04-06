@@ -1,6 +1,7 @@
 import { CustomDatabase } from "./Database";
 import {
   getGamePlayerBinding,
+  getGamePlayerBindingResponse,
   getUserInfo,
   verifyToken,
   refreshSkToken,
@@ -21,6 +22,40 @@ function flattenBindingList(bindings: any[] | null | undefined): any[] {
     }
   }
   return out;
+}
+
+export function normalizeBindingEntries(bindings: any[] | null | undefined): any[] {
+  if (!Array.isArray(bindings)) return [];
+
+  const out: any[] = [];
+  for (const item of bindings) {
+    if (Array.isArray(item?.bindingList)) {
+      out.push(...item.bindingList);
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
+export function getPrimaryBindingRole(
+  bindings: any[] | null | undefined,
+): { binding: any; role: any } | null {
+  const normalized = normalizeBindingEntries(bindings);
+
+  for (const binding of normalized) {
+    const roles = Array.isArray(binding?.roles)
+      ? binding.roles
+      : binding?.defaultRole
+        ? [binding.defaultRole]
+        : [];
+    const role = roles[0];
+    if (role) {
+      return { binding, role };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -110,14 +145,16 @@ export async function ensureAccountBinding(
   if (!forceRefresh && account.cred && account.salt) {
     try {
       logger.info(`[Step 1] 檢查現有憑證是否有效 for ${account.info?.id}...`);
-      const res = await getUserInfo(
-        account.cred,
-        lang,
-        account.salt
-      );
+      const res = await getUserInfo(account.cred, lang, account.salt);
       if (res && res.code === 0) {
         valid = true;
-        logger.success(`[Step 1] 憑證有效`);
+        logger.success(`[Step 1] 憑證有效，主動刷新 salt 以確保後續 API 可用...`);
+        // Binding endpoint 對 salt 過期容忍度嚴格，即使 getUserInfo 成功也需刷新
+        const refreshed = await refreshSkToken(account.cred, "3", newSalt);
+        if (refreshed) {
+          newSalt = refreshed;
+          logger.success(`[Step 1] salt 已更新`);
+        }
       }
     } catch (e: any) {
       logger.warn(`[Step 1] 憑證驗證失敗: ${e.message}`);
@@ -127,15 +164,11 @@ export async function ensureAccountBinding(
   // Step 2: 嘗試刷新 salt
   if (!valid && account.cred) {
     logger.info(`[Step 2] 嘗試 refreshSkToken for ${account.info?.id}...`);
-    const newToken = await refreshSkToken(account.cred);
+    const newToken = await refreshSkToken(account.cred, "3", newSalt);
     if (newToken) {
       newSalt = newToken;
       try {
-        const res = await getUserInfo(
-          account.cred,
-          lang,
-          newSalt
-        );
+        const res = await getUserInfo(account.cred, lang, newSalt);
         if (res && res.code === 0) {
           valid = true;
           logger.success(`[Step 2] salt 刷新後憑證有效`);
@@ -165,11 +198,7 @@ export async function ensureAccountBinding(
         newSalt = verifyRes.token;
         account.lastRefresh = now;
         try {
-          const res = await getUserInfo(
-            newCred,
-            lang,
-            newSalt
-          );
+          const res = await getUserInfo(newCred, lang, newSalt);
           if (res && res.code === 0) {
             valid = true;
             logger.success(`[Step 3] cookie/token 刷新後憑證有效`);
@@ -212,34 +241,68 @@ export async function ensureAccountBinding(
   }
 
   // Sync latest game bindings (Arknights + Endfield) for migration and autocomplete.
+  // The binding endpoint is called without Cookie (WAF blocks requests that include it).
   let latestBindings: any[] = Array.isArray(account.roles) ? account.roles : [];
   try {
-    const bindings = await getGamePlayerBinding(
-      newCookie || account.cookie,
-      lang,
-      newCred,
-      newSalt,
-    );
-    const flattened = flattenBindingList(bindings);
-    if (flattened.length > 0) {
-      latestBindings = flattened;
+    const fetchBindings = async () =>
+      getGamePlayerBindingResponse(undefined, lang, newCred, newSalt);
+
+    let bindingRes = await fetchBindings();
+    if (bindingRes && bindingRes.code === 0) {
+      const flattened = flattenBindingList(bindingRes.data?.list);
+      if (flattened.length > 0) {
+        latestBindings = flattened;
+      }
+    } else if (bindingRes?.status === 401 && bindingRes?.code !== 10003 && newCred) {
+      // Refresh salt and retry
+      const refreshedSalt = await refreshSkToken(newCred, "3", newSalt);
+      if (refreshedSalt) {
+        newSalt = refreshedSalt;
+        bindingRes = await fetchBindings();
+        if (bindingRes && bindingRes.code === 0) {
+          const flattened = flattenBindingList(bindingRes.data?.list);
+          if (flattened.length > 0) {
+            latestBindings = flattened;
+          }
+        }
+      }
+
+      // Last resort: refresh cookie and re-verify cred+salt, then retry binding
+      if (!(bindingRes && bindingRes.code === 0) && account.cookie) {
+        const refreshedToken = await refreshAccountToken(account.cookie);
+        if (refreshedToken) {
+          newCookie = `ACCOUNT_TOKEN=${refreshedToken}`;
+          const verifyRes = await verifyToken(newCookie, lang);
+          if (verifyRes && verifyRes.status === 0 && verifyRes.cred && verifyRes.token) {
+            newCred = verifyRes.cred;
+            newSalt = verifyRes.token;
+            const retryRes = await fetchBindings();
+            if (retryRes && retryRes.code === 0) {
+              const flattened = flattenBindingList(retryRes.data?.list);
+              if (flattened.length > 0) {
+                latestBindings = flattened;
+              }
+            }
+          }
+        }
+      }
     }
   } catch (e: any) {
     logger.warn(`[Binding Sync] Failed to refresh bindings: ${e.message}`);
   }
 
-  // 若有更新憑證資訊則存回 DB
+  // 若有更新憑證資訊則存回 DB；無論如何都更新 lastRefresh 讓 isRecent 快取生效
   const credsChanged = account.cred !== newCred || account.salt !== newSalt;
   const cookieChanged = account.cookie !== newCookie;
-  const heartbeatUpdated = account.lastRefresh !== oldLastRefresh;
   const rolesChanged =
-    JSON.stringify(account.roles || []) !== JSON.stringify(latestBindings || []);
-  if (credsChanged || cookieChanged || heartbeatUpdated || rolesChanged) {
+    JSON.stringify(account.roles || []) !==
+    JSON.stringify(latestBindings || []);
+  if (credsChanged || cookieChanged || rolesChanged || !isRecent) {
     account.cred = newCred;
     account.salt = newSalt;
     account.cookie = newCookie;
     account.roles = latestBindings;
-    // account.lastRefresh 已於上方更新
+    account.lastRefresh = now;
     modified = true;
     // Save back to DB
     const allAccounts = await getAccounts(db, userId);
