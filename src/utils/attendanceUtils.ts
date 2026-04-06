@@ -1,4 +1,8 @@
-import { getAttendanceList, executeAttendance } from "./skportApi";
+import {
+  executeAttendance,
+  formatSkGameRole,
+  getAttendanceList,
+} from "./skportApi";
 import { Logger } from "./Logger";
 
 const logger = new Logger("AttendanceUtils");
@@ -18,10 +22,26 @@ export async function processRoleAttendance(
   tr: any,
   options: any = {},
 ) {
-  const gameRoleStr = `3_${role.roleId}_${role.serverId}`;
+  const gameRoleStr = formatSkGameRole(
+    gameId,
+    String(role.roleId || ""),
+    String(role.serverId || ""),
+  );
 
   try {
+    if (gameId !== 1 && gameId !== 3) {
+      return {
+        roleId: role.roleId,
+        nickname: role.nickname,
+        level: role.level,
+        error: true,
+        message: tr("Error") || "Unsupported game for attendance",
+      };
+    }
+
     const res = await getAttendanceList(
+      gameId,
+      String(role.roleId || ""),
       gameRoleStr,
       cookie,
       lang,
@@ -49,6 +69,8 @@ export async function processRoleAttendance(
 
     if (isClaim && !status.hasToday) {
       claimResult = await executeAttendance(
+        gameId,
+        String(role.roleId || ""),
         gameRoleStr,
         cookie,
         lang,
@@ -64,16 +86,13 @@ export async function processRoleAttendance(
         signedNow = claimResult.code === 0;
 
         if (claimResult.code === 0 && claimResult.data?.awardIds) {
-          // If we got reward info in the response, we can use it directly
           status.awardIds = claimResult.data.awardIds;
           status.hasToday = true;
-          // Also mark the calendar entry as done so totalDays counts correctly
           const availableEntry = status.calendar.find((d: any) => d.available);
           if (availableEntry) {
             availableEntry.done = true;
             availableEntry.available = false;
           }
-          // Optionally update resourceInfoMap if it's also provided in the claim response
           if (claimResult.data.resourceInfoMap) {
             status.resourceInfoMap = {
               ...status.resourceInfoMap,
@@ -81,8 +100,9 @@ export async function processRoleAttendance(
             };
           }
         } else {
-          // Fallback: Refresh status if reward info wasn't in the claim response or it was code 10001
           const newStatus = await getAttendanceList(
+            gameId,
+            String(role.roleId || ""),
             gameRoleStr,
             cookie,
             lang,
@@ -95,54 +115,66 @@ export async function processRoleAttendance(
       }
     }
 
-    // Extract reward info
-    const totalDays = status.calendar.filter((d) => d.done).length;
-    const calendarTotalDays = Array.isArray(status.calendar)
-      ? status.calendar.length
-      : 0;
+    const calendar = Array.isArray(status.calendar) ? status.calendar : [];
+    const resourceInfoMap = status.resourceInfoMap || {};
+    const awardIds = Array.isArray(status.awardIds) ? status.awardIds : [];
+
+    const getEntryResourceId = (entry: any): string => {
+      return String(entry?.awardId || entry?.resourceId || "");
+    };
+
+    const getEntryCount = (entry: any): number | undefined => {
+      const raw = Number(entry?.count);
+      return Number.isFinite(raw) && raw > 0 ? raw : undefined;
+    };
+
+    const getRewardText = (resource: any, fallbackCount?: number): string => {
+      if (!resource) return tr("None") || "None";
+      const count =
+        Number.isFinite(Number(fallbackCount)) && Number(fallbackCount) > 0
+          ? Number(fallbackCount)
+          : Number(resource.count || 0);
+      return count > 0 ? `${resource.name} x${count}` : resource.name;
+    };
+
+    const totalDays = calendar.filter((d) => d.done).length;
+    const calendarTotalDays = calendar.length;
 
     let rewards: string[] = [];
     let rewardIcon = "";
 
-    // 1. Try to get rewards from awardIds (the prioritized source from Python code)
-    if (status.awardIds && status.awardIds.length > 0) {
-      for (const award of status.awardIds) {
-        const resource = status.resourceInfoMap?.[award.id];
+    if (awardIds.length > 0) {
+      for (const award of awardIds) {
+        const resource = resourceInfoMap?.[award.id];
         if (resource) {
           if (!rewardIcon) rewardIcon = resource.icon;
-          rewards.push(`${resource.name} x${resource.count}`);
+          rewards.push(getRewardText(resource, getEntryCount(award)));
         }
       }
     }
 
-    // 2. Fallback to calendar if rewards empty
     if (rewards.length === 0) {
       const todayReward =
-        status.calendar.find((r) => r.available) ||
-        [...status.calendar].reverse().find((r) => r.done);
+        calendar.find((r) => r.available) ||
+        [...calendar].reverse().find((r) => r.done);
 
       if (todayReward) {
-        const resInfo = status.resourceInfoMap?.[todayReward.awardId];
+        const resInfo = resourceInfoMap?.[getEntryResourceId(todayReward)];
         if (resInfo) {
-          rewards.push(`${resInfo.name} x${resInfo.count}`);
+          rewards.push(getRewardText(resInfo, getEntryCount(todayReward)));
           rewardIcon = resInfo.icon;
         }
       }
     }
 
-    const rewardName =
-      rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
+    const rewardName = rewards.length > 0 ? rewards.join("\n") : tr("None") || "None";
 
-    const availableIndex = status.calendar.findIndex((r) => r.available);
-    const firstUndoneIndex = status.calendar.findIndex((r) => !r.done);
-    const lastDoneIndex = [...status.calendar]
-      .reverse()
-      .findIndex((r) => r.done);
+    const availableIndex = calendar.findIndex((r) => r.available);
+    const firstUndoneIndex = calendar.findIndex((r) => !r.done);
+    const lastDoneIndex = [...calendar].reverse().findIndex((r) => r.done);
     const resolvedLastDoneIndex =
-      lastDoneIndex >= 0 ? status.calendar.length - 1 - lastDoneIndex : -1;
+      lastDoneIndex >= 0 ? calendar.length - 1 - lastDoneIndex : -1;
 
-    // If today's attendance is already done, the current reward should be the latest done day,
-    // not the first pending day.
     const currentIndex =
       status.hasToday || signedNow
         ? resolvedLastDoneIndex
@@ -152,8 +184,7 @@ export async function processRoleAttendance(
             ? firstUndoneIndex
             : resolvedLastDoneIndex;
 
-    const currentRewardEntry =
-      currentIndex >= 0 ? status.calendar[currentIndex] : null;
+    const currentRewardEntry = currentIndex >= 0 ? calendar[currentIndex] : null;
 
     const todayAnchorIndex =
       availableIndex >= 0
@@ -168,45 +199,51 @@ export async function processRoleAttendance(
       todayAnchorIndex >= 0 ? todayAnchorIndex + 1 : 0;
     const missedDaysThisMonth =
       todayAnchorIndex > 0
-        ? status.calendar.slice(0, todayAnchorIndex).filter((d) => !d.done)
-            .length
+        ? calendar.slice(0, todayAnchorIndex).filter((d) => !d.done).length
         : 0;
 
     const yesterdayRewardEntry =
-      currentIndex > 0 ? status.calendar[currentIndex - 1] : null;
+      currentIndex > 0 ? calendar[currentIndex - 1] : null;
 
     const currentResource = currentRewardEntry
-      ? status.resourceInfoMap?.[currentRewardEntry.awardId]
+      ? resourceInfoMap?.[getEntryResourceId(currentRewardEntry)]
       : null;
 
     const todayReward = {
       name: currentResource
-        ? `${currentResource.name} x${currentResource.count}`
+        ? getRewardText(currentResource, getEntryCount(currentRewardEntry))
         : rewardName,
       icon: currentResource?.icon || rewardIcon,
+      resourceId: getEntryResourceId(currentRewardEntry),
       done: !!(status.hasToday || signedNow),
     };
 
     const yesterdayResource = yesterdayRewardEntry
-      ? status.resourceInfoMap?.[yesterdayRewardEntry.awardId]
+      ? resourceInfoMap?.[getEntryResourceId(yesterdayRewardEntry)]
       : null;
 
     const yesterdayReward = {
       name: yesterdayResource
-        ? `${yesterdayResource.name} x${yesterdayResource.count}`
+        ? getRewardText(yesterdayResource, getEntryCount(yesterdayRewardEntry))
         : tr("None") || "None",
       icon: yesterdayResource?.icon || "",
+      resourceId: getEntryResourceId(yesterdayRewardEntry),
       done: !!yesterdayRewardEntry?.done,
     };
 
-    const nextRewardsRaw = status.calendar
+    const nextRewardsRaw = calendar
       .slice(currentIndex + 1, currentIndex + 4)
       .map((dayReward) => {
-        const reward = status.resourceInfoMap?.[dayReward.awardId];
+        const rewardId = getEntryResourceId(dayReward);
+        const reward = resourceInfoMap?.[rewardId];
         if (!reward) {
-          return { name: tr("None") || "None", icon: "" };
+          return { name: tr("None") || "None", icon: "", resourceId: rewardId };
         }
-        return { name: `${reward.name} x${reward.count}`, icon: reward.icon };
+        return {
+          name: getRewardText(reward, getEntryCount(dayReward)),
+          icon: reward.icon,
+          resourceId: rewardId,
+        };
       });
 
     const nextRewards = Array.from({ length: 3 }, (_, i) =>
@@ -214,9 +251,13 @@ export async function processRoleAttendance(
     );
 
     let firstRewardName = "";
-    if (status.first && status.first.length > 0) {
-      // Find a newcomer reward that is either currently available or was just claimed
-      const targetFirst = status.first.find((f) => {
+    const firstList = Array.isArray(status.first)
+      ? status.first
+      : status.first
+        ? [status.first]
+        : [];
+    if (firstList.length > 0) {
+      const targetFirst = firstList.find((f) => {
         if (f.available && !f.done) return true;
         if (signedNow && status.awardIds?.some((a) => a.id === f.awardId))
           return true;
@@ -224,9 +265,9 @@ export async function processRoleAttendance(
       });
 
       if (targetFirst) {
-        const fRes = status.resourceInfoMap?.[targetFirst.awardId];
+        const fRes = resourceInfoMap?.[getEntryResourceId(targetFirst)];
         if (fRes) {
-          firstRewardName = `${fRes.name} x${fRes.count}`;
+          firstRewardName = getRewardText(fRes, getEntryCount(targetFirst));
         }
       }
     }
@@ -236,17 +277,17 @@ export async function processRoleAttendance(
       nickname: role.nickname,
       level: role.level,
       hasToday: status.hasToday || signedNow,
-      signedNow: signedNow,
-      totalDays: totalDays,
+      signedNow,
+      totalDays,
       calendarTotalDays,
-      rewardName: rewardName,
-      rewardIcon: rewardIcon,
+      rewardName,
+      rewardIcon,
       yesterdayReward,
       todayReward,
       nextRewards,
       checkedDaysThisMonth,
       missedDaysThisMonth,
-      firstRewardName: firstRewardName,
+      firstRewardName,
       error: !status.hasToday && !signedNow && isClaim,
       message: claimResult?.message,
     };

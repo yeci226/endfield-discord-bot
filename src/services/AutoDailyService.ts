@@ -1,9 +1,5 @@
 import { ExtendedClient } from "../structures/Client";
-import {
-  executeAttendance,
-  formatSkGameRole,
-  getAttendanceList,
-} from "../utils/skportApi";
+import { formatSkGameRole, getGamePlayerBinding } from "../utils/skportApi";
 import {
   ensureAccountBinding,
   getAccounts,
@@ -20,6 +16,9 @@ import {
 } from "../utils/dailyCanvasUtils";
 import { Readable } from "stream";
 
+type DailyGameScope = "endfield" | "arknights" | "both";
+const AUTO_DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
+
 interface AutoDailyConfig {
   time: number; // 0-23
   auto_balance: boolean;
@@ -27,13 +26,13 @@ interface AutoDailyConfig {
   notify_method: "dm" | "channel";
   channelId?: string;
   mention?: boolean;
+  game_scope?: DailyGameScope;
 }
 
 export class AutoDailyService {
   private client: ExtendedClient;
   private interval: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
-  private isReady: boolean = false;
   private logger: Logger;
   private cardCache = new Map<string, { buffer: Buffer; expireAt: number }>();
   private readonly CARD_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -78,13 +77,89 @@ export class AutoDailyService {
     return parsed.length > 0 ? parsed[0] : fallback;
   }
 
+  private normalizeAttendanceBindings(
+    raw: any,
+    scope: DailyGameScope,
+  ): Array<{ gameId: number; roles: any[] }> {
+    const normalized: Array<{ gameId: number; roles: any[] }> = [];
+
+    const pushBinding = (entry: any) => {
+      const gameId = Number(entry?.gameId || 0);
+      if (!AUTO_DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
+      if (!this.isGameInScope(gameId, scope)) return;
+
+      let roles = Array.isArray(entry?.roles)
+        ? entry.roles
+        : entry?.defaultRole
+          ? [entry.defaultRole]
+          : [];
+
+      if (
+        roles.length === 0 &&
+        gameId === 1 &&
+        (entry?.uid || entry?.nickName)
+      ) {
+        roles = [
+          {
+            roleId: String(entry?.uid || ""),
+            serverId: String(entry?.channelMasterId || ""),
+            nickname: String(entry?.nickName || entry?.uid || "Arknights"),
+            level: 0,
+            serverName: String(entry?.channelName || entry?.gameName || "-"),
+          },
+        ];
+      }
+
+      if (roles.length > 0) {
+        normalized.push({ gameId, roles });
+      }
+    };
+
+    if (!Array.isArray(raw)) return normalized;
+
+    for (const item of raw) {
+      if (Array.isArray(item?.bindingList)) {
+        for (const binding of item.bindingList) {
+          pushBinding(binding);
+        }
+        continue;
+      }
+      pushBinding(item);
+    }
+
+    return normalized;
+  }
+
+  private normalizeGameScope(
+    value: unknown,
+    fallback: DailyGameScope,
+  ): DailyGameScope {
+    if (value === "endfield" || value === "arknights" || value === "both") {
+      return value;
+    }
+    return fallback;
+  }
+
+  private isGameInScope(gameId: number, scope: DailyGameScope): boolean {
+    if (scope === "both") return gameId === 1 || gameId === 3;
+    if (scope === "arknights") return gameId === 1;
+    return gameId === 3;
+  }
+
   constructor(client: ExtendedClient) {
     this.client = client;
     this.logger = new Logger("AutoDaily");
   }
 
   private makeCardCacheKey(payload: DailyCardPayload): string {
-    return JSON.stringify(payload);
+    return [
+      payload.gameId || 0,
+      payload.roleName,
+      payload.totalDays,
+      payload.todayClaimedNow ? "1" : "0",
+      payload.todayReward.name,
+      payload.todayReward.done ? "1" : "0",
+    ].join("|");
   }
 
   private pruneCardCache(now: number) {
@@ -129,7 +204,6 @@ export class AutoDailyService {
     await this.runHourlyCheck();
 
     this.scheduleNextRun();
-    this.isReady = true;
     this.logger.success("Service started.");
   }
 
@@ -138,7 +212,6 @@ export class AutoDailyService {
       clearTimeout(this.interval);
       this.interval = null;
     }
-    this.isReady = false;
     this.logger.info("Service stopped.");
   }
 
@@ -189,16 +262,22 @@ export class AutoDailyService {
         const normalizedNotifyMethod =
           (config as any).notify_method === "channel" ? "channel" : "dm";
         const normalizedMention = (config as any).mention !== false;
+        const normalizedGameScope = this.normalizeGameScope(
+          (config as any).game_scope,
+          "arknights",
+        );
         
         const hasChanged =
           (config as any).time !== normalizedTime ||
           (config as any).notify_method !== normalizedNotifyMethod ||
-          (config as any).mention !== normalizedMention;
+          (config as any).mention !== normalizedMention ||
+          (config as any).game_scope !== normalizedGameScope;
 
         if (hasChanged) {
           (config as any).time = normalizedTime;
           (config as any).notify_method = normalizedNotifyMethod;
           (config as any).mention = normalizedMention;
+          (config as any).game_scope = normalizedGameScope;
           await this.client.db.set(id, config);
         }
 
@@ -229,11 +308,26 @@ export class AutoDailyService {
     }
   }
 
+  private makeErrorResult(roleName: string, status: string) {
+    return {
+      roleName,
+      roleMeta: "",
+      rewardName: "",
+      rewardIcon: "",
+      totalDays: 0,
+      calendarTotalDays: 0,
+      todayClaimedNow: false,
+      status,
+      isError: true as const,
+    };
+  }
+
   public async processUser(userId: string, config: AutoDailyConfig) {
     try {
       const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
-      const lastAutoDaily = await this.client.db.get(`${userId}.lastAutoDaily`);
-      if (lastAutoDaily === today) {
+      // Atomically claim today's slot — guards against concurrent cluster processes
+      // (graceful recluster can briefly run two cluster-0s simultaneously).
+      if (!this.client.db.claimSlot(`${userId}.lastAutoDaily`, today)) {
         this.logger.info(
           `Skipping user ${userId}: already processed for ${today}.`,
         );
@@ -248,6 +342,7 @@ export class AutoDailyService {
       let failCount = 0;
       this.logger.info(`Starting auto-daily processing for user ${userId}`);
       const results: {
+        gameId?: number;
         roleName: string;
         roleMeta: string;
         rewardName: string;
@@ -259,9 +354,24 @@ export class AutoDailyService {
         todayClaimedNow: boolean;
         checkedDaysThisMonth?: number;
         missedDaysThisMonth?: number;
-        yesterdayReward?: { name: string; icon?: string; done?: boolean };
-        todayReward?: { name: string; icon?: string; done?: boolean };
-        nextRewards?: { name: string; icon?: string; done?: boolean }[];
+        yesterdayReward?: {
+          name: string;
+          icon?: string;
+          resourceId?: string;
+          done?: boolean;
+        };
+        todayReward?: {
+          name: string;
+          icon?: string;
+          resourceId?: string;
+          done?: boolean;
+        };
+        nextRewards?: {
+          name: string;
+          icon?: string;
+          resourceId?: string;
+          done?: boolean;
+        }[];
         status: string;
         isError?: boolean;
       }[] = [];
@@ -284,34 +394,36 @@ export class AutoDailyService {
             this.logger.warn(
               `Skipping unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
             );
-            results.push({
-              roleName: `${account.info?.nickname || "Unknown"}`,
-              roleMeta: "",
-              rewardName: "",
-              rewardIcon: "",
-              totalDays: 0,
-              calendarTotalDays: 0,
-              todayClaimedNow: false,
-              status: tr("TokenExpired"),
-              isError: true,
-            });
+            results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("TokenExpired")));
             failCount++;
             continue;
           }
 
-          const roles = account.roles;
+          const gameScope = this.normalizeGameScope(config.game_scope, "arknights");
+
+          let roles = this.normalizeAttendanceBindings(account.roles, gameScope);
+          try {
+            const liveBindings = await withAutoRefresh(
+              this.client,
+              userId,
+              account,
+              (c: string, s: string, options: any) =>
+                getGamePlayerBinding(account.cookie, tr.lang, c, s, options),
+              tr.lang,
+            );
+            const liveRoles = this.normalizeAttendanceBindings(
+              liveBindings,
+              gameScope,
+            );
+            if (liveRoles.length > 0) {
+              roles = liveRoles;
+            }
+          } catch {
+            // Keep using locally cached bindings when refresh fails.
+          }
+
           if (!roles || roles.length === 0) {
-            results.push({
-              roleName: `${account.info?.nickname || "Unknown"}`,
-              roleMeta: "",
-              rewardName: "",
-              rewardIcon: "",
-              totalDays: 0,
-              calendarTotalDays: 0,
-              todayClaimedNow: false,
-              status: tr("Error") || "No roles found",
-              isError: true,
-            });
+            results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("Error") || "No roles found"));
             failCount++;
             continue;
           }
@@ -349,6 +461,12 @@ export class AutoDailyService {
                 );
 
                 if (res) {
+                  const isArknights = Number(gameId) === 1;
+                  const roleName = `${res.nickname}`;
+                  const roleMeta = isArknights
+                    ? `${role.serverName || "-"}`
+                    : `Lv.${res.level} - ${role.serverName || "-"}`;
+
                   if (res.signedNow) successCount++;
                   else if (res.hasToday) alreadySignedCount++;
                   else if (res.error) failCount++;
@@ -357,8 +475,9 @@ export class AutoDailyService {
                   const displayedReward = res.rewardName || tr("None");
 
                   results.push({
-                    roleName: `${res.nickname} (Lv.${res.level})`,
-                    roleMeta: `Lv.${res.level} - ${role.serverName || "-"}`,
+                    gameId,
+                    roleName,
+                    roleMeta,
                     rewardName: displayedReward,
                     rewardIcon: res.rewardIcon,
                     firstRewardName: res.firstRewardName,
@@ -385,17 +504,7 @@ export class AutoDailyService {
                 this.logger.error(
                   `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
                 );
-                results.push({
-                  roleName: `${role.nickname || "Unknown"}`,
-                  roleMeta: "",
-                  rewardName: "",
-                  rewardIcon: "",
-                  totalDays: 0,
-                  calendarTotalDays: 0,
-                  todayClaimedNow: false,
-                  status: tr("Error"),
-                  isError: true,
-                });
+                results.push(this.makeErrorResult(role.nickname || "Unknown", tr("Error")));
                 failCount++;
               }
             }
@@ -404,17 +513,7 @@ export class AutoDailyService {
           this.logger.error(
             `Error processing account ${account.info?.id} for user ${userId}: ${accError}`,
           );
-          results.push({
-            roleName: `${account.info?.nickname || "Unknown"}`,
-            roleMeta: "",
-            rewardName: "",
-            rewardIcon: "",
-            totalDays: 0,
-            calendarTotalDays: 0,
-            todayClaimedNow: false,
-            status: tr("Error"),
-            isError: true,
-          });
+          results.push(this.makeErrorResult(account.info?.nickname || "Unknown", tr("Error")));
           failCount++;
         }
       }
@@ -422,9 +521,6 @@ export class AutoDailyService {
       this.logger.info(
         `Finished auto-daily for user ${userId}. Result: ${successCount} success, ${alreadySignedCount} already signed, ${failCount} failed.`,
       );
-
-      // Mark as processed for today
-      await this.client.db.set(`${userId}.lastAutoDaily`, today);
 
       if (config.notify && results.length > 0) {
         const files: AttachmentBuilder[] = [];
@@ -435,6 +531,7 @@ export class AutoDailyService {
             const payload: DailyCardPayload = {
               roleName: res.roleName,
               roleMeta: res.roleMeta || "",
+              gameId: Number(res.gameId || 3),
               totalDays: Number(res.totalDays || 0),
               calendarTotalDays: Number(res.calendarTotalDays || 0),
               todayClaimedNow: !!res.todayClaimedNow,
@@ -443,6 +540,7 @@ export class AutoDailyService {
               yesterdayReward: {
                 name: res.yesterdayReward?.name || tr("None") || "None",
                 icon: res.yesterdayReward?.icon || "",
+                resourceId: res.yesterdayReward?.resourceId || "",
                 done: !!res.yesterdayReward?.done,
               },
               todayReward: {
@@ -452,10 +550,14 @@ export class AutoDailyService {
                   tr("None") ||
                   "None",
                 icon: res.todayReward?.icon || res.rewardIcon || "",
+                resourceId: res.todayReward?.resourceId || "",
                 done: !!res.todayReward?.done,
               },
               nextRewards: Array.isArray(res.nextRewards)
-                ? res.nextRewards
+                ? res.nextRewards.map((reward: any) => ({
+                    ...reward,
+                    resourceId: reward?.resourceId || "",
+                  }))
                 : [],
               tr,
             };
@@ -471,8 +573,8 @@ export class AutoDailyService {
           }
         }
 
-        if (results.length > files.length) {
-          lines.push("- 部分結果未附上圖片（錯誤或達附件上限）。");
+        if (results.filter((r) => !r.isError).length > files.length) {
+          lines.push("- 部分結果未附上圖片（已達附件上限）。");
         }
 
         const payload = {
@@ -481,9 +583,6 @@ export class AutoDailyService {
             lines.join("\n"),
           files,
         };
-
-        const notifyMethod = config.notify_method;
-        const channelId = config.channelId;
 
         try {
           await this.sendNotification(userId, config, payload);

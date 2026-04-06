@@ -22,8 +22,7 @@ const langs: Record<string, any> = {
   BindingNotFound:
     "No game binding info found. Please make sure you have created a character in the game.",
   AuthError: "Authentication failed. Please re-bind your account.",
-  TokenExpired:
-    "❌ **Token Expired or Request Error**\nWe apologize that the bot is not yet fully perfected. This account's session has expired. Please use `/login` to re-login and restore functionality.",
+  TokenExpired: "**Token Expired or Request Error**",
 
   // Account
   AccountNotFound:
@@ -46,6 +45,11 @@ const langs: Record<string, any> = {
   daily_NotifyDesc: "Notify when signed in",
   daily_NotifyMethod: "Method",
   daily_NotifyMethodDesc: "Notification method (default: DM)",
+  daily_Game: "Game",
+  daily_GameDesc: "Select game scope",
+  daily_GameEndfield: "Endfield",
+  daily_GameArknights: "Arknights",
+  daily_GameBoth: "Both",
   daily_DM: "DM",
   daily_Channel: "Current Channel",
   daily_Checking: "🔄 **Executing daily attendance...**",
@@ -57,11 +61,12 @@ const langs: Record<string, any> = {
   daily_TodayPending: "Today's Pending",
   daily_FirstReward: "Newbie Reward",
   daily_TotalDays: "Cumulative Days",
-  daily_RoleNotFound: "⚠️ **No Endfield characters found**",
+  daily_RoleNotFound: "⚠️ **No Arknights/Endfield attendance roles found**",
   daily_SetupSuccess: "✅ **Auto-sign settings updated**",
   daily_SetupTime: "Schedule Time",
   daily_SetupNotify: "Attendance Alert",
   daily_SetupNotifyMethod: "Notify Method",
+  daily_SetupGame: "Game Scope",
   daily_SetupChannel: "Notify Channel",
   daily_Mention: "Mention User",
   daily_MentionDesc: "Whether to mention you in notifications",
@@ -206,6 +211,11 @@ const langs: Record<string, any> = {
   login_CookiePlaceholder: "ACCOUNT_TOKEN=...",
   login_CookieSuccess:
     "✅ **Verification Successful**\nWelcome Admin, **<name>**!\nAccount added.",
+  login_BoundGamesPrefix: "Added games: ",
+  login_BoundGamesNone: "none",
+  login_BoundGamesJoiner: ", ",
+  login_GameEndfield: "Endfield",
+  login_GameArknights: "Arknights",
   login_CaptchaRequired:
     "🛡️ **Captcha Required by Gryphline**\nPlease click the URL below to open in your browser:\n**[👉 Click here to verify](<url>)**\n\n1. The captcha will load automatically.\n2. After completing, the result will be sent back.\n3. **The bot will finish login automatically upon detection.**",
   login_ManualVerify: "Check Status Manually",

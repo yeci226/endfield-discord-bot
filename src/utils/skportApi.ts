@@ -5,14 +5,6 @@ import { Logger } from "./Logger";
 
 const logger = new Logger("SkportAPI");
 
-let cachedDeviceId: string | null = null;
-
-function getDeviceId(): string {
-  if (cachedDeviceId) return cachedDeviceId;
-  // Format: 32-char hex (standard for Skland/Skport)
-  cachedDeviceId = crypto.randomBytes(16).toString("hex");
-  return cachedDeviceId!;
-}
 
 export async function getCardDetail(
   roleId: string,
@@ -405,23 +397,18 @@ export function formatSkGameRole(
   roleId: string,
   serverId: string,
 ): string {
-  // For Endfield, the format is usually "Platform_UserID_Server"
-  // where Platform is '3' for PC/Android.
-  return `3_${roleId}_${serverId}`;
+  return `${gameId}_${roleId}_${serverId || ""}`;
 }
 
 // Core Helper
 function getCommonHeaders(cred: string | undefined, locale?: string) {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-    Accept: "*/*",
-    "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6",
-    "sec-ch-ua":
-      '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
+    "user-agent":
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 SKPort/1.1.1(100101011)",
+    accept: "*/*",
+    "accept-language": formatAcceptLanguage(locale),
+    "accept-encoding": "gzip, deflate, br",
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
@@ -430,11 +417,9 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     "sk-language": formatSkLanguage(locale),
     timestamp: timestamp,
     vname: "1.0.0",
-    did: getDeviceId(),
-    dId: getDeviceId(),
-    Origin: "https://game.skport.com",
-    Referer: "https://game.skport.com/",
-    priority: "u=1, i",
+    origin: "https://game.skport.com",
+    referer: "https://game.skport.com/",
+    priority: "u=3, i",
   };
 }
 
@@ -591,14 +576,6 @@ export async function makeRequest<T>(
   } = {},
 ): Promise<T | null> {
   const execute = async () => {
-    // Automatically inject 'lang' parameter if locale is provided (GET requests only)
-    if (options.locale && method === "GET") {
-      if (!options.params) options.params = {};
-      if (!options.params.lang) {
-        options.params.lang = mapLocaleToLang(options.locale);
-      }
-    }
-
     const commonHeaders = getCommonHeaders(options.cred, options.locale);
     const headers: any = { ...commonHeaders, ...options.headers };
 
@@ -614,7 +591,7 @@ export async function makeRequest<T>(
     });
 
     if (method === "POST") {
-      headers["Content-Type"] = "application/json";
+      headers["content-type"] = "application/json";
     }
 
     // Generate signature
@@ -637,22 +614,11 @@ export async function makeRequest<T>(
         : JSON.stringify(options.data)
       : "";
 
-    // Use V2 (HMAC) for binding and critical endpoints
-    const useV2 =
-      pathname.includes("/binding") ||
-      pathname.includes("/card/detail") ||
-      pathname.includes("/wiki/") ||
-      pathname.includes("/enums") ||
-      pathname.includes("/attendance") ||
-      pathname.includes("/v2/");
+    // All skport.com endpoints use V2 sign (HMAC-MD5) with dId="".
+    // Gryphline endpoints don't use skport sign at all.
+    const useV2 = url.includes("skport.com");
 
     const signContent = method === "POST" ? bodyString : queryString;
-    const dId = headers.dId || headers.did || "";
-
-    // Ensure dId is in headers if we are using it for signature
-    if (!headers.dId && !headers.did) {
-      headers.dId = dId;
-    }
 
     const sign = useV2
       ? generateSignV2(
@@ -661,7 +627,7 @@ export async function makeRequest<T>(
           headers.timestamp,
           headers.platform,
           headers.vname || "1.0.0",
-          dId,
+          "",
           options.salt,
         )
       : generateSign(pathname, queryString, headers.timestamp, options.salt);
@@ -707,9 +673,10 @@ export async function makeRequest<T>(
 
   let result: any = await execute();
 
-  // Automatic retry on stale token (code 10000 or 401 status)
-  // Ensure we don't retry if we got a 403 block
-  const isStale = result && (result.code === 10000 || result.status === 401);
+  // Only retry on genuine token expiry (code 10000).
+  // Other 401 sub-codes (e.g. 10003 "請勿修改設備本地時間") are server-side
+  // validation failures — refreshing the token won't help and wastes API calls.
+  const isStale = result && result.code === 10000;
   const isBlocked = result && result.status === 403;
 
   if (
@@ -958,6 +925,8 @@ export async function getWeaponPool(
 }
 
 export async function getAttendanceList(
+  gameId: number,
+  roleId: string,
   gameRole: string,
   cookie: string | undefined,
   locale?: string,
@@ -965,10 +934,15 @@ export async function getAttendanceList(
   salt?: string,
   options: any = {},
 ): Promise<{ code: number; data: AttendanceResponse } | null> {
-  const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
-  const headers: any = {
-    "sk-game-role": gameRole,
-  };
+  const isArknights = gameId === 1;
+  const url = isArknights
+    ? "https://zonai.skport.com/api/v1/game/attendance"
+    : "https://zonai.skport.com/web/v1/game/endfield/attendance";
+  const headers: any = isArknights
+    ? {}
+    : {
+        "sk-game-role": gameRole,
+      };
   if (cookie) headers.Cookie = cookie;
 
   const res = await makeRequest<{ code: number; data: AttendanceResponse }>(
@@ -978,6 +952,7 @@ export async function getAttendanceList(
       locale,
       cred,
       salt,
+      params: isArknights ? { gameId, uid: roleId } : undefined,
       headers,
       ...options,
     },
@@ -1015,6 +990,8 @@ export async function getAttendanceRecords(
 }
 
 export async function executeAttendance(
+  gameId: number,
+  roleId: string,
   gameRole: string,
   cookie: string | undefined,
   locale?: string,
@@ -1022,20 +999,30 @@ export async function executeAttendance(
   salt?: string,
   options: any = {},
 ): Promise<{ code: number; message: string; data?: AttendanceResponse }> {
-  const url = "https://zonai.skport.com/web/v1/game/endfield/attendance";
-  const body = { role: gameRole };
-  const headers: any = {
-    "sk-game-role": gameRole,
-    Accept: "*/*",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    Connection: "keep-alive",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-site",
-    Origin: "https://game.skport.com",
-    Referer: "https://game.skport.com/",
-    vname: "1.0.0",
-  };
+  const isArknights = gameId === 1;
+  const url = isArknights
+    ? "https://zonai.skport.com/api/v1/game/attendance"
+    : "https://zonai.skport.com/web/v1/game/endfield/attendance";
+  const body = isArknights ? { uid: roleId } : { role: gameRole };
+  const headers: any = isArknights
+    ? {
+        Accept: "*/*",
+        Origin: "https://game.skport.com",
+        Referer: "https://game.skport.com/",
+        vname: "1.0.0",
+      }
+    : {
+        "sk-game-role": gameRole,
+        Accept: "*/*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        Connection: "keep-alive",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        Origin: "https://game.skport.com",
+        Referer: "https://game.skport.com/",
+        vname: "1.0.0",
+      };
   if (cookie) headers.Cookie = cookie;
 
   const res = await makeRequest<{
@@ -1120,7 +1107,6 @@ export async function loginByEmailPassword(
   captcha?: any,
 ) {
   const url = "https://as.gryphline.com/user/auth/v1/token_by_email_password";
-  console.log(`[Debug] loginByEmailPassword using URL: ${url}`);
 
   const data: any = {
     email: credentials.email,
@@ -1135,12 +1121,24 @@ export async function loginByEmailPassword(
     };
   }
 
-  // Use a simpler request for Gryphline to avoid 403 from excess headers
+  // Use official Gryphline headers matching the geetest curl command
   try {
     const response = await axios.post(url, data, {
       headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
+        "accept": "application/json",
+        "accept-language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6",
+        "content-type": "application/json",
+        "origin": "https://www.skport.com",
+        "priority": "u=1, i",
+        "referer": "https://www.skport.com/",
+        "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "cross-site",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+        "x-language": "zh-tw",
       },
     });
 

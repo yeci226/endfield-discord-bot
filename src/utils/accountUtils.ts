@@ -1,6 +1,7 @@
 import { CustomDatabase } from "./Database";
 import {
   getGamePlayerBinding,
+  getUserInfo,
   verifyToken,
   refreshSkToken,
   refreshAccountToken,
@@ -10,6 +11,17 @@ import { decryptAccount, encryptAccount } from "./cryptoUtils";
 import { Logger } from "./Logger";
 
 const logger = new Logger("AccountUtils");
+
+function flattenBindingList(bindings: any[] | null | undefined): any[] {
+  if (!Array.isArray(bindings)) return [];
+  const out: any[] = [];
+  for (const app of bindings) {
+    if (Array.isArray(app?.bindingList)) {
+      out.push(...app.bindingList);
+    }
+  }
+  return out;
+}
 
 /**
  * Ensures that the account has valid bindings (roles) and credentials.
@@ -74,105 +86,71 @@ export async function ensureAccountBinding(
   lang: string,
   forceRefresh: boolean = false,
 ): Promise<boolean> {
-  // Clear invalid flag and attempt full validation.
-  // We don't early return here because we need to handle proactive checks and 401s.
-
-  let rolesRestored = false;
-  let bindingList: any[] = [];
+  // 只驗證 cred/cookie 是否有效，並可正常呼叫 getAttendanceList
+  let modified = false;
   let newCred = account.cred;
   let newSalt = account.salt;
   let newCookie = account.cookie;
-  let modified = false;
-
   const now = Date.now();
   const oldLastRefresh = account.lastRefresh || 0;
-
-  // Fast-path: If verified within last 2 hours, skip Step 1 network call
   const isRecent = now - oldLastRefresh < 2 * 60 * 60 * 1000;
+
   if (
     !forceRefresh &&
     !account.invalid &&
-    account.roles?.length > 0 &&
-    isRecent
+    isRecent &&
+    Array.isArray(account.roles) &&
+    account.roles.length > 0
   ) {
     return false;
   }
 
-  if (
-    !account.invalid &&
-    account.cookie &&
-    (!account.roles || account.roles.length === 0)
-  ) {
-    // Initial fetch if roles are missing
-    logger.info(
-      `[Auth] Initial role capture for ${account.info?.id || "New Account"}...`,
-    );
-  }
-
-  // Step 1: Try with existing credentials (fastest), unless forceRefresh is true
-  if (!forceRefresh && !rolesRestored && account.cred && account.salt) {
+  // Step 1: 嘗試用現有 cred/salt 呼叫 getUserInfo
+  let valid = false;
+  if (!forceRefresh && account.cred && account.salt) {
     try {
-      logger.info(
-        `[Step 1] Attempting role check with existing credentials for ${account.info?.id}...`,
-      );
-      const bindings = await getGamePlayerBinding(
-        undefined,
-        lang,
+      logger.info(`[Step 1] 檢查現有憑證是否有效 for ${account.info?.id}...`);
+      const res = await getUserInfo(
         account.cred,
-        account.salt,
+        lang,
+        account.salt
       );
-      const endfield = bindings?.find((b: any) => b.appCode === "endfield");
-      if (endfield && endfield.bindingList) {
-        bindingList = endfield.bindingList;
-        rolesRestored = true;
-        logger.success(`[Step 1] Success! Credentials are still valid.`);
+      if (res && res.code === 0) {
+        valid = true;
+        logger.success(`[Step 1] 憑證有效`);
       }
     } catch (e: any) {
-      logger.warn(`[Step 1] Failed: ${e.message}`);
+      logger.warn(`[Step 1] 憑證驗證失敗: ${e.message}`);
     }
   }
 
-  // Step 2: Try Refreshing Salt with Cred
-  if (!rolesRestored && account.cred) {
-    logger.info(
-      `[Step 2] Attempting to refresh salt with cred for ${account.info?.id}...`,
-    );
+  // Step 2: 嘗試刷新 salt
+  if (!valid && account.cred) {
+    logger.info(`[Step 2] 嘗試 refreshSkToken for ${account.info?.id}...`);
     const newToken = await refreshSkToken(account.cred);
     if (newToken) {
       newSalt = newToken;
       try {
-        const bindings = await getGamePlayerBinding(
-          undefined,
-          lang,
+        const res = await getUserInfo(
           account.cred,
-          newSalt,
+          lang,
+          newSalt
         );
-        const endfield = bindings?.find((b: any) => b.appCode === "endfield");
-        if (endfield && endfield.bindingList) {
-          bindingList = endfield.bindingList;
-          // IMPORTANT: If we are already in an onStale loop, Step 2 success might be a false positive
-          // if the target endpoint (card/detail) still fails.
-          // However, ensureAccountBinding doesn't know the target endpoint.
-          // We'll mark it as rolesRestored but let Step 3 handle it if called again.
-          rolesRestored = true;
-          logger.success(`[Step 2] Success! Refreshed salt works.`);
+        if (res && res.code === 0) {
+          valid = true;
+          logger.success(`[Step 2] salt 刷新後憑證有效`);
         }
       } catch (e: any) {
-        logger.warn(`[Step 2] Failed: ${e.message}`);
+        logger.warn(`[Step 2] 憑證驗證失敗: ${e.message}`);
       }
     } else {
-      logger.warn(`[Step 2] refreshSkToken returned null.`);
+      logger.warn(`[Step 2] refreshSkToken 回傳 null`);
     }
   }
 
-  // FORCE Step 3 if we are here and still haven't found Endfield bindings OR if Step 2 failed
-  // Sometimes binding list is empty even if cred/salt works if the session is partially dead.
-
-  // Step 3: Refresh Master Cookie (ACCOUNT_TOKEN) if still failed
-  if (!rolesRestored && account.cookie) {
-    logger.info(
-      `[Step 3] Attempting Master token refresh for ${account.info?.id}...`,
-    );
+  // Step 3: 嘗試刷新 cookie/token
+  if (!valid && account.cookie) {
+    logger.info(`[Step 3] 嘗試 refreshAccountToken for ${account.info?.id}...`);
     const newTokenValue = await refreshAccountToken(account.cookie);
     if (newTokenValue) {
       newCookie = `ACCOUNT_TOKEN=${newTokenValue}`;
@@ -186,37 +164,32 @@ export async function ensureAccountBinding(
         newCred = verifyRes.cred;
         newSalt = verifyRes.token;
         account.lastRefresh = now;
-
-        const bindings = await getGamePlayerBinding(
-          newCookie,
-          lang,
-          newCred,
-          newSalt,
-        );
-        const endfield = bindings?.find((b: any) => b.appCode === "endfield");
-        if (endfield && endfield.bindingList) {
-          bindingList = endfield.bindingList;
-          rolesRestored = true;
-          logger.success(`[Step 3] Success! Full session restored.`);
-        } else {
-          logger.warn(
-            `[Step 3] Token verified but couldn't get game bindings.`,
+        try {
+          const res = await getUserInfo(
+            newCred,
+            lang,
+            newSalt
           );
+          if (res && res.code === 0) {
+            valid = true;
+            logger.success(`[Step 3] cookie/token 刷新後憑證有效`);
+          }
+        } catch (e: any) {
+          logger.warn(`[Step 3] 憑證驗證失敗: ${e.message}`);
         }
       } else {
-        logger.warn(`[Step 3] verifyToken failed or returned invalid status.`);
+        logger.warn(`[Step 3] verifyToken 失敗或回傳無效`);
       }
     } else {
-      logger.warn(`[Step 3] refreshAccountToken returned null.`);
+      logger.warn(`[Step 3] refreshAccountToken 回傳 null`);
     }
   }
 
-  // Final Step: If still not restored, mark as invalid to prevent further retries
-  if (!rolesRestored) {
+  // 最終判斷
+  if (!valid) {
     if (!account.invalid) {
       account.invalid = true;
       modified = true;
-
       // Save back to DB
       const allAccounts = await getAccounts(db, userId);
       if (allAccounts) {
@@ -232,40 +205,51 @@ export async function ensureAccountBinding(
     return modified;
   }
 
-  // Successful restoration or already valid - clear invalid flag
+  // 憑證有效，清除 invalid 標記
   if (account.invalid) {
     account.invalid = false;
     modified = true;
   }
 
-  // Save if we successfully restored/validated roles
-  if (rolesRestored) {
-    // Check if anything actually changed to avoid unnecessary DB writes
-    const rolesChanged =
-      bindingList.length > 0 &&
-      JSON.stringify(account.roles) !== JSON.stringify(bindingList);
-    const credsChanged = account.cred !== newCred || account.salt !== newSalt;
-    const cookieChanged = account.cookie !== newCookie;
-    const heartbeatUpdated = account.lastRefresh !== oldLastRefresh;
+  // Sync latest game bindings (Arknights + Endfield) for migration and autocomplete.
+  let latestBindings: any[] = Array.isArray(account.roles) ? account.roles : [];
+  try {
+    const bindings = await getGamePlayerBinding(
+      newCookie || account.cookie,
+      lang,
+      newCred,
+      newSalt,
+    );
+    const flattened = flattenBindingList(bindings);
+    if (flattened.length > 0) {
+      latestBindings = flattened;
+    }
+  } catch (e: any) {
+    logger.warn(`[Binding Sync] Failed to refresh bindings: ${e.message}`);
+  }
 
-    if (rolesChanged || credsChanged || cookieChanged || heartbeatUpdated) {
-      if (bindingList.length > 0) account.roles = bindingList;
-      account.cred = newCred;
-      account.salt = newSalt;
-      account.cookie = newCookie;
-      // account.lastRefresh is already updated above if needed
-      modified = true;
-
-      // Save back to DB
-      const allAccounts = await getAccounts(db, userId);
-      if (allAccounts) {
-        const idx = allAccounts.findIndex(
-          (acc: any) => acc.info.id === account.info.id,
-        );
-        if (idx !== -1) {
-          allAccounts[idx] = account; // account is already decrypted at runtime
-          await saveAccounts(db, userId, allAccounts);
-        }
+  // 若有更新憑證資訊則存回 DB
+  const credsChanged = account.cred !== newCred || account.salt !== newSalt;
+  const cookieChanged = account.cookie !== newCookie;
+  const heartbeatUpdated = account.lastRefresh !== oldLastRefresh;
+  const rolesChanged =
+    JSON.stringify(account.roles || []) !== JSON.stringify(latestBindings || []);
+  if (credsChanged || cookieChanged || heartbeatUpdated || rolesChanged) {
+    account.cred = newCred;
+    account.salt = newSalt;
+    account.cookie = newCookie;
+    account.roles = latestBindings;
+    // account.lastRefresh 已於上方更新
+    modified = true;
+    // Save back to DB
+    const allAccounts = await getAccounts(db, userId);
+    if (allAccounts) {
+      const idx = allAccounts.findIndex(
+        (acc: any) => acc.info.id === account.info.id,
+      );
+      if (idx !== -1) {
+        allAccounts[idx] = account;
+        await saveAccounts(db, userId, allAccounts);
       }
     }
   }

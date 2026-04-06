@@ -54,7 +54,6 @@ export async function drawDashboard(
   template: ProfileTemplate = ProfileTemplateService.getDefaultTemplate(),
 ): Promise<Buffer> {
   const { base, chars } = detail;
-  console.log(chars[0]);
   const { canvas: cv, elements: el } = template;
 
   // Canvas dimensions

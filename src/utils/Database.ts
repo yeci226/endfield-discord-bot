@@ -87,6 +87,27 @@ export class CustomDatabase {
   }
 
   /**
+   * Atomically claim a slot: sets key=value only if the stored value differs.
+   * Returns true if this process claimed the slot (performed the write),
+   * false if the key already held the same value (another process beat us).
+   * Safe across concurrent SQLite processes because better-sqlite3 transactions
+   * acquire an exclusive write lock.
+   */
+  public claimSlot(key: string, value: string): boolean {
+    const serialized = JSON.stringify(value);
+    return this.db.transaction(() => {
+      const row = this.db
+        .prepare("SELECT json FROM json WHERE ID = ?")
+        .get(key) as { json: string } | undefined;
+      if (row?.json === serialized) return false;
+      this.db
+        .prepare("INSERT OR REPLACE INTO json (ID, json) VALUES (?, ?)")
+        .run(key, serialized);
+      return true;
+    })();
+  }
+
+  /**
    * Find entries with a specific ID prefix and return only IDs
    * @param prefix The prefix to search for
    */

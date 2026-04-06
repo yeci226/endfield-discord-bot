@@ -878,8 +878,6 @@ const command: Command = {
         nickname = allRoles.find((r) => r.uid === selectedUid)?.nickname;
       }
 
-      console.log(`[Gacha Load] Starting merge for UID: ${selectedUid}`);
-
       if (
         !skipFingerprintCheck &&
         !selectedUid.startsWith("EF_GUEST_") &&
@@ -1684,8 +1682,6 @@ const command: Command = {
               }
             }
           }
-
-          console.log(`[Gacha View] Showing stats for UID: ${targetUid}`);
 
           await showGachaStats(targetUid, "limited_char");
           return;

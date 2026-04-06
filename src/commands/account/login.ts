@@ -20,16 +20,135 @@ import {
 } from "discord.js";
 import { CustomDatabase } from "../../utils/Database";
 import {
+  getGamePlayerBinding,
   loginByEmailPassword,
   verifyToken,
   getUserInfo,
-  getGamePlayerBinding,
 } from "../../utils/skportApi";
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { VerificationClient } from "../../web/VerificationClient";
 import { getAccounts, saveAccounts } from "../../utils/accountUtils";
 import { decryptAccount } from "../../utils/cryptoUtils";
+
+function flattenBindingList(bindings: any[] | null | undefined): any[] {
+  if (!Array.isArray(bindings)) return [];
+  const out: any[] = [];
+  for (const app of bindings) {
+    if (Array.isArray(app?.bindingList)) {
+      out.push(...app.bindingList);
+    }
+  }
+  return out;
+}
+
+async function fetchFlattenedBindings(
+  cookie: string,
+  locale: string,
+  cred: string,
+  salt?: string,
+): Promise<any[]> {
+  // Some sessions occasionally fail when Cookie is attached; retry without cookie.
+  const first = await getGamePlayerBinding(cookie, locale, cred, salt);
+  let flattened = flattenBindingList(first);
+  if (flattened.length > 0) return flattened;
+
+  const second = await getGamePlayerBinding(undefined, locale, cred, salt);
+  flattened = flattenBindingList(second);
+  return flattened;
+}
+
+async function fetchBindingSnapshot(
+  cookie: string,
+  locale: string,
+  cred: string,
+  salt?: string,
+): Promise<{ roles: any[]; raw: any[]; source: "cookie" | "no-cookie" | "none" }> {
+  const first = await getGamePlayerBinding(cookie, locale, cred, salt);
+  let flattened = flattenBindingList(first);
+  if (flattened.length > 0) {
+    return {
+      roles: flattened,
+      raw: Array.isArray(first) ? first : [],
+      source: "cookie",
+    };
+  }
+
+  const second = await getGamePlayerBinding(undefined, locale, cred, salt);
+  flattened = flattenBindingList(second);
+  if (flattened.length > 0) {
+    return {
+      roles: flattened,
+      raw: Array.isArray(second) ? second : [],
+      source: "no-cookie",
+    };
+  }
+
+  return {
+    roles: [],
+    raw: Array.isArray(first) ? first : Array.isArray(second) ? second : [],
+    source: "none",
+  };
+}
+
+function formatBindingDebugLog(rawBindings: any[] | null | undefined): string {
+  if (!Array.isArray(rawBindings) || rawBindings.length === 0) {
+    return "binding: []";
+  }
+
+  const rows: string[] = [];
+  for (const app of rawBindings) {
+    const appCode = String(app?.appCode || "unknown");
+    const appName = String(app?.appName || "-");
+    const list = Array.isArray(app?.bindingList) ? app.bindingList : [];
+    if (list.length === 0) {
+      rows.push(`${appCode}(${appName}): []`);
+      continue;
+    }
+
+    for (const entry of list) {
+      const uid = String(entry?.uid || "-");
+      const nick = String(entry?.nickName || "-");
+      const roleCount = Array.isArray(entry?.roles) ? entry.roles.length : 0;
+      const hasDefaultRole = !!entry?.defaultRole;
+      rows.push(
+        `${appCode} uid=${uid} nick=${nick} roles=${roleCount} defaultRole=${hasDefaultRole ? "Y" : "N"}`,
+      );
+    }
+  }
+
+  return rows.join(" | ");
+}
+
+function formatBoundGamesSummary(
+  roles: any[] | null | undefined,
+  tr: any,
+): string {
+  if (!Array.isArray(roles) || roles.length === 0) {
+    return `\n${tr("login_BoundGamesPrefix")}${tr("login_BoundGamesNone")}`;
+  }
+
+  const gameOrder: Array<{ id: number; key: string }> = [
+    { id: 3, key: "login_GameEndfield" },
+    { id: 1, key: "login_GameArknights" },
+  ];
+
+  const present = new Set<number>();
+  for (const item of roles) {
+    const gameId = Number(item?.gameId || 0);
+    if (gameId > 0) present.add(gameId);
+  }
+
+  const names = gameOrder
+    .filter((x) => present.has(x.id))
+    .map((x) => tr(x.key));
+
+  if (names.length === 0) {
+    return `\n${tr("login_BoundGamesPrefix")}${tr("login_BoundGamesNone")}`;
+  }
+
+  return `\n${tr("login_BoundGamesPrefix")}${names.join(tr("login_BoundGamesJoiner"))}`;
+}
 
 // Helper to get/migrate accounts
 // getAccounts is now imported from accountUtils to ensure consistent encryption handling.
@@ -572,21 +691,21 @@ const command: Command = {
             (acc) => acc.info.id === hgId || acc.info.nickname === nickName,
           );
 
-          // Fetch Game Roles
-          const bindings = await getGamePlayerBinding(
+          const snapshot = await fetchBindingSnapshot(
             cookie,
             interaction.locale,
             cred,
             result.token,
           );
-          const endfield = bindings?.find((b) => b.appCode === "endfield");
-          const roles = endfield ? endfield.bindingList : [];
+          const roles = snapshot.roles;
+          const previousRoles = Array.isArray(exists?.roles) ? exists.roles : [];
+          const mergedRoles = roles.length > 0 ? roles : previousRoles;
 
           const accountData = {
             cookie: cookie,
             cred: cred,
             salt: result.token, // Store the dynamic salt (token)
-            roles: roles, // Store roles to avoid redundant getGamePlayerBinding calls
+            roles: mergedRoles,
             lastRefresh: Date.now(), // Initialize refresh timestamp
             info: {
               id: hgId,
@@ -622,9 +741,19 @@ const command: Command = {
 
           // Construct Container
           const container = new ContainerBuilder();
+          const gameSummary = formatBoundGamesSummary(
+            mergedRoles,
+            tr,
+          );
+          const bindingDebug =
+            mergedRoles.length === 0
+              ? `\n\`\`\`${formatBindingDebugLog(snapshot.raw)}\`\`\``
+              : "";
 
           const textDisplay = new TextDisplayBuilder().setContent(
-            tr("login_CookieSuccess").replace("<name>", nickName),
+            tr("login_CookieSuccess").replace("<name>", nickName) +
+              gameSummary +
+              bindingDebug,
           );
 
           if (avatar) {
@@ -726,21 +855,21 @@ async function handleLoginSuccess(
     let accounts = await getAccounts(db, userId);
     const exists = accounts.find((acc: any) => acc.info.id === hgId);
 
-    // Fetch Game Roles
-    const bindings = await getGamePlayerBinding(
+    const snapshot = await fetchBindingSnapshot(
       cookie,
       interaction.locale,
       cred,
       (result as any).token,
     );
-    const endfield = bindings?.find((b) => b.appCode === "endfield");
-    const roles = endfield ? endfield.bindingList : [];
+    const roles = snapshot.roles;
+    const previousRoles = Array.isArray(exists?.roles) ? exists.roles : [];
+    const mergedRoles = roles.length > 0 ? roles : previousRoles;
 
     const accountData = {
       cookie: cookie,
       cred: cred,
       salt: (result as any).token,
-      roles: roles,
+      roles: mergedRoles,
       info: { id: hgId, nickname: nickName, avatar: avatar },
     };
 
@@ -767,8 +896,18 @@ async function handleLoginSuccess(
     await saveAccounts(db, userId, accounts);
 
     const container = new ContainerBuilder();
+    const gameSummary = formatBoundGamesSummary(
+      mergedRoles,
+      tr,
+    );
+    const bindingDebug =
+      mergedRoles.length === 0
+        ? `\n\`\`\`${formatBindingDebugLog(snapshot.raw)}\`\`\``
+        : "";
     const textDisplay = new TextDisplayBuilder().setContent(
-      tr("login_CookieSuccess").replace("<name>", nickName),
+      tr("login_CookieSuccess").replace("<name>", nickName) +
+        gameSummary +
+        bindingDebug,
     );
 
     if (avatar) {

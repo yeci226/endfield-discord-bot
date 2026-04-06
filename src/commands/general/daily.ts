@@ -14,12 +14,16 @@ import { ExtendedClient } from "../../structures/Client";
 import {
   ensureAccountBinding,
   getAccounts,
+  saveAccounts,
   withAutoRefresh,
 } from "../../utils/accountUtils";
-import { formatSkGameRole } from "../../utils/skportApi";
+import { formatSkGameRole, getGamePlayerBinding } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { processRoleAttendance } from "../../utils/attendanceUtils";
 import { buildDailyAttendanceCard } from "../../utils/dailyCanvasUtils";
+
+type DailyGameScope = "endfield" | "arknights" | "both";
+const DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -38,7 +42,33 @@ const command: Command = {
         .setNameLocalizations({ "zh-TW": "檢查狀態" })
         .setDescriptionLocalizations({
           "zh-TW": "檢查簽到記錄",
-        }),
+        })
+        .addStringOption((op) =>
+          op
+            .setName("account")
+            .setDescription("Select which bound account to use")
+            .setNameLocalizations({ "zh-TW": "帳號" })
+            .setDescriptionLocalizations({
+              "zh-TW": "選擇要使用的綁定帳號",
+            })
+            .setAutocomplete(true)
+            .setRequired(false),
+        )
+        .addStringOption((op) =>
+          op
+            .setName("game")
+            .setDescription("Game to check (default: Endfield)")
+            .setNameLocalizations({ "zh-TW": "遊戲" })
+            .setDescriptionLocalizations({
+              "zh-TW": "選擇要查詢的遊戲 (預設: 終末地)",
+            })
+            .addChoices(
+              { name: "終末地", value: "endfield" },
+              { name: "明日方舟", value: "arknights" },
+              { name: "同時查看", value: "both" },
+            )
+            .setRequired(false),
+        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -47,7 +77,33 @@ const command: Command = {
         .setNameLocalizations({ "zh-TW": "立即簽到" })
         .setDescriptionLocalizations({
           "zh-TW": "手動獲取簽到獎勵",
-        }),
+        })
+        .addStringOption((op) =>
+          op
+            .setName("account")
+            .setDescription("Select which bound account to use")
+            .setNameLocalizations({ "zh-TW": "帳號" })
+            .setDescriptionLocalizations({
+              "zh-TW": "選擇要使用的綁定帳號",
+            })
+            .setAutocomplete(true)
+            .setRequired(false),
+        )
+        .addStringOption((op) =>
+          op
+            .setName("game")
+            .setDescription("Game to claim (default: Endfield)")
+            .setNameLocalizations({ "zh-TW": "遊戲" })
+            .setDescriptionLocalizations({
+              "zh-TW": "選擇要簽到的遊戲 (預設: 終末地)",
+            })
+            .addChoices(
+              { name: "終末地", value: "endfield" },
+              { name: "明日方舟", value: "arknights" },
+              { name: "同時查看", value: "both" },
+            )
+            .setRequired(false),
+        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -124,6 +180,21 @@ const command: Command = {
               "zh-TW": "是否在簽到完成後提及您",
             })
             .setRequired(false),
+        )
+        .addStringOption((op) =>
+          op
+            .setName("game")
+            .setDescription("Auto-sign game scope (default: Arknights)")
+            .setNameLocalizations({ "zh-TW": "遊戲" })
+            .setDescriptionLocalizations({
+              "zh-TW": "設定自動簽到遊戲 (預設: 明日方舟)",
+            })
+            .addChoices(
+              { name: "終末地", value: "endfield" },
+              { name: "明日方舟", value: "arknights" },
+              { name: "同時設置", value: "both" },
+            )
+            .setRequired(false),
         ),
     ) as SlashCommandBuilder,
 
@@ -138,7 +209,18 @@ const command: Command = {
 
     if (!interaction.isChatInputCommand()) return;
 
-    if (interaction.options.getSubcommand() === "setup") {
+    const subcommand = interaction.options.getSubcommand();
+    const gameScope: DailyGameScope =
+      subcommand === "check"
+        ? normalizeGameScope(interaction.options.getString("game"), "endfield")
+        : subcommand === "claim"
+          ? normalizeGameScope(
+              interaction.options.getString("game"),
+              "endfield",
+            )
+          : "arknights";
+
+    if (subcommand === "setup") {
       await handleSetup(client, interaction, db);
       return;
     }
@@ -155,20 +237,57 @@ const command: Command = {
       return;
     }
 
-    const isClaim = interaction.options.getSubcommand() === "claim";
+    let targetAccounts = accounts;
+    const accountOption = interaction.options.getString("account");
+    if (accountOption !== null) {
+      const selectedIndex = Number(accountOption);
+      if (
+        !Number.isInteger(selectedIndex) ||
+        selectedIndex < 0 ||
+        selectedIndex >= accounts.length
+      ) {
+        await interaction.editReply({
+          content:
+            interaction.locale === "zh-TW"
+              ? "找不到指定帳號，請重新選擇。"
+              : "Selected account was not found. Please choose again.",
+        });
+        return;
+      }
+      targetAccounts = [accounts[selectedIndex]];
+    }
+
+    const isClaim = subcommand === "claim";
     let hasResult = false;
     const outputLines: string[] = [];
     const files: AttachmentBuilder[] = [];
 
     const processedRoles = new Set<string>();
 
-    for (let i = 0; i < accounts.length; i++) {
-      const account = accounts[i];
+    for (let i = 0; i < targetAccounts.length; i++) {
+      const account = targetAccounts[i];
       // AUTO-MIGRATION & REBIND LOGIC - ensures account.roles is updated if possible
       await ensureAccountBinding(account, userId, db, t.lang);
 
-      // Use potentially updated roles
-      const roles = account.roles;
+      // Prefer live bindings so AK + Endfield can both be processed.
+      let roles = normalizeAttendanceBindings(account.roles, gameScope);
+      try {
+        const liveBindings = await withAutoRefresh(
+          client,
+          userId,
+          account,
+          (c: string, s: string, options: any) =>
+            getGamePlayerBinding(account.cookie, t.lang, c, s, options),
+          t.lang,
+        );
+        const liveRoles = normalizeAttendanceBindings(liveBindings, gameScope);
+        if (liveRoles.length > 0) {
+          roles = liveRoles;
+        }
+      } catch {
+        // Fallback to stored roles when binding refresh fails.
+      }
+
       if (!roles || roles.length === 0) continue;
 
       for (const binding of roles) {
@@ -218,15 +337,22 @@ const command: Command = {
           if (!res) continue;
 
           if (files.length < 10) {
+            const isArknights = Number(binding.gameId || 3) === 1;
+            const roleMeta = isArknights
+              ? `${role.serverName || "-"}`
+              : `Lv.${role.level} - ${role.serverName}`;
+
             const buffer = await buildDailyAttendanceCard({
               roleName: `${role.nickname}`,
-              roleMeta: `Lv.${role.level} - ${role.serverName}`,
+              roleMeta,
+              gameId: Number(binding.gameId || 3),
               totalDays: Number(res.totalDays || 0),
               calendarTotalDays: Number(res.calendarTotalDays || 0),
               todayClaimedNow: !!res.signedNow,
               yesterdayReward: {
                 name: res.yesterdayReward?.name || t("None") || "None",
                 icon: res.yesterdayReward?.icon || "",
+                resourceId: res.yesterdayReward?.resourceId || "",
                 done: !!res.yesterdayReward?.done,
               },
               todayReward: {
@@ -236,10 +362,14 @@ const command: Command = {
                   t("None") ||
                   "None",
                 icon: res.todayReward?.icon || res.rewardIcon || "",
+                resourceId: res.todayReward?.resourceId || "",
                 done: !!res.todayReward?.done,
               },
               nextRewards: Array.isArray(res.nextRewards)
-                ? res.nextRewards
+                ? res.nextRewards.map((reward: any) => ({
+                    ...reward,
+                    resourceId: reward?.resourceId || "",
+                  }))
                 : [],
               tr,
             });
@@ -283,6 +413,7 @@ async function handleSetup(
   const notifyMethod = interaction.options.getString("notify_method");
   const selectedChannelId = interaction.options.getString("channel");
   const mention = interaction.options.getBoolean("mention");
+  const gameScopeInput = interaction.options.getString("game");
 
   // Load existing or default - Using granular keys
   const userConfig = (await db.get(`autoDaily.${userId}`)) || {
@@ -291,6 +422,7 @@ async function handleSetup(
     notify_method: "dm",
     channelId: interaction.channelId,
     mention: true,
+    game_scope: "arknights",
   };
 
   userConfig.time = normalizeDailyHour(userConfig.time, 13);
@@ -325,6 +457,11 @@ async function handleSetup(
   } else if (userConfig.mention === undefined) {
     userConfig.mention = true;
   }
+
+  userConfig.game_scope = normalizeGameScope(
+    gameScopeInput,
+    normalizeGameScope(userConfig.game_scope, "arknights"),
+  );
 
   if (selectedChannelId && interaction.guild) {
     const channel = interaction.guild.channels.cache.get(selectedChannelId);
@@ -373,6 +510,7 @@ async function handleSetup(
   let setupContent =
     `### ${t("daily_SetupSuccess")}\n` +
     `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
+    `**${t("daily_SetupGame")}**: \`${toGameScopeLabel(t, userConfig.game_scope)}\`\n` +
     `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
     `**${t("daily_SetupMention")}**: \`${userConfig.mention ? t("True") : t("False")}\`\n` +
     `**${t("daily_SetupNotifyMethod")}**: \`${userConfig.notify_method === "dm" ? t("daily_DM") : t("daily_Channel")}\` `;
@@ -429,11 +567,146 @@ function normalizeDailyHour(value: unknown, fallback: number): number {
   return one === null ? fallback : one;
 }
 
+function normalizeAttendanceBindings(
+  raw: any,
+  scope: DailyGameScope,
+): Array<{ gameId: number; roles: any[] }> {
+  const normalized: Array<{ gameId: number; roles: any[] }> = [];
+
+  const pushBinding = (entry: any) => {
+    const gameId = Number(entry?.gameId || 0);
+    if (!DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
+    if (!isGameInScope(gameId, scope)) return;
+
+    let roles = Array.isArray(entry?.roles)
+      ? entry.roles
+      : entry?.defaultRole
+        ? [entry.defaultRole]
+        : [];
+
+    if (
+      roles.length === 0 &&
+      gameId === 1 &&
+      (entry?.uid || entry?.nickName)
+    ) {
+      roles = [
+        {
+          roleId: String(entry?.uid || ""),
+          serverId: String(entry?.channelMasterId || ""),
+          nickname: String(entry?.nickName || entry?.uid || "Arknights"),
+          level: 0,
+          serverName: String(entry?.channelName || entry?.gameName || "-"),
+        },
+      ];
+    }
+
+    if (roles.length > 0) {
+      normalized.push({ gameId, roles });
+    }
+  };
+
+  if (!Array.isArray(raw)) {
+    return normalized;
+  }
+
+  for (const item of raw) {
+    if (Array.isArray(item?.bindingList)) {
+      for (const binding of item.bindingList) {
+        pushBinding(binding);
+      }
+      continue;
+    }
+    pushBinding(item);
+  }
+
+  return normalized;
+}
+
+function normalizeGameScope(
+  value: unknown,
+  fallback: DailyGameScope,
+): DailyGameScope {
+  if (value === "endfield" || value === "arknights" || value === "both") {
+    return value;
+  }
+  return fallback;
+}
+
+function isGameInScope(gameId: number, scope: DailyGameScope): boolean {
+  if (scope === "both") return gameId === 1 || gameId === 3;
+  if (scope === "arknights") return gameId === 1;
+  return gameId === 3;
+}
+
+function toGameScopeLabel(tr: any, scope: DailyGameScope): string {
+  if (scope === "both") return tr("daily_GameBoth");
+  if (scope === "arknights") return tr("daily_GameArknights");
+  return tr("daily_GameEndfield");
+}
+
 export default command;
 
 command.autocomplete = async (client, interaction, db) => {
   const subcommand = interaction.options.getSubcommand(false);
   const focused = interaction.options.getFocused(true);
+
+  if (
+    (subcommand === "check" || subcommand === "claim") &&
+    focused.name === "account"
+  ) {
+    const accounts = await getAccounts(db, interaction.user.id);
+    if (!accounts || accounts.length === 0) {
+      await interaction.respond([]);
+      return;
+    }
+
+    const query = String(focused.value || "").toLowerCase();
+    const isZh = interaction.locale === "zh-TW";
+    let hasRoleUpdates = false;
+    const accountLabels = await Promise.all(
+      accounts.map(async (acc: any, index: number) => {
+        let previewBindings = acc?.roles;
+        try {
+          const liveBindings = await withAutoRefresh(
+            client,
+            interaction.user.id,
+            acc,
+            (c: string, s: string, options: any) =>
+              getGamePlayerBinding(acc.cookie, interaction.locale, c, s, options),
+            interaction.locale,
+          );
+
+          if (Array.isArray(liveBindings) && liveBindings.length > 0) {
+            previewBindings = liveBindings;
+            const oldValue = JSON.stringify(acc.roles || []);
+            const newValue = JSON.stringify(liveBindings);
+            if (oldValue !== newValue) {
+              acc.roles = liveBindings;
+              hasRoleUpdates = true;
+            }
+          }
+        } catch {
+          // Keep cached bindings if live query fails.
+        }
+
+        return {
+          name: buildAccountAutocompleteLabel(acc, previewBindings, isZh),
+          value: String(index),
+        };
+      }),
+    );
+
+    if (hasRoleUpdates) {
+      await saveAccounts(db, interaction.user.id, accounts);
+    }
+
+    const choices = accountLabels
+      .filter((x) => x.name.toLowerCase().includes(query))
+      .slice(0, 25);
+
+    await interaction.respond(choices);
+    return;
+  }
 
   if (subcommand !== "setup" || focused.name !== "channel") {
     await interaction.respond([]);
@@ -489,3 +762,90 @@ command.autocomplete = async (client, interaction, db) => {
 
   await interaction.respond(channels);
 };
+
+function buildAccountAutocompleteLabel(
+  account: any,
+  bindingsRaw: any,
+  isZh: boolean,
+): string {
+  const baseName = `${account?.info?.nickname || "Unknown"}`;
+  const baseId = `${account?.info?.id || "-"}`;
+
+  const { endfield, arknights } = extractGameRolePreview(bindingsRaw);
+  const efLabel = isZh ? "終末地" : "Endfield";
+  const akLabel = isZh ? "明日方舟" : "Arknights";
+  const noRole = isZh ? "無" : "None";
+
+  const efText = endfield
+    ? `${endfield.nickname}${
+        typeof endfield.level === "number" && endfield.level > 0
+          ? ` Lv.${endfield.level}`
+          : ""
+      }`
+    : noRole;
+  const akText = arknights
+    ? `${arknights.nickname}${
+        typeof arknights.level === "number" && arknights.level > 0
+          ? ` Lv.${arknights.level}`
+          : ""
+      }`
+    : noRole;
+
+  const full = `${baseName} (${baseId}) | ${efLabel}:${efText} | ${akLabel}:${akText}`;
+  return full.slice(0, 100);
+}
+
+function extractGameRolePreview(raw: any): {
+  endfield?: { nickname: string; level?: number };
+  arknights?: { nickname: string; level?: number };
+} {
+  const result: {
+    endfield?: { nickname: string; level?: number };
+    arknights?: { nickname: string; level?: number };
+  } = {};
+
+  if (!Array.isArray(raw)) return result;
+
+  const pushBinding = (entry: any) => {
+    const gameId = Number(entry?.gameId || 0);
+    const roles = Array.isArray(entry?.roles)
+      ? entry.roles
+      : entry?.defaultRole
+        ? [entry.defaultRole]
+        : [];
+    const role = roles[0];
+    const roleInfo = role
+      ? {
+          nickname: `${role?.nickname || role?.nickName || entry?.nickName || "Unknown"}`,
+          level: Number.isFinite(Number(role?.level))
+            ? Number(role?.level)
+            : undefined,
+        }
+      : entry?.nickName
+        ? {
+            nickname: `${entry.nickName}`,
+            level: undefined,
+          }
+        : null;
+    if (!roleInfo) return;
+
+    if (gameId === 3 && !result.endfield) {
+      result.endfield = roleInfo;
+    }
+    if (gameId === 1 && !result.arknights) {
+      result.arknights = roleInfo;
+    }
+  };
+
+  for (const item of raw) {
+    if (Array.isArray(item?.bindingList)) {
+      for (const binding of item.bindingList) {
+        pushBinding(binding);
+      }
+      continue;
+    }
+    pushBinding(item);
+  }
+
+  return result;
+}

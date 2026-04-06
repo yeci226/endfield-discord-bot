@@ -20,8 +20,7 @@ const langs: Record<string, any> = {
   FetchDataFailed: "獲取遊戲資料失敗，請檢查 Cookie 是否有效或稍後再試。",
   BindingNotFound: "未找到遊戲綁定資訊，請確認您已在遊戲中創建角色。",
   AuthError: "身分驗證失敗，請重新綁定帳號。",
-  TokenExpired:
-    "❌ **Token 已過期或請求異常**\n很抱歉機器人尚未完全完善，此帳號的登入態已失效，請使用 `/login` 重新登入以恢復功能。",
+  TokenExpired: "**Token 已過期或請求異常**",
 
   // Account
   AccountNotFound:
@@ -44,6 +43,11 @@ const langs: Record<string, any> = {
   daily_NotifyDesc: "是否在簽到時通知",
   daily_NotifyMethod: "通知方式",
   daily_NotifyMethodDesc: "通知發送方式 (預設: 私訊)",
+  daily_Game: "遊戲",
+  daily_GameDesc: "選擇簽到遊戲範圍",
+  daily_GameEndfield: "終末地",
+  daily_GameArknights: "明日方舟",
+  daily_GameBoth: "同時",
   daily_DM: "私訊",
   daily_Channel: "當前頻道",
   daily_Checking: "🔄 **正在執行每日簽到...**",
@@ -55,11 +59,12 @@ const langs: Record<string, any> = {
   daily_TodayPending: "今日待領",
   daily_FirstReward: "新人獎勵",
   daily_TotalDays: "累計簽到",
-  daily_RoleNotFound: "⚠️ **未找到任何 Endfield 角色**",
+  daily_RoleNotFound: "⚠️ **未找到任何明日方舟/終末地簽到角色**",
   daily_SetupSuccess: "✅ **自動簽到設定已更新**",
   daily_SetupTime: "簽到時間",
   daily_SetupNotify: "簽到通知",
   daily_SetupNotifyMethod: "通知方式",
+  daily_SetupGame: "簽到遊戲",
   daily_SetupChannel: "通知頻道",
   daily_Mention: "提及使用者",
   daily_MentionDesc: "是否在通知時提及您",
@@ -204,6 +209,11 @@ const langs: Record<string, any> = {
   login_CookiePlaceholder: "ACCOUNT_TOKEN=...",
   login_CookieSuccess:
     "✅ **驗證成功**\n歡迎管理員，**<name>**!\n已將此帳號加入綁定列表。",
+  login_BoundGamesPrefix: "已添加遊戲：",
+  login_BoundGamesNone: "無",
+  login_BoundGamesJoiner: "、",
+  login_GameEndfield: "終末地",
+  login_GameArknights: "明日方舟",
   login_CaptchaRequired:
     "🛡️ **由 Gryphline 觸發的人機驗證**\n請點擊下方網址並在瀏覽器中開啟：\n**[👉 點我進行驗證](<url>)**\n\n1. 開啟上述網址後，驗證碼會自動載入。\n2. 完成驗證後，網頁會自動傳回結果。\n3. **機器人偵測到驗證成功後會自動完成登入。**",
   login_ManualVerify: "手動檢查驗證狀態",

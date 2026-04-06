@@ -1099,9 +1099,6 @@ export async function clearGachaLog(
  */
 export async function syncExistingLogsToLeaderboard(db: CustomDatabase) {
   const logIds = await db.findIdsByPrefix("GACHA_LOG_");
-  console.log(
-    `[Leaderboard Sync] Found ${logIds.length} existing logs to sync.`,
-  );
 
   for (const id of logIds) {
     const uid = id.replace("GACHA_LOG_", "");

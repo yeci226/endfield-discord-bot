@@ -15,9 +15,23 @@ GlobalFonts.registerFromPath(
   "NotoSansBold",
 );
 
+const redditFontCandidates = [
+  path.join(fontDir, "RedditSans-VariableFont_wght.ttf"),
+  path.join(process.cwd(), "src/assets/fonts/RedditSans-VariableFont_wght.ttf"),
+  path.join(process.cwd(), "dist/assets/fonts/RedditSans-VariableFont_wght.ttf"),
+];
+
+for (const fontPath of redditFontCandidates) {
+  if (fs.existsSync(fontPath)) {
+    GlobalFonts.registerFromPath(fontPath, "RedditSans");
+    break;
+  }
+}
+
 export interface DailyRewardItem {
   name: string;
   icon?: string;
+  resourceId?: string;
   done?: boolean;
   endOfPeriod?: boolean;
 }
@@ -25,6 +39,7 @@ export interface DailyRewardItem {
 export interface DailyCardPayload {
   roleName: string;
   roleMeta: string;
+  gameId?: number;
   totalDays: number;
   calendarTotalDays: number;
   todayClaimedNow?: boolean;
@@ -76,31 +91,78 @@ function roundedRect(
 async function drawRewardIcon(
   ctx: any,
   iconUrl: string | undefined,
+  resourceId: string | undefined,
+  useLocalArknightsIcon: boolean,
+  fallbackLabel: string,
+  textFontBold: string,
   x: number,
   y: number,
   size: number,
   locked: boolean,
 ) {
   ctx.save();
+
+  const loadLocalArknightsIcon = async (): Promise<Buffer | null> => {
+    if (!useLocalArknightsIcon || !resourceId) return null;
+
+    const candidates = [
+      path.join(__dirname, "../assets/arknights", `${resourceId}.png`),
+      path.join(process.cwd(), "src/assets/arknights", `${resourceId}.png`),
+      path.join(process.cwd(), "dist/assets/arknights", `${resourceId}.png`),
+    ];
+
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        const key = `local:${p}`;
+        const cached = imageCache.get(key);
+        if (cached) return cached;
+
+        const buf = await fs.promises.readFile(p);
+        imageCache.set(key, buf);
+        return buf;
+      }
+    }
+
+    return null;
+  };
+
+  const drawFromBuffer = async (buffer: Buffer) => {
+    const icon = await loadImage(buffer);
+    const ratio = Math.min(size / icon.width, size / icon.height);
+    const drawW = icon.width * ratio;
+    const drawH = icon.height * ratio;
+    const offsetX = x + (size - drawW) / 2;
+    const offsetY = y + (size - drawH) / 2;
+    ctx.drawImage(icon, offsetX, offsetY, drawW, drawH);
+  };
+
   if (iconUrl) {
     try {
       const iconBuffer = await loadImageBuffer(iconUrl);
-      const icon = await loadImage(iconBuffer);
-      const ratio = Math.min(size / icon.width, size / icon.height);
-      const drawW = icon.width * ratio;
-      const drawH = icon.height * ratio;
-      const offsetX = x + (size - drawW) / 2;
-      const offsetY = y + (size - drawH) / 2;
-      ctx.drawImage(icon, offsetX, offsetY, drawW, drawH);
+      await drawFromBuffer(iconBuffer);
     } catch {
-      ctx.fillStyle = "rgba(180, 190, 210, 0.25)";
-      ctx.font = "bold 26px NotoSansBold";
-      ctx.fillText("?", x + size / 2 - 8, y + size / 2 + 10);
+      const localIcon = await loadLocalArknightsIcon();
+      if (localIcon) {
+        await drawFromBuffer(localIcon);
+      } else {
+        ctx.fillStyle = "rgba(180, 190, 210, 0.25)";
+        ctx.font = `bold 22px ${textFontBold}`;
+        const initial = (fallbackLabel || "獎勵").trim().slice(0, 2) || "獎勵";
+        const width = ctx.measureText(initial).width;
+        ctx.fillText(initial, x + (size - width) / 2, y + size / 2 + 8);
+      }
     }
   } else {
-    ctx.fillStyle = "rgba(180, 190, 210, 0.25)";
-    ctx.font = "bold 26px NotoSansBold";
-    ctx.fillText("?", x + size / 2 - 8, y + size / 2 + 10);
+    const localIcon = await loadLocalArknightsIcon();
+    if (localIcon) {
+      await drawFromBuffer(localIcon);
+    } else {
+      ctx.fillStyle = "rgba(180, 190, 210, 0.25)";
+      ctx.font = `bold 22px ${textFontBold}`;
+      const initial = (fallbackLabel || "獎勵").trim().slice(0, 2) || "獎勵";
+      const width = ctx.measureText(initial).width;
+      ctx.fillText(initial, x + (size - width) / 2, y + size / 2 + 8);
+    }
   }
 
   ctx.restore();
@@ -111,11 +173,12 @@ function fitText(
   text: string,
   maxWidth: number,
   initialSize: number,
+  fontFamily: string,
   minSize = 16,
 ): number {
   let size = initialSize;
   while (size > minSize) {
-    ctx.font = `${size}px NotoSans`;
+    ctx.font = `${size}px ${fontFamily}`;
     if (ctx.measureText(text).width <= maxWidth) break;
     size -= 1;
   }
@@ -130,10 +193,25 @@ export async function buildDailyAttendanceCard(
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
 
+  const isArknights = payload.gameId === 1;
+  const textFont = isArknights
+    ? '"PingFang TC", "PingFang", "NotoSans"'
+    : "NotoSans";
+  const textFontBold = isArknights
+    ? '"PingFang TC", "PingFang", "NotoSansBold", "NotoSans"'
+    : "NotoSansBold";
   const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-  bgGradient.addColorStop(0, "#171b2a");
-  bgGradient.addColorStop(0.5, "#10232c");
-  bgGradient.addColorStop(1, "#1f1c2f");
+  if (isArknights) {
+    // Arknights: neutral dark steel palette.
+    bgGradient.addColorStop(0, "#16191f");
+    bgGradient.addColorStop(0.5, "#222832");
+    bgGradient.addColorStop(1, "#2c2433");
+  } else {
+    // Endfield: teal sci-fi palette.
+    bgGradient.addColorStop(0, "#171b2a");
+    bgGradient.addColorStop(0.5, "#10232c");
+    bgGradient.addColorStop(1, "#1f1c2f");
+  }
   ctx.fillStyle = bgGradient;
   ctx.fillRect(0, 0, width, height);
 
@@ -145,36 +223,42 @@ export async function buildDailyAttendanceCard(
   roundedRect(ctx, panelX, panelY, panelW, panelH, 24);
   ctx.fillStyle = "rgba(9, 12, 18, 0.58)";
   ctx.fill();
-  ctx.strokeStyle = "rgba(152, 214, 255, 0.22)";
+  ctx.strokeStyle = isArknights
+    ? "rgba(206, 220, 238, 0.24)"
+    : "rgba(152, 214, 255, 0.22)";
   ctx.lineWidth = 2;
   ctx.stroke();
 
   ctx.fillStyle = "#f8fbff";
-  ctx.font = "bold 44px NotoSansBold";
+  ctx.font = `bold 44px ${textFontBold}`;
   ctx.fillText(payload.roleName, panelX + 38, panelY + 70);
 
   ctx.fillStyle = "#a8bed1";
-  ctx.font = "30px NotoSans";
+  ctx.font = `30px ${textFont}`;
   ctx.fillText(payload.roleMeta, panelX + 40, panelY + 116);
 
   const badgeX = panelX + panelW - 360;
   const badgeY = panelY + 44;
   roundedRect(ctx, badgeX, badgeY, 300, 84, 18);
-  ctx.fillStyle = "rgba(138, 255, 198, 0.14)";
+  ctx.fillStyle = isArknights
+    ? "rgba(238, 244, 252, 0.14)"
+    : "rgba(138, 255, 198, 0.14)";
   ctx.fill();
-  ctx.strokeStyle = "rgba(170, 255, 216, 0.44)";
+  ctx.strokeStyle = isArknights
+    ? "rgba(232, 239, 250, 0.42)"
+    : "rgba(170, 255, 216, 0.44)";
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  ctx.fillStyle = "#b8ffdd";
-  ctx.font = "25px NotoSans";
+  ctx.fillStyle = isArknights ? "#e8f0ff" : "#b8ffdd";
+  ctx.font = `25px ${textFont}`;
   ctx.fillText(
     payload.tr("daily_canvas_TotalCheckIn"),
     badgeX + 24,
     badgeY + 33,
   );
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 36px NotoSansBold";
+  ctx.font = `bold 36px ${textFontBold}`;
   const totalLabel =
     payload.calendarTotalDays > 0
       ? `${payload.totalDays}/${payload.calendarTotalDays} 天`
@@ -200,12 +284,12 @@ export async function buildDailyAttendanceCard(
   const textMax = cardW - 32;
   const unifiedNameFontSize = items.reduce((minSize, item) => {
     const name = item.name || "-";
-    const size = fitText(ctx, name, textMax, 34, 18);
+    const size = fitText(ctx, name, textMax, 34, textFont, 18);
     return Math.min(minSize, size);
   }, 34);
 
-  ctx.fillStyle = "#d7e5f2";
-  ctx.font = "bold 30px NotoSansBold";
+  ctx.fillStyle = isArknights ? "#e5eaf1" : "#d7e5f2";
+  ctx.font = `bold 30px ${textFontBold}`;
   ctx.fillText(
     payload.tr("daily_canvas_CheckinRewards"),
     leftStartX,
@@ -253,14 +337,29 @@ export async function buildDailyAttendanceCard(
     const iconSize = 124;
     const iconX = x + (cardW - iconSize) / 2;
     const iconY = y + 52;
-    await drawRewardIcon(ctx, item.icon, iconX, iconY, iconSize, isFuture);
+    await drawRewardIcon(
+      ctx,
+      item.icon,
+      item.resourceId,
+      isArknights,
+      item.name || payload.tr("None") || "獎勵",
+      textFontBold,
+      iconX,
+      iconY,
+      iconSize,
+      isFuture,
+    );
 
-    ctx.fillStyle = isToday ? "#e9fff3" : "#d5deeb";
-    ctx.font = "bold 28px NotoSansBold";
+    ctx.fillStyle = isToday
+      ? isArknights
+        ? "#f3f6fb"
+        : "#e9fff3"
+      : "#d5deeb";
+    ctx.font = `bold 28px ${textFontBold}`;
     ctx.fillText(labels[i], x + 18, y + 36);
 
     const text = item.name || "-";
-    ctx.font = `bold ${unifiedNameFontSize}px NotoSansBold`;
+    ctx.font = `bold ${unifiedNameFontSize}px ${textFontBold}`;
     ctx.fillStyle = isFuture ? "#bac3cf" : "#ffffff";
     const subLabelY = y + cardH - 24;
     const nameY = subLabelY - 26;
@@ -268,19 +367,25 @@ export async function buildDailyAttendanceCard(
 
     if (isPast) {
       if (item.done) {
-        ctx.font = "20px NotoSans";
+        ctx.font = `20px ${textFont}`;
         ctx.fillStyle = "#a9cce1";
         ctx.fillText(payload.tr("daily_canvas_Claimed"), x + 16, subLabelY);
       }
     }
 
     if (isToday) {
-      ctx.font = "20px NotoSans";
+      ctx.font = `20px ${textFont}`;
       ctx.fillStyle = todayClaimedNow
-        ? "#b8ffd5"
+        ? isArknights
+          ? "#e2e8f0"
+          : "#b8ffd5"
         : todayIsClaimed
-          ? "#a9cce1"
-          : "rgba(220, 255, 236, 0.82)";
+          ? isArknights
+            ? "#cbd5e1"
+            : "#a9cce1"
+          : isArknights
+            ? "rgba(226, 232, 240, 0.84)"
+            : "rgba(220, 255, 236, 0.82)";
       ctx.fillText(
         todayIsClaimed
           ? payload.tr("daily_canvas_Claimed")
@@ -291,7 +396,7 @@ export async function buildDailyAttendanceCard(
     }
 
     if (isFuture) {
-      ctx.font = "20px NotoSans";
+      ctx.font = `20px ${textFont}`;
       ctx.fillStyle = "#8f98a5";
       ctx.fillText(
         item.endOfPeriod
