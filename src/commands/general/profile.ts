@@ -158,7 +158,15 @@ const command: Command = {
             targetUserId,
             account,
             (c: string, s: string, options: any) =>
-              getCardDetail(roleId, serverId, account.info?.id || uid, tr.lang, c, s, options),
+              getCardDetail(
+                roleId,
+                serverId,
+                account.info?.id || uid,
+                tr.lang,
+                c,
+                s,
+                options,
+              ),
             tr.lang,
           );
         } catch (e: any) {
@@ -244,7 +252,15 @@ const command: Command = {
           targetUserId,
           account,
           (c: string, s: string, options: any) =>
-            getCardDetail(roleId, serverId, account.info?.id || uid, tr.lang, c, s, options),
+            getCardDetail(
+              roleId,
+              serverId,
+              account.info?.id || uid,
+              tr.lang,
+              c,
+              s,
+              options,
+            ),
           tr.lang,
         );
       } catch (e: any) {

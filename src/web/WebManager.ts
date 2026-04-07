@@ -249,7 +249,9 @@ export class WebManager {
 
       const cached = this.dataCache.get(token);
       if (!cached) {
-        return res.status(404).json({ error: "No data cached, reload the editor page first" });
+        return res
+          .status(404)
+          .json({ error: "No data cached, reload the editor page first" });
       }
 
       const { template: bodyTemplate } = req.body;

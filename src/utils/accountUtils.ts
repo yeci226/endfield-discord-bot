@@ -24,7 +24,9 @@ function flattenBindingList(bindings: any[] | null | undefined): any[] {
   return out;
 }
 
-export function normalizeBindingEntries(bindings: any[] | null | undefined): any[] {
+export function normalizeBindingEntries(
+  bindings: any[] | null | undefined,
+): any[] {
   if (!Array.isArray(bindings)) return [];
 
   const out: any[] = [];
@@ -148,7 +150,9 @@ export async function ensureAccountBinding(
       const res = await getUserInfo(account.cred, lang, account.salt);
       if (res && res.code === 0) {
         valid = true;
-        logger.success(`[Step 1] 憑證有效，主動刷新 salt 以確保後續 API 可用...`);
+        logger.success(
+          `[Step 1] 憑證有效，主動刷新 salt 以確保後續 API 可用...`,
+        );
         // Binding endpoint 對 salt 過期容忍度嚴格，即使 getUserInfo 成功也需刷新
         const refreshed = await refreshSkToken(account.cred, "3", newSalt);
         if (refreshed) {
@@ -253,7 +257,11 @@ export async function ensureAccountBinding(
       if (flattened.length > 0) {
         latestBindings = flattened;
       }
-    } else if (bindingRes?.status === 401 && bindingRes?.code !== 10003 && newCred) {
+    } else if (
+      bindingRes?.status === 401 &&
+      bindingRes?.code !== 10003 &&
+      newCred
+    ) {
       // Refresh salt and retry
       const refreshedSalt = await refreshSkToken(newCred, "3", newSalt);
       if (refreshedSalt) {
@@ -273,7 +281,12 @@ export async function ensureAccountBinding(
         if (refreshedToken) {
           newCookie = `ACCOUNT_TOKEN=${refreshedToken}`;
           const verifyRes = await verifyToken(newCookie, lang);
-          if (verifyRes && verifyRes.status === 0 && verifyRes.cred && verifyRes.token) {
+          if (
+            verifyRes &&
+            verifyRes.status === 0 &&
+            verifyRes.cred &&
+            verifyRes.token
+          ) {
             newCred = verifyRes.cred;
             newSalt = verifyRes.token;
             const retryRes = await fetchBindings();

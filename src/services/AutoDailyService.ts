@@ -376,6 +376,7 @@ export class AutoDailyService {
         }[];
         status: string;
         isError?: boolean;
+        accountIdx?: number;
       }[] = [];
 
       const processedRoles = new Set<string>();
@@ -396,12 +397,13 @@ export class AutoDailyService {
             this.logger.warn(
               `Skipping unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
             );
-            results.push(
-              this.makeErrorResult(
+            results.push({
+              ...this.makeErrorResult(
                 account.info?.nickname || "Unknown",
                 tr("TokenExpired"),
               ),
-            );
+              accountIdx: i,
+            });
             failCount++;
             continue;
           }
@@ -435,13 +437,28 @@ export class AutoDailyService {
             // Keep using locally cached bindings when refresh fails.
           }
 
+          // Re-check invalid flag: the getGamePlayerBinding onStale may have
+          // exhausted all refresh steps and marked the account invalid.
+          if (account.invalid) {
+            results.push({
+              ...this.makeErrorResult(
+                account.info?.nickname || "Unknown",
+                tr("TokenExpired"),
+              ),
+              accountIdx: i,
+            });
+            failCount++;
+            continue;
+          }
+
           if (!roles || roles.length === 0) {
-            results.push(
-              this.makeErrorResult(
+            results.push({
+              ...this.makeErrorResult(
                 account.info?.nickname || "Unknown",
                 tr("Error") || "No roles found",
               ),
-            );
+              accountIdx: i,
+            });
             failCount++;
             continue;
           }
@@ -511,6 +528,7 @@ export class AutoDailyService {
                       ? tr("daily_Success")
                       : tr("daily_StatusAlready"),
                     isError: !!res.error && !res.signedNow && !res.hasToday,
+                    accountIdx: i,
                   });
 
                   this.logger.info(
@@ -522,9 +540,13 @@ export class AutoDailyService {
                 this.logger.error(
                   `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
                 );
-                results.push(
-                  this.makeErrorResult(role.nickname || "Unknown", tr("Error")),
-                );
+                results.push({
+                  ...this.makeErrorResult(
+                    role.nickname || "Unknown",
+                    tr("Error"),
+                  ),
+                  accountIdx: i,
+                });
                 failCount++;
               }
             }
@@ -533,12 +555,13 @@ export class AutoDailyService {
           this.logger.error(
             `Error processing account ${account.info?.id} for user ${userId}: ${accError}`,
           );
-          results.push(
-            this.makeErrorResult(
+          results.push({
+            ...this.makeErrorResult(
               account.info?.nickname || "Unknown",
               tr("Error"),
             ),
-          );
+            accountIdx: i,
+          });
           failCount++;
         }
       }
@@ -548,12 +571,27 @@ export class AutoDailyService {
       );
 
       if (config.notify && results.length > 0) {
-        const files: AttachmentBuilder[] = [];
-        const lines: string[] = [];
+        // Group non-error results by account, preserving order
+        const accountGroups = new Map<number, { res: (typeof results)[0]; idx: number }[]>();
+        const errorLines: string[] = [];
 
         for (const [idx, res] of results.entries()) {
-          if (!res.isError && files.length < 10) {
-            const payload: DailyCardPayload = {
+          const accountIdx = res.accountIdx ?? 0;
+          if (!res.isError) {
+            if (!accountGroups.has(accountIdx)) accountGroups.set(accountIdx, []);
+            accountGroups.get(accountIdx)!.push({ res, idx });
+          } else {
+            errorLines.push(`- ${res.roleName}: ${res.status}`);
+          }
+        }
+
+        let isFirstNotification = true;
+
+        for (const entries of accountGroups.values()) {
+          const files: AttachmentBuilder[] = [];
+
+          for (const { res, idx } of entries) {
+            const cardPayload: DailyCardPayload = {
               roleName: res.roleName,
               roleMeta: res.roleMeta || "",
               gameId: Number(res.gameId || 3),
@@ -587,35 +625,49 @@ export class AutoDailyService {
               tr,
             };
 
-            const cardBuffer = await this.renderCardWithCache(payload);
+            const cardBuffer = await this.renderCardWithCache(cardPayload);
             files.push(
               new AttachmentBuilder(cardBuffer, {
                 name: `auto-daily-${userId}-${idx}.png`,
               }),
             );
-          } else if (res.isError) {
-            lines.push(`- ${res.roleName}: ${res.status}`);
           }
+
+          // First account: include mention; subsequent accounts: include separator
+          let content: string | undefined;
+          if (isFirstNotification && config.mention !== false) {
+            content = `<@${userId}>`;
+          } else if (!isFirstNotification) {
+            content = "───────────────";
+          }
+
+          try {
+            await this.sendNotification(userId, config, { content, files });
+          } catch (e) {
+            this.logger.error(
+              "Failed to send card notification: " +
+                (e instanceof Error ? e.message : e),
+            );
+          }
+
+          isFirstNotification = false;
         }
 
-        if (results.filter((r) => !r.isError).length > files.length) {
-          lines.push("- 部分結果未附上圖片（已達附件上限）。");
-        }
-
-        const payload = {
-          content:
-            (config.mention !== false ? `<@${userId}>\n` : "") +
-            lines.join("\n"),
-          files,
-        };
-
-        try {
-          await this.sendNotification(userId, config, payload);
-        } catch (e) {
-          this.logger.error(
-            "Failed to broadcast notification: " +
-              (e instanceof Error ? e.message : e),
-          );
+        if (errorLines.length > 0) {
+          const mentionPrefix =
+            isFirstNotification && config.mention !== false
+              ? `<@${userId}>\n`
+              : "";
+          try {
+            await this.sendNotification(userId, config, {
+              content: mentionPrefix + errorLines.join("\n"),
+            });
+          } catch (e) {
+            this.logger.error(
+              "Failed to send error notification: " +
+                (e instanceof Error ? e.message : e),
+            );
+          }
         }
       }
     } catch (error) {

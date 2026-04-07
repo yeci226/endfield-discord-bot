@@ -1,9 +1,33 @@
 import axios, { AxiosRequestConfig } from "axios";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { UserInfoResponse } from "./UserInfoInterfaces";
 import { Logger } from "./Logger";
 
 const logger = new Logger("SkportAPI");
+
+const OFFSET_CACHE_PATH = path.join(process.cwd(), ".cache", "server-time-offset.json");
+
+function loadCachedOffset(): number {
+  try {
+    const raw = fs.readFileSync(OFFSET_CACHE_PATH, "utf8");
+    const offset = Number(JSON.parse(raw)?.offset);
+    return Number.isFinite(offset) ? offset : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveCachedOffset(offset: number): void {
+  try {
+    fs.mkdirSync(path.dirname(OFFSET_CACHE_PATH), { recursive: true });
+    fs.writeFileSync(OFFSET_CACHE_PATH, JSON.stringify({ offset }), "utf8");
+  } catch {
+    // best-effort
+  }
+}
+
 
 export async function getCardDetail(
   roleId: string,
@@ -401,7 +425,8 @@ export function formatSkGameRole(
 }
 
 // Server time offset (in seconds) to compensate for clock skew causing 10003 errors.
-let serverTimeOffsetSeconds = 0;
+// Persisted across restarts so the first request after restart is already calibrated.
+let serverTimeOffsetSeconds = loadCachedOffset();
 
 function getAdjustedTimestamp(): string {
   return Math.floor(Date.now() / 1000 + serverTimeOffsetSeconds).toString();
@@ -416,7 +441,8 @@ function getCommonHeaders(cred: string | undefined, locale?: string) {
     accept: "*/*",
     "accept-language": formatAcceptLanguage(locale),
     "accept-encoding": "gzip, deflate, br",
-    "sec-ch-ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "sec-ch-ua":
+      '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
@@ -664,7 +690,9 @@ export async function makeRequest<T>(
       const resp = error.response;
       if (resp?.status !== 404) {
         if (resp?.status === 401) {
-          logger.warn(`[401 Unauthorized] URL: ${url} | body: ${JSON.stringify(resp?.data)}`);
+          logger.warn(
+            `[401 Unauthorized] URL: ${url} | body: ${JSON.stringify(resp?.data)}`,
+          );
           // code 10003 = server rejects our timestamp (clock skew). Calibrate offset.
           if (resp?.data?.code === 10003 && resp?.data?.timestamp) {
             const serverTs = parseInt(resp.data.timestamp, 10);
@@ -672,7 +700,10 @@ export async function makeRequest<T>(
             const newOffset = serverTs - localTs;
             if (Math.abs(newOffset - serverTimeOffsetSeconds) > 2) {
               serverTimeOffsetSeconds = newOffset;
-              logger.warn(`[10003] 校正伺服器時間偏移: ${newOffset}s (本地=${localTs}, 伺服器=${serverTs})`);
+              saveCachedOffset(newOffset);
+              logger.warn(
+                `[10003] 校正伺服器時間偏移: ${newOffset}s (本地=${localTs}, 伺服器=${serverTs})`,
+              );
             }
           }
           return { code: 10000, status: 401, ...(resp?.data || {}) };
@@ -916,7 +947,13 @@ export async function getGamePlayerBinding(
   salt?: string,
   options: any = {},
 ): Promise<GameBinding[] | null> {
-  const res = await getGamePlayerBindingResponse(cookie, locale, cred, salt, options);
+  const res = await getGamePlayerBindingResponse(
+    cookie,
+    locale,
+    cred,
+    salt,
+    options,
+  );
   if (res && res.code === 0 && res.data?.list) {
     return res.data.list;
   }
@@ -929,7 +966,11 @@ export async function getGamePlayerBindingResponse(
   cred?: string,
   salt?: string,
   options: any = {},
-): Promise<{ code: number; status?: number; data?: { list: GameBinding[] } } | null> {
+): Promise<{
+  code: number;
+  status?: number;
+  data?: { list: GameBinding[] };
+} | null> {
   const url = "https://zonai.skport.com/api/v1/game/player/binding";
   // Do NOT send Cookie header — the browser doesn't and the WAF blocks requests that do.
   // cred+sign authentication is sufficient.
