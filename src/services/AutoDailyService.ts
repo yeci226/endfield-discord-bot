@@ -264,7 +264,7 @@ export class AutoDailyService {
         const normalizedMention = (config as any).mention !== false;
         const normalizedGameScope = this.normalizeGameScope(
           (config as any).game_scope,
-          "arknights",
+          "both",
         );
 
         const hasChanged =
@@ -410,15 +410,16 @@ export class AutoDailyService {
 
           const gameScope = this.normalizeGameScope(
             config.game_scope,
-            "arknights",
+            "both",
           );
 
+          let liveBindings: any = null;
           let roles = this.normalizeAttendanceBindings(
             account.roles,
             gameScope,
           );
           try {
-            const liveBindings = await withAutoRefresh(
+            liveBindings = await withAutoRefresh(
               this.client,
               userId,
               account,
@@ -449,6 +450,20 @@ export class AutoDailyService {
             });
             failCount++;
             continue;
+          }
+
+          // Fallback: if the configured scope filtered out all roles (e.g. user has
+          // only Endfield chars but scope was saved as "arknights"), retry with "both".
+          if ((!roles || roles.length === 0) && gameScope !== "both") {
+            const fallbackRoles = this.normalizeAttendanceBindings(
+              account.roles,
+              "both",
+            );
+            const fallbackLive = this.normalizeAttendanceBindings(
+              liveBindings,
+              "both",
+            );
+            roles = fallbackLive.length > 0 ? fallbackLive : fallbackRoles;
           }
 
           if (!roles || roles.length === 0) {
