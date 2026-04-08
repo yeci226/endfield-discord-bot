@@ -1,7 +1,7 @@
 <div align="center">
 
 <!-- Replace with your banner image -->
-<img src="src/assets/readme/banner.png" alt="Banner" width="100%" />
+<img src="src/assets/profiles/1.png" alt="Banner" width="25%" />
 
 <br />
 <br />
@@ -22,7 +22,7 @@
 <br />
 
 <!-- Replace with a real screenshot or GIF of your bot in action -->
-<img src="src/assets/readme/demo.gif" alt="Bot Demo" width="80%" />
+<img src="src/assets/readme/screenshot-profile-char.webp" alt="Bot Demo" width="100%" />
 
 </div>
 
@@ -67,12 +67,25 @@ cp .env.example .env
 
 ### Configuration
 
-Edit `.env` with your credentials:
+Copy `.env.example` to `.env` and fill in your values:
 
 ```env
-DISCORD_TOKEN=your_discord_bot_token
-CLIENT_ID=your_discord_application_id
-# ... other config values
+# Discord
+DISCORD_TOKEN=
+TEST_DISCORD_TOKEN=
+
+# Encryption
+ENCRYPTION_KEY=
+
+# Web Server
+VERIFY_PORT=3838
+VERIFY_HUB_URL=http://localhost:3000/endfield
+EDITOR_PUBLIC_URL=http://localhost:3838
+
+# Webhooks (optional)
+ERRWEBHOOK=
+CMDWEBHOOK=
+JLWEBHOOK=
 ```
 
 ### Running

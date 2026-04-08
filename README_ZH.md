@@ -1,7 +1,7 @@
 <div align="center">
 
 <!-- Replace with your banner image -->
-<img src="src/assets/profiles/1.png" alt="Banner" width="50%" />
+<img src="src/assets/profiles/1.png" alt="Banner" width="25%" />
 
 <br />
 <br />
@@ -20,9 +20,8 @@
 [English](README.md) | **繁體中文**
 
 <br />
-
 <!-- Replace with a real screenshot or GIF of your bot in action -->
-<img src="src/assets/readme/demo.gif" alt="Bot Demo" width="80%" />
+<img src="src/assets/readme/screenshot-profile-char.webp" alt="Bot Demo" width="100%" />
 
 </div>
 
@@ -67,12 +66,25 @@ cp .env.example .env
 
 ### 設定
 
-編輯 `.env` 填入你的憑證：
+將 `.env.example` 複製為 `.env` 並填入對應的值：
 
 ```env
-DISCORD_TOKEN=你的_Discord_Bot_Token
-CLIENT_ID=你的_Discord_應用程式_ID
-# ... 其他設定值
+# Discord
+DISCORD_TOKEN=
+TEST_DISCORD_TOKEN=
+
+# Encryption
+ENCRYPTION_KEY=
+
+# Web Server
+VERIFY_PORT=3838
+VERIFY_HUB_URL=http://localhost:3000/endfield
+EDITOR_PUBLIC_URL=http://localhost:3838
+
+# Webhooks (optional)
+ERRWEBHOOK=
+CMDWEBHOOK=
+JLWEBHOOK=
 ```
 
 ### 啟動
