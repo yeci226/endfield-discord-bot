@@ -232,10 +232,10 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "Asia: Will end at <asiaEndTs> (<asiaEndTsRelative>)",
   gacha_log_how_Title: "❓ **How to get Gacha Log**",
   gacha_log_how_Steps:
-    '1. Log in to your account at <https://game.skport.com/endfield/sign-in>\n2. Show the bookmarks bar (press **Ctrl+Shift+B**).\n3. Click **Add page**, give it any name, then paste the following code into the URL field:\n```\njavascript:(async()=>{try{let e=null;for(let[t,n]of Object.entries(sessionStorage))if(t.startsWith("APP_ROLE_U8_TOKEN:")){e=n.toString().split(":")[0];break}if(!e)throw new Error("Token not found. Please log in and refresh the page.");await navigator.clipboard.writeText(e),alert("Success! Token copied to clipboard.")}catch(e){alert("Error: "+e.message)}})();\n```\n4. While on the website, click that bookmark — the token will be copied to your clipboard.\n5. Use `/gacha log load` and paste the token to import your records.',
+    "1. Link your Endfield account using `/login`.\n2. Use `/gacha log load` to automatically import your gacha records.",
   gacha_log_load_Loading: "🔄 **Fetching gacha records...**",
   gacha_log_load_ModalTitle: "Import Gacha Records",
-  gacha_log_load_UrlLabel: "Please paste your Token (or gacha log URL)",
+  gacha_log_load_UrlLabel: "Please paste your gacha log URL",
   gacha_log_load_Success:
     "✅ **Import Successful**\nGacha records for account **<uid>** have been updated.\nAdded **<charCount>** character records and **<weaponCount>** weapon records.\n*Note: Gacha records are permanently saved in the bot and will not be affected even if they expire (90 days) in-game.*",
   gacha_log_stats_Title: "<uid>'s Gacha Statistics",
@@ -294,9 +294,9 @@ const langs: Record<string, any> = {
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount:
     "Select which account to import the records into:",
-  gacha_log_load_UrlPlaceholder: "Paste your token or URL here",
+  gacha_log_load_UrlPlaceholder: "Paste your URL here",
   gacha_log_load_NoLinkedAccount:
-    "❌ No token provided and no linked account found. Please paste a token, or use `/login` to link your account first.",
+    "❌ No linked account found. Please use `/login` to link your account first.",
   gacha_log_token_expired_message:
     "If you see the this error, your token has expired. Please follow these steps to get a new token:\n\n1. Go to https://game.skport.com/endfield/sign-in and log in again\n2. Refresh the page\n3. Click the bookmark you saved earlier to copy a new token\n4. Use `/gacha log load` and paste the new token",
   gacha_sim_only_initiator:

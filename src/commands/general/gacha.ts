@@ -240,22 +240,10 @@ const command: Command = {
             .setNameLocalizations({
               "zh-TW": "載入",
             })
-            .setDescription("Load gacha log from token or URL")
+            .setDescription("Load gacha log from linked account")
             .setDescriptionLocalizations({
-              "zh-TW": "從令牌或網址載入抽卡紀錄",
+              "zh-TW": "從綁定帳號載入抽卡紀錄",
             })
-            .addStringOption((option) =>
-              option
-                .setName("url")
-                .setNameLocalizations({
-                  "zh-TW": "令牌",
-                })
-                .setDescription("Paste your token or gacha log URL")
-                .setDescriptionLocalizations({
-                  "zh-TW": "貼上令牌或抽卡紀錄網址",
-                })
-                .setRequired(false),
-            )
             .addStringOption((option) =>
               option
                 .setName("account")
@@ -1454,7 +1442,6 @@ const command: Command = {
         }
 
         if (subcommand === "load") {
-          const url = interaction.options.getString("url") || "";
           let selectedUid = interaction.options.getString("account");
 
           if (!selectedUid) {
@@ -1472,73 +1459,64 @@ const command: Command = {
           await interaction.deferReply();
           await interaction.editReply({ content: tr("gacha_log_load_Loading") });
 
-          if (!url) {
-            // No URL provided — try auto-sync from linked account
-            const userAccounts = await getAccounts(db, interaction.user.id);
-            const linkedAccount = userAccounts?.find(
-              (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
-            );
-            if (!linkedAccount) {
-              await interaction.editReply({
-                content: tr("gacha_log_load_NoLinkedAccount"),
-              });
-              return;
-            }
-            const allRoles = await getAllPossibleUserRoles(
-              interaction.user.id,
-              db,
-            );
-            const accountIndex =
-              allRoles.findIndex((r) => r.uid === selectedUid) + 1;
-            const nickname = allRoles.find(
-              (r) => r.uid === selectedUid,
-            )?.nickname;
-            const efRoles = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
-            const efGameUid = efRoles[0]?.uid;
-            if (!efGameUid) {
-              await interaction.editReply({
-                content: tr("gacha_log_load_NoLinkedAccount"),
-              });
-              return;
-            }
-            try {
-              const mergeResult = await fetchAndMergeGachaLogFromAccount(
-                db,
-                linkedAccount.cookie,
-                efGameUid,
-                "gryphline",
-                selectedUid,
-                undefined,
-                tr.lang,
-                interaction.user.displayAvatarURL({
-                  extension: "png",
-                  size: 128,
-                }),
-                interaction.user.displayName,
-                accountIndex > 0 ? accountIndex : undefined,
-                nickname,
-              );
-              await showGachaStats(selectedUid, "limited_char", "", 0, "");
-              if (mergeResult.hasDataGap) {
-                await interaction.followUp({
-                  content: tr("gacha_log_load_gap_warning"),
-                  flags: MessageFlags.Ephemeral,
-                });
-              }
-            } catch (error) {
-              const errorMessage =
-                error instanceof GachaApiError && error.apiCode === 40100
-                  ? tr("gacha_log_token_expired_message")
-                  : tr("gacha_log_load_Error", {
-                      error:
-                        error instanceof Error ? error.message : String(error),
-                    });
-              await interaction.editReply({ content: errorMessage });
-            }
+          // Auto-sync from linked account
+          const userAccounts = await getAccounts(db, interaction.user.id);
+          const linkedAccount = userAccounts?.find(
+            (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
+          );
+          if (!linkedAccount) {
+            await interaction.editReply({
+              content: tr("gacha_log_load_NoLinkedAccount"),
+            });
             return;
           }
-
-          await doFetchGachaLog(url, selectedUid, interaction.user.id);
+          const allRoles = await getAllPossibleUserRoles(
+            interaction.user.id,
+            db,
+          );
+          const accountIndex =
+            allRoles.findIndex((r) => r.uid === selectedUid) + 1;
+          const nickname = allRoles.find(
+            (r) => r.uid === selectedUid,
+          )?.nickname;
+          const efRoles = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
+          const efGameUid = efRoles[0]?.uid;
+          if (!efGameUid) {
+            await interaction.editReply({
+              content: tr("gacha_log_load_NoLinkedAccount"),
+            });
+            return;
+          }
+          try {
+            const mergeResult = await fetchAndMergeGachaLogFromAccount(
+              db,
+              linkedAccount.cookie,
+              efGameUid,
+              "gryphline",
+              selectedUid,
+              undefined,
+              tr.lang,
+              interaction.user.displayAvatarURL({
+                extension: "png",
+                size: 128,
+              }),
+              interaction.user.displayName,
+              accountIndex > 0 ? accountIndex : undefined,
+              nickname,
+            );
+            await showGachaStats(selectedUid, "limited_char", "", 0, "");
+            if (mergeResult.hasDataGap) {
+              await interaction.followUp({
+                content: tr("gacha_log_load_gap_warning"),
+                flags: MessageFlags.Ephemeral,
+              });
+            }
+          } catch (error) {
+            const errorMessage = tr("gacha_log_load_Error", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            await interaction.editReply({ content: errorMessage });
+          }
           return;
         }
 

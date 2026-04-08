@@ -230,10 +230,10 @@ const langs: Record<string, any> = {
   gacha_Asia_End: "亞洲：將在 <asiaEndTs> (<asiaEndTsRelative>) 結束",
   gacha_log_how_Title: "❓ **如何獲取抽卡紀錄**",
   gacha_log_how_Steps:
-    '1. 前往 <https://game.skport.com/endfield/sign-in> 登入您的帳號。\n2. 顯示書籤列（按 **Ctrl+Shift+B**）。\n3. 點擊**新增頁面**，輸入任意名稱，然後將以下程式碼貼入網址欄：\n```\njavascript:(async()=>{try{let e=null;for(let[t,n]of Object.entries(sessionStorage))if(t.startsWith("APP_ROLE_U8_TOKEN:")){e=n.toString().split(":")[0];break}if(!e)throw new Error("Token not found. Please log in and refresh the page.");await navigator.clipboard.writeText(e),alert("Success! Token copied to clipboard.")}catch(e){alert("Error: "+e.message)}})();\n```\n4. 在網站上點擊該書籤 — 令牌將自動複製到剪貼簿。\n5. 使用 `/gacha log load` 並貼上令牌以匯入資料。',
+    "1. 使用 `/login` 綁定您的終末地帳號。\n2. 使用 `/gacha log load` 即可自動匯入抽卡紀錄。",
   gacha_log_load_Loading: "🔄 **正在獲取抽卡紀錄...**",
   gacha_log_load_ModalTitle: "匯入抽卡紀錄",
-  gacha_log_load_UrlLabel: "請貼上令牌 (Token)（或抽卡紀錄網址）",
+  gacha_log_load_UrlLabel: "請貼上抽卡紀錄網址",
   gacha_log_load_Success:
     "✅ **匯入成功**\n帳號 **<uid>** 的抽卡紀錄已更新。\n新增了 **<charCount>** 筆角色紀錄與 **<weaponCount>** 筆武器紀錄。\n*備註：抽卡紀錄會永久保存在機器人中，即使遊戲內過期（90天）也不受影響。*",
   gacha_log_stats_Title: "<uid> 的抽卡數據統計",
@@ -288,9 +288,9 @@ const langs: Record<string, any> = {
   gacha_log_load_CreateNewGuest: "🆕 建立新的訪客紀錄槽位",
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount: "請選擇要將紀錄匯入至哪個帳號：",
-  gacha_log_load_UrlPlaceholder: "貼上令牌或網址",
+  gacha_log_load_UrlPlaceholder: "貼上網址",
   gacha_log_load_NoLinkedAccount:
-    "❌ 未輸入令牌且找不到綁定帳號，請貼上令牌，或先使用 `/login` 綁定帳號。",
+    "❌ 找不到綁定帳號，請先使用 `/login` 綁定您的終末地帳號。",
   gacha_log_token_expired_message:
     "如果您看到該錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 前往 https://game.skport.com/endfield/sign-in 重新登入\n2. 重新整理頁面\n3. 點擊您先前儲存的書籤以複製新令牌\n4. 使用 `/gacha log load` 並貼上新令牌",
   gacha_sim_only_initiator: "⚠️ 只有指令發起者可以繼續抽卡。",
