@@ -294,6 +294,9 @@ const langs: Record<string, any> = {
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount:
     "Select which account to import the records into:",
+  gacha_log_load_UrlPlaceholder: "Paste your token or URL here",
+  gacha_log_load_NoLinkedAccount:
+    "❌ No token provided and no linked account found. Please paste a token, or use `/login` to link your account first.",
   gacha_log_token_expired_message:
     "If you see the this error, your token has expired. Please follow these steps to get a new token:\n\n1. Go to https://game.skport.com/endfield/sign-in and log in again\n2. Refresh the page\n3. Click the bookmark you saved earlier to copy a new token\n4. Use `/gacha log load` and paste the new token",
   gacha_sim_only_initiator:

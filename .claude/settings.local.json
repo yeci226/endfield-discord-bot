@@ -1,7 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e ':*)"
+      "Bash(node -e ':*)",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/git/trees/main?recursive=1\")",
+      "Bash(python3 -c ':*)",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/src-tauri/src\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/src-tauri\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/git/trees/567afd65ad55131638bb9bd50bca862d07a53e0d?recursive=1\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/master/src-tauri/src/lib.rs\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/git/trees/5fad607189de39778cadf485f2eadb361a6ea3f1?recursive=1\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/git/trees/5fad607189de39778cadf485f2eadb361a6ea3f1?recursive=1\" -o /tmp/endfield_app.json)",
+      "Bash(python3)",
+      "Bash(node -e \"const d=require\\('/tmp/endfield_app.json'\\); d.tree.filter\\(i=>i.type==='blob'\\).forEach\\(i=>console.log\\(i.path\\)\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);j.tree.filter\\(i=>i.type==='blob'\\).forEach\\(i=>console.log\\(i.path\\)\\)}\\)\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/master/app/composables/gacha/gachaApi.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/master/app/composables/gacha/useGachaAuth.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/master/app/utils/gachaCalc.ts\")",
+      "Bash(yarn tsc:*)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/97f27fe5825cb5b5e81c734bc72da5c94d0c98f1/app/composables/gacha/useGachaAuth.ts\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/97f27fe5825cb5b5e81c734bc72da5c94d0c98f1/app/composables/gacha/useGachaFetch.ts\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha/useGachaAuth.ts?ref=97f27fe5825cb5b5e81c734bc72da5c94d0c98f1\")",
+      "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha?ref=97f27fe5825cb5b5e81c734bc72da5c94d0c98f1\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/97f27fe5825cb5b5e81c734bc72da5c94d0c98f1/app/composables/gacha/gachaApi.ts\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

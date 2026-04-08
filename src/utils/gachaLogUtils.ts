@@ -129,44 +129,53 @@ async function fetchRawGachaFromUrl(
       token = rawPart;
     }
     lang = locale ? mapLocaleToLang(locale) : "en-us";
-    apiDomain = "https://ef-webview.gryphline.com";
-    host = "ef-webview.gryphline.com";
 
-    // Auto-detect server ID by trying all candidates
-    // Note: 40100 per server may mean "no account on this server", not a globally invalid token
+    // Auto-detect server by trying gryphline (global) first, then hypergryph (CN)
     if (onProgress) onProgress("Detecting server region...");
-    const serverCandidates = ["3", "2", "1"];
+    const domainCandidates = [
+      { domain: "https://ef-webview.gryphline.com", servers: ["3", "2", "1"] },
+      { domain: "https://ef-webview.hypergryph.com", servers: ["1"] },
+    ];
+
     let detectedServer: string | null = null;
-    for (const candidate of serverCandidates) {
-      try {
-        const probeRes = await axios.get(`${apiDomain}/api/record/char`, {
-          params: {
-            token,
-            lang,
-            server_id: candidate,
-            pool_type: POOL_TYPES[0],
-          },
-        });
-        if (probeRes.data.code === 0) {
-          detectedServer = candidate;
-          break;
+    let detectedDomain: string | null = null;
+
+    outer: for (const { domain, servers } of domainCandidates) {
+      for (const candidate of servers) {
+        try {
+          const probeRes = await axios.get(`${domain}/api/record/char`, {
+            params: {
+              token,
+              lang,
+              server_id: candidate,
+              pool_type: POOL_TYPES[0],
+            },
+          });
+          if (probeRes.data.code === 0) {
+            detectedServer = candidate;
+            detectedDomain = domain;
+            break outer;
+          }
+          // Any non-zero code means this server didn't work — try next
+        } catch {
+          // Network error — try next candidate
         }
-        // Any non-zero code (including 40100) just means this server didn't work —
-        // continue trying the next candidate
-      } catch {
-        // Network error — try next candidate
       }
     }
 
-    if (!detectedServer) {
+    if (!detectedServer || !detectedDomain) {
       throw new GachaApiError(
         "Unable to import records. Token may be invalid or expired.",
         40100,
       );
     }
 
+    apiDomain = detectedDomain;
+    host = detectedDomain.replace("https://", "");
     serverId = detectedServer;
-    inferredUid = `EF_${serverId}`;
+    inferredUid = host.includes("hypergryph")
+      ? `EF_CN_${serverId}`
+      : `EF_${serverId}`;
   } else {
     // Legacy URL method (backward compatible)
     const url = new URL(urlStr);
@@ -318,6 +327,129 @@ async function fetchRawGachaFromUrl(
     characterList,
     weaponList,
   };
+}
+
+/**
+ * Exchange a Gryphline/Hypergryph ACCOUNT_TOKEN for an Endfield u8_token.
+ * Requires the user's hgId (stored in account.info.id after /login).
+ */
+export async function getEndfieldU8Token(
+  accountToken: string,
+  hgId: string,
+  provider: "hypergryph" | "gryphline" = "gryphline",
+): Promise<string> {
+  const appCode =
+    provider === "gryphline" ? "3dacefa138426cfe" : "be36d44aa36bfb5b";
+
+  // hgId here is the Endfield game uid from Skland binding (efRoles[].uid),
+  // which is what u8_token_by_uid expects.
+  const uid = hgId;
+  if (!uid) throw new Error("Unable to resolve Endfield game uid");
+
+  // Step 1: Exchange ACCOUNT_TOKEN → Endfield OAuth token
+  const oauthRes = await axios.post(
+    `https://as.${provider}.com/user/oauth2/v2/grant`,
+    { type: 1, appCode, token: accountToken },
+    { headers: { "Content-Type": "application/json" } },
+  );
+  if (oauthRes.data?.status !== 0) {
+    throw new GachaApiError(
+      `OAuth grant failed: ${oauthRes.data?.msg || "unknown"}`,
+      oauthRes.data?.status ?? -1,
+    );
+  }
+  const oauthToken = oauthRes.data?.data?.token;
+  if (!oauthToken) throw new Error("No OAuth token in response");
+
+  // Step 2: Exchange uid + oauth_token → u8_token
+  const u8Res = await axios.post(
+    `https://binding-api-account-prod.${provider}.com/account/binding/v1/u8_token_by_uid`,
+    { uid, token: oauthToken },
+    { headers: { "Content-Type": "application/json" } },
+  );
+  const u8Token = u8Res.data?.data?.token;
+  if (!u8Token) throw new Error("No u8_token in response");
+
+  return u8Token;
+}
+
+/**
+ * Fetch and merge gacha records using a stored linked account (no URL required).
+ * Automatically detects server region if not already stored.
+ */
+export async function fetchAndMergeGachaLogFromAccount(
+  db: CustomDatabase,
+  accountCookie: string,
+  hgId: string,
+  provider: "hypergryph" | "gryphline",
+  targetUid: string,
+  onProgress?: (message: string) => void,
+  locale?: string,
+  avatarUrl?: string,
+  displayName?: string,
+  accountIndex?: number,
+  gameNickname?: string,
+) {
+  // Extract raw token value from "ACCOUNT_TOKEN=xxx" cookie string
+  const tokenMatch = accountCookie.match(/ACCOUNT_TOKEN=([^;]+)/);
+  const accountToken = tokenMatch ? tokenMatch[1].trim() : accountCookie.trim();
+
+  if (onProgress) onProgress("Authenticating with Endfield...");
+  const u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+
+  // Reuse stored serverId, or auto-detect
+  const dbKey = `GACHA_LOG_${targetUid}`;
+  const existingData = await db.get<GachaLogData>(dbKey);
+  let serverId = existingData?.info?.serverId;
+
+  const apiDomain = `https://ef-webview.${provider}.com`;
+  const lang = locale
+    ? mapLocaleToLang(locale)
+    : provider === "gryphline"
+      ? "en-us"
+      : "zh-cn";
+
+  if (!serverId) {
+    if (onProgress) onProgress("Detecting server region...");
+    const serverCandidates =
+      provider === "gryphline" ? ["3", "2", "1"] : ["1"];
+    for (const candidate of serverCandidates) {
+      try {
+        const probeRes = await axios.get(`${apiDomain}/api/record/char`, {
+          params: {
+            token: u8Token,
+            lang,
+            server_id: candidate,
+            pool_type: POOL_TYPES[0],
+          },
+        });
+        if (probeRes.data.code === 0) {
+          serverId = candidate;
+          break;
+        }
+      } catch {
+        // try next
+      }
+    }
+    if (!serverId) {
+      throw new GachaApiError("Unable to detect server region", 40100);
+    }
+  }
+
+  // Build a synthetic URL so we can reuse fetchAndMergeGachaLog directly
+  const syntheticUrl = `${apiDomain}/page/gacha_?token=${encodeURIComponent(u8Token)}&server_id=${serverId}&lang=${lang}`;
+
+  return fetchAndMergeGachaLog(
+    db,
+    syntheticUrl,
+    onProgress,
+    targetUid,
+    locale,
+    avatarUrl,
+    displayName,
+    accountIndex,
+    gameNickname,
+  );
 }
 
 export interface GachaFingerprintMatch {

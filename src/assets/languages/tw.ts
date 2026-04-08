@@ -288,6 +288,9 @@ const langs: Record<string, any> = {
   gacha_log_load_CreateNewGuest: "🆕 建立新的訪客紀錄槽位",
   gacha_log_load_NewGuestName: "Guest (New)",
   gacha_log_load_SelectAccount: "請選擇要將紀錄匯入至哪個帳號：",
+  gacha_log_load_UrlPlaceholder: "貼上令牌或網址",
+  gacha_log_load_NoLinkedAccount:
+    "❌ 未輸入令牌且找不到綁定帳號，請貼上令牌，或先使用 `/login` 綁定帳號。",
   gacha_log_token_expired_message:
     "如果您看到該錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 前往 https://game.skport.com/endfield/sign-in 重新登入\n2. 重新整理頁面\n3. 點擊您先前儲存的書籤以複製新令牌\n4. 使用 `/gacha log load` 並貼上新令牌",
   gacha_sim_only_initiator: "⚠️ 只有指令發起者可以繼續抽卡。",

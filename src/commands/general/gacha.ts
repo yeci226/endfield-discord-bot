@@ -32,6 +32,7 @@ import {
 } from "../../utils/accountUtils";
 import {
   fetchAndMergeGachaLog,
+  fetchAndMergeGachaLogFromAccount,
   getGachaStats,
   GachaLogData,
   GachaLeaderboardEntry,
@@ -71,6 +72,7 @@ async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
     for (const acc of accounts) {
       if (acc.roles) {
         for (const b of acc.roles) {
+          if (b.gameId !== 3) continue;
           const add = (rUid: string, nick: string) => {
             roles.push({
               uid: `EF_${rUid}`,
@@ -252,7 +254,7 @@ const command: Command = {
                 .setDescriptionLocalizations({
                   "zh-TW": "貼上令牌或抽卡紀錄網址",
                 })
-                .setRequired(true),
+                .setRequired(false),
             )
             .addStringOption((option) =>
               option
@@ -1111,8 +1113,8 @@ const command: Command = {
           .setCustomId("url")
           .setLabel(tr("gacha_log_load_UrlLabel"))
           .setStyle(TextInputStyle.Paragraph)
-          .setPlaceholder("https://ef-webview.gryphline.com/...")
-          .setRequired(true);
+          .setPlaceholder(tr("gacha_log_load_UrlPlaceholder"))
+          .setRequired(false);
 
         modal.addComponents(
           new ActionRowBuilder<TextInputBuilder>().addComponents(urlInput),
@@ -1452,7 +1454,7 @@ const command: Command = {
         }
 
         if (subcommand === "load") {
-          const url = interaction.options.getString("url", true);
+          const url = interaction.options.getString("url") || "";
           let selectedUid = interaction.options.getString("account");
 
           if (!selectedUid) {
@@ -1468,9 +1470,74 @@ const command: Command = {
           }
 
           await interaction.deferReply();
-          await interaction.editReply({
-            content: tr("gacha_log_load_Loading"),
-          });
+          await interaction.editReply({ content: tr("gacha_log_load_Loading") });
+
+          if (!url) {
+            // No URL provided — try auto-sync from linked account
+            const userAccounts = await getAccounts(db, interaction.user.id);
+            const linkedAccount = userAccounts?.find(
+              (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
+            );
+            if (!linkedAccount) {
+              await interaction.editReply({
+                content: tr("gacha_log_load_NoLinkedAccount"),
+              });
+              return;
+            }
+            const allRoles = await getAllPossibleUserRoles(
+              interaction.user.id,
+              db,
+            );
+            const accountIndex =
+              allRoles.findIndex((r) => r.uid === selectedUid) + 1;
+            const nickname = allRoles.find(
+              (r) => r.uid === selectedUid,
+            )?.nickname;
+            const efRoles = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
+            const efGameUid = efRoles[0]?.uid;
+            if (!efGameUid) {
+              await interaction.editReply({
+                content: tr("gacha_log_load_NoLinkedAccount"),
+              });
+              return;
+            }
+            try {
+              const mergeResult = await fetchAndMergeGachaLogFromAccount(
+                db,
+                linkedAccount.cookie,
+                efGameUid,
+                "gryphline",
+                selectedUid,
+                undefined,
+                tr.lang,
+                interaction.user.displayAvatarURL({
+                  extension: "png",
+                  size: 128,
+                }),
+                interaction.user.displayName,
+                accountIndex > 0 ? accountIndex : undefined,
+                nickname,
+              );
+              await showGachaStats(selectedUid, "limited_char", "", 0, "");
+              if (mergeResult.hasDataGap) {
+                await interaction.followUp({
+                  content: tr("gacha_log_load_gap_warning"),
+                  flags: MessageFlags.Ephemeral,
+                });
+              }
+            } catch (error) {
+              const errorMessage =
+                error instanceof GachaApiError && error.apiCode === 40100
+                  ? tr("gacha_log_token_expired_message")
+                  : tr("gacha_log_load_Error", {
+                      error:
+                        error instanceof Error ? error.message : String(error),
+                    });
+              await interaction.editReply({ content: errorMessage });
+            }
+            return;
+          }
+
           await doFetchGachaLog(url, selectedUid, interaction.user.id);
           return;
         }
@@ -1699,7 +1766,7 @@ const command: Command = {
     if (interaction.isModalSubmit()) {
       const parts = interaction.customId.split(":");
       if (parts[1] === "log_load") {
-        const url = interaction.fields.getTextInputValue("url");
+        const url = interaction.fields.getTextInputValue("url").trim();
         const userId = interaction.user.id;
 
         if (parts[2]) {
@@ -1708,11 +1775,84 @@ const command: Command = {
           await interaction.editReply({
             content: tr("gacha_log_load_Loading"),
           });
+
+          if (!url) {
+            // Empty URL — try auto-sync using linked account
+            const userAccounts = await getAccounts(db, userId);
+            const linkedAccount = userAccounts?.find(
+              (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
+            );
+            if (!linkedAccount) {
+              await interaction.editReply({
+                content: tr("gacha_log_load_NoLinkedAccount"),
+              });
+              return;
+            }
+            const selectedUid = parts[2];
+            const efRoles2 = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
+            const efGameUid2 = efRoles2[0]?.uid;
+            if (!efGameUid2) {
+              await interaction.editReply({
+                content: tr("gacha_log_load_NoLinkedAccount"),
+              });
+              return;
+            }
+            const allRoles = await getAllPossibleUserRoles(userId, db);
+            const accountIndex =
+              allRoles.findIndex((r) => r.uid === selectedUid) + 1;
+            const nickname = allRoles.find(
+              (r) => r.uid === selectedUid,
+            )?.nickname;
+            try {
+              const mergeResult = await fetchAndMergeGachaLogFromAccount(
+                db,
+                linkedAccount.cookie,
+                efGameUid2,
+                "gryphline",
+                selectedUid,
+                undefined,
+                tr.lang,
+                interaction.user.displayAvatarURL({
+                  extension: "png",
+                  size: 128,
+                }),
+                interaction.user.displayName,
+                accountIndex > 0 ? accountIndex : undefined,
+                nickname,
+              );
+              await showGachaStats(selectedUid, "limited_char", "", 0, "");
+              if (mergeResult.hasDataGap) {
+                await interaction.followUp({
+                  content: tr("gacha_log_load_gap_warning"),
+                  flags: MessageFlags.Ephemeral,
+                });
+              }
+            } catch (error) {
+              const errorMessage =
+                error instanceof GachaApiError && error.apiCode === 40100
+                  ? tr("gacha_log_token_expired_message")
+                  : tr("gacha_log_load_Error", {
+                      error:
+                        error instanceof Error ? error.message : String(error),
+                    });
+              await interaction.editReply({ content: errorMessage });
+            }
+            return;
+          }
+
           await doFetchGachaLog(url, parts[2], userId);
           return;
         }
 
         // Regular flow — store URL and show account selection
+        if (!url) {
+          await interaction.reply({
+            content: tr("gacha_log_load_NoLinkedAccount"),
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+
         const allRoles = await getAllPossibleUserRoles(userId, db);
 
         await db.set(`PENDING_GACHA_URL_${userId}`, url);
