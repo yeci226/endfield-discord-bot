@@ -1476,11 +1476,10 @@ const command: Command = {
           );
           const accountIndex =
             allRoles.findIndex((r) => r.uid === selectedUid) + 1;
-          const nickname = allRoles.find(
-            (r) => r.uid === selectedUid,
-          )?.nickname;
-          const efRoles = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
-          const efGameUid = efRoles[0]?.uid;
+          const matchedRole = allRoles.find((r) => r.uid === selectedUid);
+          const nickname = matchedRole?.nickname;
+          const efGameUid = matchedRole?.rawUid
+            ?? (linkedAccount.roles || []).find((r: any) => r.gameId === 3)?.uid;
           if (!efGameUid) {
             await interaction.editReply({
               content: tr("gacha_log_load_NoLinkedAccount"),
@@ -1767,20 +1766,19 @@ const command: Command = {
               return;
             }
             const selectedUid = parts[2];
-            const efRoles2 = (linkedAccount.roles || []).filter((r: any) => r.gameId === 3);
-            const efGameUid2 = efRoles2[0]?.uid;
+            const allRoles = await getAllPossibleUserRoles(userId, db);
+            const accountIndex =
+              allRoles.findIndex((r) => r.uid === selectedUid) + 1;
+            const matchedRole2 = allRoles.find((r) => r.uid === selectedUid);
+            const nickname = matchedRole2?.nickname;
+            const efGameUid2 = matchedRole2?.rawUid
+              ?? (linkedAccount.roles || []).find((r: any) => r.gameId === 3)?.uid;
             if (!efGameUid2) {
               await interaction.editReply({
                 content: tr("gacha_log_load_NoLinkedAccount"),
               });
               return;
             }
-            const allRoles = await getAllPossibleUserRoles(userId, db);
-            const accountIndex =
-              allRoles.findIndex((r) => r.uid === selectedUid) + 1;
-            const nickname = allRoles.find(
-              (r) => r.uid === selectedUid,
-            )?.nickname;
             try {
               const mergeResult = await fetchAndMergeGachaLogFromAccount(
                 db,
@@ -2128,7 +2126,7 @@ const command: Command = {
           (uid.includes(userPrefix) || choices.some((c) => c.value === uid)) &&
           !choices.some((c) => c.value === uid)
         ) {
-          let nickname = log.value.info.nickname;
+          let nickname = log.value?.info?.nickname;
           if (!nickname || nickname === "Unknown" || nickname === uid) {
             if (uid.startsWith("EF_GUEST_")) {
               const parts = uid.split("_");

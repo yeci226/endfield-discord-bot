@@ -155,6 +155,41 @@ function formatBoundGamesSummary(
   return `\n${tr("login_BoundGamesPrefix")}${names.join(tr("login_BoundGamesJoiner"))}`;
 }
 
+function formatGameRoleDetails(
+  roles: any[] | null | undefined,
+  tr: any,
+): string {
+  if (!Array.isArray(roles) || roles.length === 0) return "";
+
+  const gameOrder: Array<{ id: number; key: string }> = [
+    { id: 3, key: "login_GameEndfield" },
+    { id: 1, key: "login_GameArknights" },
+  ];
+
+  const lines: string[] = [];
+  for (const { id, key } of gameOrder) {
+    const binding = roles.find((r: any) => Number(r?.gameId) === id);
+    if (!binding) continue;
+
+    const gameName = tr(key);
+    const subRoles: any[] = Array.isArray(binding.roles) ? binding.roles : [];
+
+    if (subRoles.length === 0) {
+      const nick = binding.nickName || binding.uid || "?";
+      lines.push(`**${gameName}**：${nick}`);
+    } else {
+      for (const r of subRoles) {
+        const nick = r.nickname || r.nickName || binding.nickName || "?";
+        const server = r.serverName ? ` (${r.serverName})` : "";
+        const level = r.level ? ` Lv.${r.level}` : "";
+        lines.push(`**${gameName}**：${nick}${level}${server}`);
+      }
+    }
+  }
+
+  return lines.length > 0 ? "\n" + lines.join("\n") : "";
+}
+
 // Helper to get/migrate accounts
 // getAccounts is now imported from accountUtils to ensure consistent encryption handling.
 
@@ -322,8 +357,9 @@ const command: Command = {
 
           for (const acc of accounts) {
             const user = acc.info;
+            const roleDetails = formatGameRoleDetails(acc.roles, tr);
             const textDisplay = new TextDisplayBuilder().setContent(
-              tr("login_Welcome").replace("<name>", user.nickname),
+              tr("login_Welcome").replace("<name>", user.nickname) + roleDetails,
             );
 
             if (user.avatar) {

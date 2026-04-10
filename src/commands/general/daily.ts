@@ -5,6 +5,8 @@ import {
   AttachmentBuilder,
   ContainerBuilder,
   TextDisplayBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
   ModalSubmitInteraction,
   ChannelType,
   PermissionsBitField,
@@ -212,14 +214,9 @@ const command: Command = {
 
     const subcommand = interaction.options.getSubcommand();
     const gameScope: DailyGameScope =
-      subcommand === "check"
-        ? normalizeGameScope(interaction.options.getString("game"), "endfield")
-        : subcommand === "claim"
-          ? normalizeGameScope(
-              interaction.options.getString("game"),
-              "endfield",
-            )
-          : "arknights";
+      subcommand === "check" || subcommand === "claim"
+        ? normalizeGameScope(interaction.options.getString("game"), "both")
+        : "arknights";
 
     if (subcommand === "setup") {
       await handleSetup(client, interaction, db);
@@ -262,6 +259,7 @@ const command: Command = {
     let hasResult = false;
     const outputLines: string[] = [];
     const files: AttachmentBuilder[] = [];
+    const fileNames: string[] = [];
 
     const processedRoles = new Set<string>();
 
@@ -359,11 +357,9 @@ const command: Command = {
               tr,
             });
 
-            files.push(
-              new AttachmentBuilder(buffer, {
-                name: `daily-${role.roleId}-${role.serverId}.png`,
-              }),
-            );
+            const fileName = `daily-${role.roleId}-${role.serverId}.png`;
+            fileNames.push(fileName);
+            files.push(new AttachmentBuilder(buffer, { name: fileName }));
           }
         }
       }
@@ -380,10 +376,31 @@ const command: Command = {
       outputLines.push("- 已達附件上限 10 張，其餘角色請分批查詢。");
     }
 
-    await interaction.editReply({
-      content: outputLines.join("\n"),
-      files,
-    });
+    if (files.length > 1) {
+      // Multiple game cards → Components V2 MediaGallery
+      const container = new ContainerBuilder();
+      if (outputLines.length > 0) {
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(outputLines.join("\n")),
+        );
+      }
+      for (const name of fileNames) {
+        const gallery = new MediaGalleryBuilder().addItems(
+          new MediaGalleryItemBuilder({ media: { url: `attachment://${name}` } }),
+        );
+        container.addMediaGalleryComponents(gallery);
+      }
+      await interaction.editReply({
+        files,
+        components: [container],
+        flags: MessageFlags.IsComponentsV2,
+      });
+    } else {
+      await interaction.editReply({
+        content: outputLines.join("\n") || undefined,
+        files,
+      });
+    }
   },
 };
 

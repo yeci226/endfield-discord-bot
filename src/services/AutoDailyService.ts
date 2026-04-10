@@ -6,7 +6,15 @@ import {
   withAutoRefresh,
 } from "../utils/accountUtils";
 import { createTranslator } from "../utils/i18n";
-import { AttachmentBuilder } from "discord.js";
+import {
+  AttachmentBuilder,
+  ContainerBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
+  MessageFlags,
+  SeparatorBuilder,
+  TextDisplayBuilder,
+} from "discord.js";
 import moment from "moment-timezone";
 import { Logger } from "../utils/Logger";
 import { processRoleAttendance } from "../utils/attendanceUtils";
@@ -467,6 +475,19 @@ export class AutoDailyService {
           }
 
           if (!roles || roles.length === 0) {
+            // Check if this account genuinely has no game bindings at all.
+            // If so, skip silently rather than reporting an error.
+            const hasAnySupportedBinding =
+              Array.isArray(account.roles) &&
+              account.roles.some((r: any) =>
+                AUTO_DAILY_SUPPORTED_GAME_IDS.has(Number(r?.gameId)),
+              );
+            if (!hasAnySupportedBinding) {
+              this.logger.info(
+                `Skipping account ${account.info?.nickname} (${account.info?.id}) — no game bindings.`,
+              );
+              continue;
+            }
             results.push({
               ...this.makeErrorResult(
                 account.info?.nickname || "Unknown",
@@ -600,12 +621,20 @@ export class AutoDailyService {
           }
         }
 
-        let isFirstNotification = true;
+        // Build all card files grouped by account
+        type CardGroup = {
+          accountIdx: number;
+          files: AttachmentBuilder[];
+          fileNames: string[];
+        };
+        const cardGroups: CardGroup[] = [];
+        let fileCounter = 0;
 
-        for (const entries of accountGroups.values()) {
-          const files: AttachmentBuilder[] = [];
+        for (const [accountIdx, entries] of accountGroups.entries()) {
+          const groupFiles: AttachmentBuilder[] = [];
+          const groupFileNames: string[] = [];
 
-          for (const { res, idx } of entries) {
+          for (const { res } of entries) {
             const cardPayload: DailyCardPayload = {
               roleName: res.roleName,
               roleMeta: res.roleMeta || "",
@@ -641,36 +670,76 @@ export class AutoDailyService {
             };
 
             const cardBuffer = await this.renderCardWithCache(cardPayload);
-            files.push(
-              new AttachmentBuilder(cardBuffer, {
-                name: `auto-daily-${userId}-${idx}.png`,
-              }),
+            const fileName = `auto-daily-${userId}-${fileCounter++}.png`;
+            groupFileNames.push(fileName);
+            groupFiles.push(new AttachmentBuilder(cardBuffer, { name: fileName }));
+          }
+
+          cardGroups.push({ accountIdx, files: groupFiles, fileNames: groupFileNames });
+        }
+
+        const allFiles = cardGroups.flatMap((g) => g.files);
+        const multipleAccounts = cardGroups.length > 1;
+        const useComponentsV2 = allFiles.length > 1 || multipleAccounts;
+
+        let payload: any;
+        if (useComponentsV2) {
+          // All cards in one Components V2 message — account headers + separators
+          const container = new ContainerBuilder();
+
+          if (config.mention !== false) {
+            container.addTextDisplayComponents(
+              new TextDisplayBuilder().setContent(`<@${userId}>`),
             );
           }
 
-          // First account: include mention; subsequent accounts: include separator
-          let content: string | undefined;
-          if (isFirstNotification && config.mention !== false) {
-            content = `<@${userId}>`;
-          } else if (!isFirstNotification) {
-            content = "───────────────";
+          for (let gi = 0; gi < cardGroups.length; gi++) {
+            const group = cardGroups[gi];
+
+            if (gi > 0) {
+              container.addSeparatorComponents(new SeparatorBuilder());
+            }
+
+            if (multipleAccounts) {
+              const accountName =
+                accounts[group.accountIdx]?.info?.nickname ||
+                `帳號 ${group.accountIdx + 1}`;
+              container.addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`**${accountName}**`),
+              );
+            }
+
+            for (const name of group.fileNames) {
+              const gallery = new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder({ media: { url: `attachment://${name}` } }),
+              );
+              container.addMediaGalleryComponents(gallery);
+            }
           }
 
-          try {
-            await this.sendNotification(userId, config, { content, files });
-          } catch (e) {
-            this.logger.error(
-              "Failed to send card notification: " +
-                (e instanceof Error ? e.message : e),
-            );
-          }
+          payload = {
+            files: allFiles,
+            components: [container],
+            flags: MessageFlags.IsComponentsV2,
+          };
+        } else {
+          const headerText =
+            config.mention !== false ? `<@${userId}>` : undefined;
+          payload = { content: headerText, files: allFiles };
+        }
 
-          isFirstNotification = false;
+        try {
+          await this.sendNotification(userId, config, payload);
+        } catch (e) {
+          this.logger.error(
+            "Failed to send card notification: " +
+              (e instanceof Error ? e.message : e),
+          );
         }
 
         if (errorLines.length > 0) {
           const mentionPrefix =
-            isFirstNotification && config.mention !== false
+            allFiles.length === 0 && config.mention !== false
               ? `<@${userId}>\n`
               : "";
           try {

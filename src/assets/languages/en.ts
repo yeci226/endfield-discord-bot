@@ -415,6 +415,22 @@ const langs: Record<string, any> = {
   daily_canvas_NotYetAvailable: "Not Yet Available",
   daily_canvas_MissedThisMonth: "Missed This Month",
   daily_canvas_NextPeriod: "Next Period",
+
+  // Bot Profile (Admin)
+  botProfile_GuildOnly: "This command can only be used in a server.",
+  botProfile_AvatarSuccess: "Bot avatar updated successfully.",
+  botProfile_NicknameSet: "Nickname set to **<name>**.",
+  botProfile_NicknameReset: "Nickname reset.",
+  botProfile_BannerSuccess: "Bot banner updated successfully.",
+  botProfile_ResetSuccess: "Reset bot <target>.",
+  botProfile_Target_Avatar: "avatar",
+  botProfile_Target_Nickname: "nickname",
+  botProfile_Target_Banner: "banner",
+  botProfile_Target_All: "all settings",
+  botProfile_Error: "Operation failed: <error>",
+  botProfile_ImageTooLarge:
+    "Image size exceeds limit (max 9 MB, current <size> MB)",
+  botProfile_ImageFetchFailed: "Failed to download image (HTTP <status>)",
 };
 
 export default langs;

@@ -399,6 +399,22 @@ const langs: Record<string, any> = {
   daily_canvas_NotYetAvailable: "尚未開放",
   daily_canvas_MissedThisMonth: "本月漏簽",
   daily_canvas_NextPeriod: "換期後揭曉",
+
+  // Bot Profile (Admin)
+  botProfile_GuildOnly: "此指令只能在伺服器中使用。",
+  botProfile_AvatarSuccess: "已成功更新機器人頭像。",
+  botProfile_NicknameSet: "已將暱稱設定為 **<name>**。",
+  botProfile_NicknameReset: "已重置暱稱。",
+  botProfile_BannerSuccess: "已成功更新機器人橫幅。",
+  botProfile_ResetSuccess: "已重置機器人的<target>。",
+  botProfile_Target_Avatar: "頭像",
+  botProfile_Target_Nickname: "暱稱",
+  botProfile_Target_Banner: "橫幅",
+  botProfile_Target_All: "全部設定",
+  botProfile_Error: "操作失敗：<error>",
+  botProfile_ImageTooLarge:
+    "圖片大小超過限制（最大 9 MB，目前 <size> MB）",
+  botProfile_ImageFetchFailed: "無法下載圖片（HTTP <status>）",
 };
 
 export default langs;

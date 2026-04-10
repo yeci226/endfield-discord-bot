@@ -7,7 +7,10 @@
       "Bash(/c/Users/shawn/.pm2/..)",
       "Bash(PM2_HOME=/c/Users/shawn/.pm2 node /c/Users/shawn/AppData/Local/npm-cache/_npx/5f7878ce38f1eb13/node_modules/.bin/pm2 list)",
       "Bash(PM2_HOME=/c/Users/shawn/.pm2 node /c/Users/shawn/AppData/Local/npm-cache/_npx/5f7878ce38f1eb13/node_modules/pm2/bin/pm2 list)",
-      "Bash(sqlite3 json.sqlite \".tables\")"
+      "Bash(sqlite3 json.sqlite \".tables\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/EIHRTeam/End-WikiPlus/main/src-tauri/src/lib.rs\")",
+      "Bash(node -e \"const c = require\\('crypto'\\); try { c.createCipheriv\\('des-ecb', Buffer.alloc\\(8\\), null\\); console.log\\('DES OK'\\); } catch\\(e\\) { console.log\\('DES ERROR:', e.message\\); }\")",
+      "Bash(node -e \"const c = require\\('crypto'\\); const k = c.createPublicKey\\({ key: { kty: 'RSA', n: Buffer.alloc\\(128\\).toString\\('base64url'\\), e: Buffer.from\\([1,0,1]\\).toString\\('base64url'\\) }, format: 'jwk' }\\); console.log\\('RSA JWK OK'\\);\")"
     ]
   }
 }

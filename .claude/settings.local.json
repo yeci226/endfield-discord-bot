@@ -23,7 +23,12 @@
       "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha\")",
       "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha/useGachaAuth.ts?ref=97f27fe5825cb5b5e81c734bc72da5c94d0c98f1\")",
       "Bash(curl -s \"https://api.github.com/repos/bhaoo/endfield-gacha/contents/app/composables/gacha?ref=97f27fe5825cb5b5e81c734bc72da5c94d0c98f1\")",
-      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/97f27fe5825cb5b5e81c734bc72da5c94d0c98f1/app/composables/gacha/gachaApi.ts\")"
+      "Bash(curl -s \"https://raw.githubusercontent.com/bhaoo/endfield-gacha/97f27fe5825cb5b5e81c734bc72da5c94d0c98f1/app/composables/gacha/gachaApi.ts\")",
+      "WebFetch(domain:end.wiki)",
+      "WebFetch(domain:worker.end.wiki)",
+      "WebFetch(domain:api.end.wiki)",
+      "Bash(cat c:/Users/shawn/桌面/Programming/bots/endfield/src/handlers/*.ts)",
+      "WebFetch(domain:endfieldtools.dev)"
     ],
     "additionalDirectories": [
       "\\tmp"

@@ -367,6 +367,7 @@ const event: Event = {
           await command.autocomplete(client, interaction, client.db);
         } catch (error) {
           console.error("Error handling autocomplete interaction:", error);
+          await interaction.respond([]).catch(() => {});
         }
       }
     }
