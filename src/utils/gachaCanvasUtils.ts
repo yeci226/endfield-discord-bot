@@ -25,7 +25,10 @@ function normalizeGachaText(text: string): string {
   return (text || "")
     .replace(/：/g, " : ")
     .replace(/（/g, " (")
-    .replace(/）/g, ") ");
+    .replace(/）/g, ") ")
+    .replace(/，/g, ", ")
+    .replace(/。/g, ". ")
+    .replace(/、/g, ", ");
 }
 
 function parseGachaTs(rawTs: any): number {
@@ -959,28 +962,36 @@ export async function drawGachaStats(
         const isNewestPool = group.pId === newestPoolId;
 
         let displayPity = 0;
+        let carriedPity = 0;
+        let thisPoolPulls = poolTotal;
 
         if (isNewestPool) {
-          // Actve pool: Show CURRENT cumulative pity for the group
-          displayPity = categorySummary?.currentPity || 0;
+          // Active pool: Show CURRENT cumulative pity for the group
+          const currentPity = categorySummary?.currentPity || 0;
+          displayPity = currentPity;
+          carriedPity = Math.max(0, currentPity - poolTotal);
+          thisPoolPulls = poolTotal;
         } else {
           // Historical pool: Show LEFTOVER pity (built after the last 6-star)
-          displayPity = poolTotal; // default if no prior pity
+          displayPity = poolTotal;
           if (poolItemsAll.length > 0) {
             // Find the most recent 6-star
             const lastSix = poolItemsAll.find(
               (r: any) => r.rarity >= 6 && !r.isFree,
             );
             if (lastSix) {
-              displayPity = poolTotal - lastSix.poolTotalCount;
+              thisPoolPulls = poolTotal - lastSix.poolTotalCount;
+              displayPity = thisPoolPulls;
+              carriedPity = 0;
             } else {
               // No 6-stars, so pity never reset.
               const oldest = poolItemsAll[poolItemsAll.length - 1];
-              const initial = Math.max(
+              carriedPity = Math.max(
                 0,
                 oldest.pitySixCount - oldest.poolTotalCount,
               );
-              displayPity = initial + poolTotal;
+              thisPoolPulls = poolTotal;
+              displayPity = carriedPity + thisPoolPulls;
             }
           }
         }
@@ -1002,9 +1013,17 @@ export async function drawGachaStats(
             ctx.textBaseline = "middle";
             ctx.fillStyle = "#888"; // Gray text
             ctx.font = "bold 22px NotoSansTCBold";
-            const paddedText = (
-              tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
-            ).replace("<hardCount>", String(displayPity));
+            const paddedText =
+              carriedPity > 0 && thisPoolPulls > 0
+                ? (
+                    tr?.("gacha_log_canvas_PaddedCountSplit") ??
+                    "已墊 <carried> + <pool> 抽"
+                  )
+                    .replace("<carried>", String(carriedPity))
+                    .replace("<pool>", String(thisPoolPulls))
+                : (
+                    tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
+                  ).replace("<hardCount>", String(displayPity));
             ctx.fillText(paddedText, curX + colW / 2, curY + 30);
 
             const paddedTimeText = formatSmallGachaTime(
@@ -1509,6 +1528,12 @@ export async function drawGachaStats(
     const poolItemsAll = stats[
       type === "weapon" ? "weapon" : "char"
     ].history.filter((r: any) => r.poolId === group.pId);
+    const detailedCategorySummary =
+      stats[type === "weapon" ? "weapon" : "char"].summary[
+        group.gId || "unknown"
+      ];
+    const detailedPoolTotal =
+      detailedCategorySummary?.poolTotalMap?.[group.pId || ""] || 0;
     let initialPaddedCount = 0;
     if (poolItemsAll.length > 0) {
       const oldest = poolItemsAll[poolItemsAll.length - 1];
@@ -1516,19 +1541,12 @@ export async function drawGachaStats(
         0,
         oldest.pitySixCount - oldest.poolTotalCount,
       );
-    } else {
+    } else if ((group as any).isNewest) {
       // Very rare: user views detailed mode of a pool with <10 pulls and no 4-stars.
-      // We can fallback to currentPity - poolTotal if it's the newest.
-      const categorySummary =
-        stats[type === "weapon" ? "weapon" : "char"].summary[
-          group.gId || "unknown"
-        ];
-      const poolTotal = categorySummary?.poolTotalMap?.[group.pId || ""] || 0;
-      if ((group as any).isNewest)
-        initialPaddedCount = Math.max(
-          0,
-          (categorySummary?.currentPity || 0) - poolTotal,
-        );
+      initialPaddedCount = Math.max(
+        0,
+        (detailedCategorySummary?.currentPity || 0) - detailedPoolTotal,
+      );
     }
 
     const totalPages = getDetailedPageCount(
@@ -1933,10 +1951,22 @@ export async function drawGachaStats(
         ctx.textAlign = "left";
         ctx.fillStyle = "#888";
         ctx.font = "bold 24px NotoSansTCBold";
+        const detailedPaddedText =
+          initialPaddedCount > 0 && detailedPoolTotal > 0
+            ? (
+                tr?.("gacha_log_canvas_PaddedCountSplit") ??
+                "已墊 <carried> + <pool> 抽"
+              )
+                .replace("<carried>", String(initialPaddedCount))
+                .replace("<pool>", String(detailedPoolTotal))
+            : (
+                tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
+              ).replace(
+                "<hardCount>",
+                String(initialPaddedCount || detailedPoolTotal),
+              );
         ctx.fillText(
-          (
-            tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
-          ).replace("<hardCount>", String(initialPaddedCount)),
+          detailedPaddedText,
           dCenterX + dRadius + 10,
           currentY + itemH / 2,
         );
@@ -1957,7 +1987,7 @@ function fillDynamicText(
   baseFontSize: number,
   bold: boolean = true,
 ) {
-  const normalizedText = (text || "").replace(/：/g, " : ");
+  const normalizedText = (text || "").replace(/：/g, " : ").replace(/，/g, ", ").replace(/。/g, ". ").replace(/、/g, ", ");
   let fontSize = baseFontSize;
   ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
   let textWidth = ctx.measureText(normalizedText).width;

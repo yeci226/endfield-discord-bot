@@ -31,7 +31,10 @@ export class ExtendedClient extends Client {
     const isSharded = process.env.CLUSTER !== undefined;
 
     super({
-      intents: [GatewayIntentBits.Guilds],
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+      ],
       partials: [
         Partials.Channel,
         Partials.GuildMember,

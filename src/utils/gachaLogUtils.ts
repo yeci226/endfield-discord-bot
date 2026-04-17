@@ -1,6 +1,6 @@
 import axios from "axios";
 import { CustomDatabase } from "./Database";
-import { mapLocaleToLang } from "./skportApi";
+import { mapLocaleToLang, refreshAccountToken } from "./skportApi";
 import moment from "moment";
 
 export class GachaApiError extends Error {
@@ -367,8 +367,15 @@ export async function getEndfieldU8Token(
     { uid, token: oauthToken },
     { headers: { "Content-Type": "application/json" } },
   );
-  const u8Token = u8Res.data?.data?.token;
-  if (!u8Token) throw new Error("No u8_token in response");
+  const u8Status = u8Res.data?.status ?? u8Res.data?.code;
+  if (u8Status !== undefined && u8Status !== 0) {
+    throw new GachaApiError(
+      `u8_token_by_uid failed: ${u8Res.data?.msg || u8Res.data?.message || "unknown"} (code ${u8Status})`,
+      u8Status,
+    );
+  }
+  const u8Token = u8Res.data?.data?.token ?? u8Res.data?.data?.u8_token;
+  if (!u8Token) throw new Error(`No u8_token in response (keys: ${Object.keys(u8Res.data?.data || {}).join(", ") || "empty"})`);
 
   return u8Token;
 }
@@ -392,10 +399,28 @@ export async function fetchAndMergeGachaLogFromAccount(
 ) {
   // Extract raw token value from "ACCOUNT_TOKEN=xxx" cookie string
   const tokenMatch = accountCookie.match(/ACCOUNT_TOKEN=([^;]+)/);
-  const accountToken = tokenMatch ? tokenMatch[1].trim() : accountCookie.trim();
+  let accountToken = tokenMatch ? tokenMatch[1].trim() : accountCookie.trim();
 
   if (onProgress) onProgress("Authenticating with Endfield...");
-  const u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+  let u8Token: string;
+  try {
+    u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+  } catch (firstErr: any) {
+    // If the initial attempt fails with an HTTP 400/401, the ACCOUNT_TOKEN may be
+    // stale. Try refreshing it via Skport and retry once.
+    const isAuthError =
+      firstErr?.response?.status === 400 ||
+      firstErr?.response?.status === 401 ||
+      (firstErr instanceof GachaApiError && (firstErr.apiCode === 40100 || firstErr.apiCode === -1));
+    if (!isAuthError) throw firstErr;
+
+    if (onProgress) onProgress("Token expired, refreshing...");
+    const refreshed = await refreshAccountToken(accountCookie);
+    if (!refreshed) throw firstErr;
+
+    accountToken = refreshed;
+    u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+  }
 
   // Reuse stored serverId, or auto-detect
   const dbKey = `GACHA_LOG_${targetUid}`;
@@ -413,6 +438,7 @@ export async function fetchAndMergeGachaLogFromAccount(
     if (onProgress) onProgress("Detecting server region...");
     const serverCandidates =
       provider === "gryphline" ? ["3", "2", "1"] : ["1"];
+    let firstValidServer: string | undefined;
     for (const candidate of serverCandidates) {
       try {
         const probeRes = await axios.get(`${apiDomain}/api/record/char`, {
@@ -424,13 +450,22 @@ export async function fetchAndMergeGachaLogFromAccount(
           },
         });
         if (probeRes.data.code === 0) {
-          serverId = candidate;
-          break;
+          // Prefer a server that actually has records; fall back to first code-0 server
+          const hasRecords =
+            (probeRes.data.data?.list?.length ?? 0) > 0 ||
+            probeRes.data.data?.hasMore === true;
+          if (!firstValidServer) firstValidServer = candidate;
+          if (hasRecords) {
+            serverId = candidate;
+            break;
+          }
         }
       } catch {
         // try next
       }
     }
+    // Fall back to the first server that returned code 0, even if it had no records
+    if (!serverId) serverId = firstValidServer;
     if (!serverId) {
       throw new GachaApiError("Unable to detect server region", 40100);
     }
@@ -1537,20 +1572,26 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             isFree: isActuallyFree,
           });
 
+          if (rarityNum >= 6) {
+            // Count all 6-stars (including free expedited) for win-rate tracking
+            poolSixStarPullCounters.set(
+              pId,
+              (poolSixStarPullCounters.get(pId) || 0) + 1,
+            );
+            if (isFeatured) {
+              poolFeaturedSixCounters.set(
+                pId,
+                (poolFeaturedSixCounters.get(pId) || 0) + 1,
+              );
+            }
+          }
+
           if (!isActuallyFree) {
             if (rarityNum >= 6) {
               pitySix = 0;
               pityLabel = 0;
-              poolSixStarPullCounters.set(
-                pId,
-                (poolSixStarPullCounters.get(pId) || 0) + 1,
-              );
               if (isFeatured) {
                 featuredPity = 0;
-                poolFeaturedSixCounters.set(
-                  pId,
-                  (poolFeaturedSixCounters.get(pId) || 0) + 1,
-                );
                 // Non-shared 120: Reset pool-specific featured pity
                 featuredCounters.set(pId, 0);
                 hasFeaturedMap.set(pId, true);

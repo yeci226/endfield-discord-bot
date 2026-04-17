@@ -653,12 +653,22 @@ const command: Command = {
     }
 
     const focusedValue = interaction.options.getFocused();
+    const seenIds = new Set<string>();
     const filtered = accounts
-      .map((acc: any, index: number) => ({
-        name: `${acc.info.nickname} (${acc.info.id})`,
-        value: index.toString(),
-      }))
-      .filter((choice: any) => choice.name.includes(focusedValue));
+      .map((acc: any, index: number) => {
+        const id = acc.info?.id ?? acc.info?.uid ?? String(index);
+        if (seenIds.has(id)) return null;
+        seenIds.add(id);
+        return {
+          name: `${acc.info?.nickname ?? "Unknown"} (${id})`,
+          value: index.toString(),
+        };
+      })
+      .filter(
+        (choice): choice is { name: string; value: string } =>
+          choice !== null &&
+          choice.name.toLowerCase().includes(focusedValue.toLowerCase()),
+      );
 
     await interaction.respond(filtered.slice(0, 25));
   },

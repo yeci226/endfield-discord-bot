@@ -281,11 +281,12 @@ const langs: Record<string, any> = {
   gacha_log_canvas_HardRemaining: "Rate-Up 6 Star in <hardRemaining> Pulls",
   gacha_log_canvas_SparkRemaining:
     "Pick up Featured item in <hardRemaining> Pulls",
-  gacha_log_canvas_TotalCount: "Total <pTotal> Pulls",
+  gacha_log_canvas_TotalCount: "Pool Total <pTotal>",
   gacha_log_canvas_CurrentTotalNum: "Current Pool Total: <pTotal>",
   gacha_log_canvas_FreeRecruit: "FREE",
   gacha_log_canvas_ListLabel: "Recruitment List",
   gacha_log_canvas_PaddedCount: "Padded <hardCount> Pulls",
+  gacha_log_canvas_PaddedCountSplit: "Padded <carried> + <pool> Pulls",
   gacha_log_canvas_FreePullSummary: "Used <count> Expedited Searches",
   gacha_log_canvas_NoData: "No Data",
   gacha_log_view_SelectPool: "Select specific pool for details",

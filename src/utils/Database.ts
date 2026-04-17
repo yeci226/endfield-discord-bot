@@ -87,6 +87,39 @@ export class CustomDatabase {
   }
 
   /**
+   * Find only the IDs of entries with a specific ID prefix (no JSON parsing).
+   * Much faster than findByPrefix when you only need keys.
+   * @param prefix The prefix to search for
+   */
+  public findKeysByPrefix(prefix: string): string[] {
+    const rows = this.db
+      .prepare("SELECT ID FROM json WHERE ID LIKE ?")
+      .all(`${prefix}%`) as Array<{ ID: string }>;
+    return rows.map((row) => row.ID);
+  }
+
+  /**
+   * Find entries with a specific ID prefix, extracting a single JSON path via SQLite json_extract.
+   * Much faster than findByPrefix when you only need one field from large objects.
+   * @param prefix The prefix to search for
+   * @param jsonPath SQLite json_extract path, e.g. '$.info.nickname'
+   */
+  public findFieldByPrefix(
+    prefix: string,
+    jsonPath: string,
+  ): Array<{ id: string; field: string | null }> {
+    const rows = this.db
+      .prepare(
+        `SELECT ID, json_extract(json, ?) as field FROM json WHERE ID LIKE ?`,
+      )
+      .all(jsonPath, `${prefix}%`) as Array<{
+      ID: string;
+      field: string | null;
+    }>;
+    return rows.map((row) => ({ id: row.ID, field: row.field ?? null }));
+  }
+
+  /**
    * Atomically claim a slot: sets key=value only if the stored value differs.
    * Returns true if this process claimed the slot (performed the write),
    * false if the key already held the same value (another process beat us).
