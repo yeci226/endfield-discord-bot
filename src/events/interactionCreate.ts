@@ -18,7 +18,7 @@ import {
   replyOrFollowUp,
   TtlCache,
   fireAndForget,
-} from "@bot/shared";
+} from "../utils/shared";
 
 const webhook = process.env.CMDWEBHOOK
   ? new WebhookClient({ url: process.env.CMDWEBHOOK })

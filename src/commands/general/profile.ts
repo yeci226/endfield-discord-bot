@@ -87,6 +87,15 @@ const command: Command = {
                 .setNameLocalizations({ "zh-TW": "uuid" })
                 .setRequired(true),
             ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("reset")
+            .setDescription("Reset profile template to default")
+            .setNameLocalizations({ "zh-TW": "重設面版" })
+            .setDescriptionLocalizations({
+              "zh-TW": "清除自訂面版，恢復為預設繪製",
+            }),
         ),
     )
     .addSubcommand((sub) =>
@@ -415,8 +424,8 @@ const command: Command = {
         }
 
         if (subcommand === "reset") {
-          const def = ProfileTemplateService.getDefaultTemplate();
-          await ProfileTemplateService.saveUserTemplate(db, userId, def);
+          // Clear stored custom template so drawDashboard falls back to default canvas
+          await db.delete(`profile.${userId}.template`);
           await interaction.editReply(tr("profile_Config_Success"));
           return;
         }

@@ -1155,53 +1155,67 @@ async function drawFabricObjects(
         }
         break;
 
-      case "rect":
-        ctx.fillStyle = obj.fill || "transparent";
-        if (obj.rx || obj.ry) {
-          roundRect(
-            ctx,
-            offsetX,
-            offsetY,
-            obj.width,
-            obj.height,
-            obj.rx || obj.ry,
-            true,
-          );
-        } else {
-          ctx.fillRect(offsetX, offsetY, obj.width, obj.height);
+      case "rect": {
+        const hasFill = obj.fill && obj.fill !== "transparent" && obj.fill !== "";
+        const hasStroke = obj.stroke && (obj.strokeWidth || 0) > 0;
+
+        // Apply fabric-style shadow (object-level)
+        const sh = obj.shadow;
+        if (sh && (hasFill || hasStroke)) {
+          ctx.save();
+          ctx.shadowColor = sh.color || "rgba(0,0,0,0.3)";
+          ctx.shadowBlur = sh.blur || 0;
+          ctx.shadowOffsetX = sh.offsetX || 0;
+          ctx.shadowOffsetY = sh.offsetY || 0;
         }
-        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+
+        if (hasFill) {
+          ctx.fillStyle = obj.fill;
+          if (obj.rx || obj.ry) {
+            roundRect(ctx, offsetX, offsetY, obj.width, obj.height, obj.rx || obj.ry, true);
+          } else {
+            ctx.fillRect(offsetX, offsetY, obj.width, obj.height);
+          }
+        }
+
+        if (sh) ctx.restore();
+
+        if (hasStroke) {
           ctx.strokeStyle = obj.stroke;
           ctx.lineWidth = obj.strokeWidth;
+          if (Array.isArray(obj.strokeDashArray) && obj.strokeDashArray.length > 0) {
+            ctx.setLineDash(obj.strokeDashArray);
+          }
+          if (obj.strokeLineJoin) ctx.lineJoin = obj.strokeLineJoin;
+          if (obj.strokeLineCap) ctx.lineCap = obj.strokeLineCap;
           if (obj.rx || obj.ry) {
-            roundRect(
-              ctx,
-              offsetX,
-              offsetY,
-              obj.width,
-              obj.height,
-              obj.rx || obj.ry,
-              false,
-            );
+            roundRect(ctx, offsetX, offsetY, obj.width, obj.height, obj.rx || obj.ry, false);
           } else {
             ctx.strokeRect(offsetX, offsetY, obj.width, obj.height);
           }
+          if (Array.isArray(obj.strokeDashArray) && obj.strokeDashArray.length > 0) {
+            ctx.setLineDash([]);
+          }
         }
         break;
+      }
 
       case "text":
       case "i-text":
       case "itext":
-      case "textbox":
+      case "textbox": {
         ctx.fillStyle = obj.fill || "white";
         // Map common fonts
         let fontFamily = "NotoSans";
         let weightStr = "";
+        let styleStr = "";
+
+        if (obj.fontStyle === "italic") styleStr = "italic ";
 
         if (obj.fontFamily?.includes("Orbitron")) {
           if (obj.fontWeight === "bold" || obj.fontWeight > 500) {
             fontFamily = "OrbitronBold";
-            weightStr = ""; // Don't add 'bold' if using Bold face
+            weightStr = "";
           } else {
             fontFamily = "Orbitron";
           }
@@ -1216,23 +1230,23 @@ async function drawFabricObjects(
           weightStr = obj.fontWeight === "bold" ? "bold " : "";
         }
 
-        ctx.font = `${weightStr}${obj.fontSize}px ${fontFamily}`;
-        ctx.textAlign =
-          obj.originX === "center"
-            ? "center"
-            : obj.originX === "right"
-              ? "right"
-              : "left";
-        ctx.textBaseline =
-          obj.originY === "center"
-            ? "middle"
-            : obj.originY === "bottom"
-              ? "bottom"
-              : "top";
+        ctx.font = `${styleStr}${weightStr}${obj.fontSize}px ${fontFamily}`;
 
-        // Logic fix: Since we already translated to the anchor point (obj.left, obj.top),
-        // we draw at (0,0) relative to that anchor.
-        // Fabric origin alignment handles the rest.
+        // Prefer explicit obj.textAlign; fall back to originX mapping for old data.
+        const ta = (obj.textAlign as string) || "";
+        if (ta === "center" || ta === "right" || ta === "left") {
+          ctx.textAlign = ta;
+        } else {
+          ctx.textAlign =
+            obj.originX === "center" ? "center"
+            : obj.originX === "right" ? "right"
+            : "left";
+        }
+        ctx.textBaseline =
+          obj.originY === "center" ? "middle"
+          : obj.originY === "bottom" ? "bottom"
+          : "top";
+
         const renderedText = replacePlaceholders(
           obj.text || "",
           parent?.data?.detail || {},
@@ -1244,7 +1258,47 @@ async function drawFabricObjects(
           ctx.lineWidth = obj.strokeWidth;
           ctx.strokeText(renderedText, 0, 0);
         }
+
+        // underline / linethrough — canvas has no native support, draw a line.
+        if (obj.underline || obj.linethrough || obj.overline) {
+          const m = ctx.measureText(renderedText);
+          const w = m.width;
+          // Compute x start based on align
+          let xStart = 0;
+          if (ctx.textAlign === "center") xStart = -w / 2;
+          else if (ctx.textAlign === "right") xStart = -w;
+
+          // Compute y baseline of text top/bottom
+          const fs = obj.fontSize || 16;
+          let topY = 0;
+          if (ctx.textBaseline === "middle") topY = -fs / 2;
+          else if (ctx.textBaseline === "bottom") topY = -fs;
+          const bottomY = topY + fs;
+          const midY = topY + fs * 0.55;
+
+          ctx.strokeStyle = obj.fill || "white";
+          ctx.lineWidth = Math.max(1, fs / 16);
+          if (obj.underline) {
+            ctx.beginPath();
+            ctx.moveTo(xStart, bottomY);
+            ctx.lineTo(xStart + w, bottomY);
+            ctx.stroke();
+          }
+          if (obj.linethrough) {
+            ctx.beginPath();
+            ctx.moveTo(xStart, midY);
+            ctx.lineTo(xStart + w, midY);
+            ctx.stroke();
+          }
+          if (obj.overline) {
+            ctx.beginPath();
+            ctx.moveTo(xStart, topY);
+            ctx.lineTo(xStart + w, topY);
+            ctx.stroke();
+          }
+        }
         break;
+      }
 
       case "line":
         ctx.strokeStyle = obj.stroke || "white";
@@ -1274,36 +1328,218 @@ async function drawFabricObjects(
             }
 
             if (img) {
-              ctx.drawImage(img, offsetX, offsetY, obj.width, obj.height);
+              // Apply fabric clipPath if present (mainly used for hex/round masks)
+              if (obj.clipPath) {
+                ctx.save();
+                applyFabricClipPath(ctx, obj.clipPath, obj.width, obj.height);
+                ctx.drawImage(img, offsetX, offsetY, obj.width, obj.height);
+                ctx.restore();
+              } else {
+                ctx.drawImage(img, offsetX, offsetY, obj.width, obj.height);
+              }
             }
           } catch (e) {}
         }
         break;
 
-        if (obj.path) {
-          ctx.save();
-          // Logic fix for Operator Cards:
-          // Paths (especially complex ones like the card frame) need to be drawn relative to their top-left
-          // if originX/Y is top/left, or centered if originX/Y is center.
-          // Since we already translated to (obj.left, obj.top), we use offsetX/Y here.
-          ctx.translate(offsetX, offsetY);
-
-          ctx.fillStyle = obj.fill || "transparent";
-          ctx.strokeStyle = obj.stroke || "transparent";
-          ctx.lineWidth = obj.strokeWidth || 0;
-
-          const p = new Path2D(
-            obj.path.map((seg: any) => seg.join(" ")).join(" "),
-          );
-          if (obj.fill && obj.fill !== "transparent") ctx.fill(p);
-          if (obj.stroke && obj.stroke !== "transparent") ctx.stroke(p);
-          ctx.restore();
+      case "circle": {
+        const r = obj.radius || 0;
+        // Fabric circle: bounding box is 2r x 2r; left/top at top-left of box.
+        // After translate to (left, top), centre is at (offsetX + r, offsetY + r) for default origins.
+        const cx = offsetX + r;
+        const cy = offsetY + r;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        if (obj.fill && obj.fill !== "transparent") {
+          ctx.fillStyle = obj.fill;
+          ctx.fill();
+        }
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          ctx.stroke();
         }
         break;
+      }
+
+      case "ellipse": {
+        const rx = obj.rx || 0;
+        const ry = obj.ry || 0;
+        const cx = offsetX + rx;
+        const cy = offsetY + ry;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        if (obj.fill && obj.fill !== "transparent") {
+          ctx.fillStyle = obj.fill;
+          ctx.fill();
+        }
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          ctx.stroke();
+        }
+        break;
+      }
+
+      case "polygon":
+      case "polyline": {
+        const pts: { x: number; y: number }[] = obj.points || [];
+        if (pts.length === 0) break;
+        // Fabric stores points in local coordinates. Bounding box origin = (minX, minY).
+        // After translate to (left, top), draw by subtracting (minX, minY).
+        let minX = Infinity, minY = Infinity;
+        for (const p of pts) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+        }
+        ctx.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          const px = pts[i].x - minX + offsetX;
+          const py = pts[i].y - minY + offsetY;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        if (obj.type === "polygon") ctx.closePath();
+
+        if (obj.fill && obj.fill !== "" && obj.fill !== "transparent") {
+          ctx.fillStyle = obj.fill;
+          ctx.fill();
+        }
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          if (obj.strokeLineCap) ctx.lineCap = obj.strokeLineCap;
+          if (obj.strokeLineJoin) ctx.lineJoin = obj.strokeLineJoin;
+          ctx.stroke();
+        }
+        break;
+      }
+
+      case "path": {
+        if (!obj.path) break;
+        // Compute bounding box of the path commands (M/L/Q/C/Z) for offset normalisation.
+        let minX = Infinity, minY = Infinity;
+        for (const seg of obj.path) {
+          // seg = ['M', x, y] | ['L', x, y] | ['Q', cx, cy, x, y] | ['C', c1x, c1y, c2x, c2y, x, y] | ['Z']
+          for (let i = 1; i < seg.length; i += 2) {
+            const x = seg[i];
+            const y = seg[i + 1];
+            if (typeof x === "number" && typeof y === "number") {
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+            }
+          }
+        }
+        if (!isFinite(minX)) minX = 0;
+        if (!isFinite(minY)) minY = 0;
+
+        ctx.save();
+        ctx.translate(offsetX - minX, offsetY - minY);
+
+        const p2d = new Path2D(
+          obj.path.map((seg: any) => seg.join(" ")).join(" "),
+        );
+        if (obj.fill && obj.fill !== "" && obj.fill !== "transparent") {
+          ctx.fillStyle = obj.fill;
+          ctx.fill(p2d);
+        }
+        if (obj.stroke && (obj.strokeWidth || 0) > 0) {
+          ctx.strokeStyle = obj.stroke;
+          ctx.lineWidth = obj.strokeWidth;
+          if (obj.strokeLineCap) ctx.lineCap = obj.strokeLineCap;
+          if (obj.strokeLineJoin) ctx.lineJoin = obj.strokeLineJoin;
+          ctx.stroke(p2d);
+        }
+        ctx.restore();
+        break;
+      }
     }
 
     ctx.restore();
   }
+}
+
+/**
+ * Apply a fabric clipPath descriptor as a canvas clip on the current context.
+ * The clip is positioned at the current translation origin (caller has already translated to obj.left/top).
+ * Supports rect, polygon, circle, ellipse, path. Other types fall back to no-op.
+ */
+function applyFabricClipPath(
+  ctx: SKRSContext2D,
+  clip: any,
+  parentW: number,
+  parentH: number,
+) {
+  // Fabric clipPath default originX/Y = "center" of the parent unless absolutePositioned.
+  // Most editor-generated clips are absolutePositioned:false, so we centre them on the parent.
+  const cox = clip.originX === "left" ? 0 : -parentW / 2;
+  const coy = clip.originY === "top" ? 0 : -parentH / 2;
+  ctx.translate((clip.left || 0) - cox, (clip.top || 0) - coy);
+
+  ctx.beginPath();
+  switch (clip.type) {
+    case "rect": {
+      const w = clip.width || 0;
+      const h = clip.height || 0;
+      const r = clip.rx || clip.ry || 0;
+      const x = -w / 2;
+      const y = -h / 2;
+      if (r > 0) {
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+      } else {
+        ctx.rect(x, y, w, h);
+      }
+      break;
+    }
+    case "circle": {
+      const r = clip.radius || 0;
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      break;
+    }
+    case "ellipse": {
+      ctx.ellipse(0, 0, clip.rx || 0, clip.ry || 0, 0, 0, Math.PI * 2);
+      break;
+    }
+    case "polygon":
+    case "polyline": {
+      const pts: { x: number; y: number }[] = clip.points || [];
+      if (pts.length === 0) break;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      for (let i = 0; i < pts.length; i++) {
+        const px = pts[i].x - cx;
+        const py = pts[i].y - cy;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      if (clip.type === "polygon") ctx.closePath();
+      break;
+    }
+    case "path": {
+      if (!clip.path) break;
+      const p2d = new Path2D(
+        clip.path.map((seg: any) => seg.join(" ")).join(" "),
+      );
+      ctx.clip(p2d);
+      return; // already clipped
+    }
+  }
+  ctx.clip();
 }
 
 async function loadLocalImage(relPath: string) {

@@ -662,6 +662,23 @@
                   <option value="Arial">Arial</option>
                 </select>
               </div>
+              <div class="prop-row" id="row-text-style">
+                <label>文字樣式</label>
+                <div style="display:flex; gap:4px;">
+                  <button type="button" id="p-bold" class="ghost text-style-btn" onclick="toggleTextStyle('bold')" style="padding:4px 8px; font-weight:bold; min-width:28px;">B</button>
+                  <button type="button" id="p-italic" class="ghost text-style-btn" onclick="toggleTextStyle('italic')" style="padding:4px 8px; font-style:italic; min-width:28px;">I</button>
+                  <button type="button" id="p-underline" class="ghost text-style-btn" onclick="toggleTextStyle('underline')" style="padding:4px 8px; text-decoration:underline; min-width:28px;">U</button>
+                  <button type="button" id="p-linethrough" class="ghost text-style-btn" onclick="toggleTextStyle('linethrough')" style="padding:4px 8px; text-decoration:line-through; min-width:28px;">S</button>
+                </div>
+              </div>
+              <div class="prop-row" id="row-text-align">
+                <label>對齊</label>
+                <select id="p-textAlign" onchange="mod()" style="width:100px; background:#000; color:#fff; border:1px solid #444;">
+                  <option value="left">左</option>
+                  <option value="center">中</option>
+                  <option value="right">右</option>
+                </select>
+              </div>
               <div class="prop-row">
                 <label>陰影距離</label
                 ><input type="number" id="p-shadowOffset" onchange="mod()" />
@@ -682,6 +699,27 @@
               <div class="prop-row">
                 <label>邊框顏色</label
                 ><input type="color" id="p-stroke" onchange="mod()" />
+              </div>
+              <div class="prop-row" id="row-stroke-dash">
+                <label>邊框樣式</label>
+                <select id="p-strokeDash" onchange="mod()" style="width:100px; background:#000; color:#fff; border:1px solid #444;">
+                  <option value="">實線</option>
+                  <option value="4,4">虛線 4,4</option>
+                  <option value="8,4">虛線 8,4</option>
+                  <option value="2,4">點線 2,4</option>
+                  <option value="12,6,2,6">點劃線</option>
+                </select>
+              </div>
+              <div class="prop-row" id="row-radius">
+                <label>圓角 R</label>
+                <input type="number" id="p-radius" min="0" onchange="mod()" />
+              </div>
+              <div class="prop-row" id="row-size">
+                <label>尺寸 W×H</label>
+                <div style="display:flex; gap:4px;">
+                  <input type="number" id="p-w" onchange="mod()" style="width:50px;" />
+                  <input type="number" id="p-h" onchange="mod()" style="width:50px;" />
+                </div>
               </div>
             </div>
           </div>
@@ -725,6 +763,15 @@
                   id="chk-stamina"
                   style="width: 20px"
                   onchange="toggleInfoBar('staminaBox', this.checked)"
+                />
+              </div>
+              <div class="prop-row">
+                <label>顯示光榮之路</label>
+                <input
+                  type="checkbox"
+                  id="chk-achieve"
+                  style="width: 20px"
+                  onchange="toggleAchieve(this.checked)"
                 />
               </div>
             </div>
@@ -1412,14 +1459,15 @@
             const img = await loadImg(b.avatarUrl);
             if (!img) return null;
             const w = el.avatar.width || 180;
+            const radius = el.avatar.radius != null ? el.avatar.radius : 30;
             img.set({
               scaleX: w / img.width,
               scaleY: w / img.height,
               clipPath: new fabric.Rect({
                 width: img.width,
                 height: img.height,
-                rx: 30 * (img.width / w),
-                ry: 30 * (img.height / w),
+                rx: radius * (img.width / w),
+                ry: radius * (img.height / w),
                 originX: "center",
                 originY: "center",
               }),
@@ -1521,6 +1569,22 @@
           el.activityBpBox,
         );
 
+        // 6.5 Achievements (光榮之路)
+        if (el.achieveTitle) {
+          await add(
+            "achieveTitle",
+            async () => createAchieveTitle(el.achieveTitle),
+            el.achieveTitle,
+          );
+        }
+        if (el.achieveBox) {
+          await add(
+            "achieveBox",
+            async () => createAchieveBox(detail.achieve, el.achieveBox),
+            el.achieveBox,
+          );
+        }
+
         // 7. Operators Title
         await add(
           "operatorsTitle",
@@ -1558,6 +1622,8 @@
               "authLevelBox",
               "missionBox",
               "operatorsGrid",
+              "achieveBox",
+              "achieveTitle",
             ].includes(dataKey) ||
             dataKey.startsWith("stat_") ||
             dataKey.startsWith("level_") ||
@@ -1603,6 +1669,9 @@
             originX: "left",
             originY: result.originY || "top",
           });
+          if (cfg.angle != null) result.set("angle", cfg.angle);
+          if (cfg.scaleX != null) result.set("scaleX", cfg.scaleX);
+          if (cfg.scaleY != null) result.set("scaleY", cfg.scaleY);
 
           const isBlockLevel = [
             "avatar",
@@ -1614,6 +1683,8 @@
             "operatorsGrid",
             "realtimeTitle",
             "operatorsTitle",
+            "achieveTitle",
+            "achieveBox",
           ].includes(key);
 
           if (isBlockLevel && result.type === "group") {
@@ -1724,7 +1795,7 @@
       }
 
       async function createLevel(val, cfg, keyPrefix = "level") {
-        const w = cfg.width || 200;
+        const w = cfg.width || 662;
         const objs = [];
 
         objs.push(
@@ -1810,12 +1881,13 @@
 
       async function createStamina(s, cfg) {
         const w = cfg.width || 750;
+        const h = cfg.height || 180;
         const objs = [];
 
         objs.push(
           new fabric.Rect({
             width: w,
-            height: 180,
+            height: h,
             fill: "rgba(255,255,255,0.1)",
             rx: 20,
             ry: 20,
@@ -1870,13 +1942,15 @@
         const maxTs = parseInt(s.maxTs);
         const curVal = parseInt(s.curStamina);
         const maxVal = parseInt(s.maxStamina);
-        let recText = "完全恢復";
+        let recText = "未獲取到恢復時間";
         let diff = 0;
         if (maxTs > now && curVal < maxVal) {
           diff = maxTs - now;
-          const h = Math.floor(diff / 3600);
-          const m = Math.floor((diff % 3600) / 60);
-          recText = `${h}小時${m}分`;
+          const hh = Math.floor(diff / 3600);
+          const mm = Math.floor((diff % 3600) / 60);
+          recText = `${hh}小時${mm}分鐘`;
+        } else if (curVal >= maxVal) {
+          recText = "已完全恢復";
         }
 
         // Dynamic dot color — green (full) → red (empty), matches bot
@@ -1885,36 +1959,61 @@
         const hue = Math.round(120 * (1 - ratio));
         const dotColor = `hsl(${hue}, 100%, 50%)`;
 
+        // Dynamic pill sizing — mirror canvas drawDashboard logic
         const dotR = 8;
-        const pillX = w - 200 - 30;
+        const dotGap = 12;
+        const pillPaddingX = 20;
+        const pillPaddingY = 12;
+        const maxPillW = w * 0.55;
+
+        // Approximate text width (no measureText in fabric pre-render). Fabric.Text.width = computed after instantiation.
+        let pillFontSize = 30;
+        const tmpText = new fabric.Text(recText, {
+          fontSize: pillFontSize,
+          fontFamily: "Noto Sans TC",
+        });
+        let recTextW = tmpText.width;
+        let pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
+        while (pillW > maxPillW && pillFontSize > 18) {
+          pillFontSize -= 2;
+          tmpText.set({ fontSize: pillFontSize });
+          tmpText.initDimensions && tmpText.initDimensions();
+          recTextW = tmpText.width;
+          pillW = pillPaddingX * 2 + dotR * 2 + dotGap + recTextW;
+        }
+        const pillH = pillFontSize + pillPaddingY * 2;
+        const pillX = w - pillW - 30;
+        const pillY = 30;
+
         objs.push(
           new fabric.Rect({
-            width: 200,
-            height: 50,
+            width: pillW,
+            height: pillH,
             fill: "rgba(0,0,0,0.4)",
             rx: 20,
             ry: 20,
             left: pillX,
-            top: 30,
+            top: pillY,
             data: { key: "rec_pill_bg" },
           }),
         );
-        // Dot center: pillX+20+dotR x, vertically centered in pill (top 30, height 50 → center y=55)
+        const dotCx = pillX + pillPaddingX + dotR;
+        const dotCy = pillY + pillH / 2;
         objs.push(
           new fabric.Circle({
             radius: dotR,
             fill: dotColor,
-            left: pillX + 20,
-            top: 55 - dotR,
+            left: dotCx - dotR,
+            top: dotCy - dotR,
             data: { key: "rec_dot" },
           }),
         );
         objs.push(
           new fabric.Text(recText, {
-            fontSize: 30,
+            fontSize: pillFontSize,
             fill: "#fff",
-            left: pillX + 48,
-            top: 40,
+            left: dotCx + dotR + dotGap,
+            top: pillY + pillH / 2 - pillFontSize / 2,
             fontFamily: "Noto Sans TC",
             data: { key: "rec_text" },
           }),
@@ -1940,8 +2039,8 @@
 
         const cols = [];
         if (daily) cols.push({ label: "活躍度", value: `${daily.dailyActivation}/${daily.maxDailyActivation}`, key: "daily" });
-        if (weekly) cols.push({ label: "每周任務", value: `${weekly.score}/${weekly.total}`, key: "weekly" });
-        if (bp) cols.push({ label: "通行證等級", value: `${bp.curLevel}/${bp.maxLevel}`, key: "bp" });
+        if (weekly) cols.push({ label: "每週事務", value: `${weekly.score}/${weekly.total}`, key: "weekly" });
+        if (bp) cols.push({ label: "通行證", value: `${bp.curLevel}/${bp.maxLevel}`, key: "bp" });
 
         const colW = cols.length > 0 ? w / cols.length : w;
         cols.forEach((col, i) => {
@@ -1983,6 +2082,266 @@
         });
 
         return new fabric.Group(objs);
+      }
+
+      // --- Hex helper (matches canvas drawStylizedHexagon) ---
+      function makeStylizedHex(cx, cy, r, bgColor, lineColor) {
+        const objs = [];
+        // 1) Pointy-top base hexagon
+        const verts = [];
+        for (let i = 0; i < 6; i++) {
+          const a = (Math.PI / 3) * i - Math.PI / 2;
+          verts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+        }
+        objs.push(
+          new fabric.Polygon(verts, {
+            fill: bgColor,
+            stroke: null,
+            originX: "left",
+            originY: "top",
+            objectCaching: false,
+          }),
+        );
+        // 2) Three nested arcs (top half) drawn as polylines
+        const lineW = Math.max(r / 12, 1.5);
+        for (let i = 1; i <= 3; i++) {
+          const innerR = r * (1 - i * 0.22);
+          if (innerR <= 0) continue;
+          const pts = [];
+          for (let j = 0; j < 4; j++) {
+            const a = (Math.PI / 3) * (j + 4) - Math.PI / 2;
+            pts.push({ x: cx + innerR * Math.cos(a), y: cy + innerR * Math.sin(a) });
+          }
+          objs.push(
+            new fabric.Polyline(pts, {
+              fill: "",
+              stroke: lineColor,
+              strokeWidth: lineW,
+              strokeLineCap: "round",
+              strokeLineJoin: "round",
+              objectCaching: false,
+            }),
+          );
+        }
+        return objs;
+      }
+
+      // --- Achievement Title (光榮之路) ---
+      async function createAchieveTitle(cfg) {
+        const objs = [];
+        // Hexagon decorator at left (matches canvas: drawStylizedHexagon at rtX+25, rtY+15, r=25)
+        objs.push(
+          ...makeStylizedHex(25, 15, 25, "rgba(255,255,255,0.2)", "#ffffff"),
+        );
+        objs.push(
+          new fabric.Text("光榮之路", {
+            left: 70,
+            top: 0,
+            fontSize: cfg.fontSize || 50,
+            fill: "#fff",
+            fontWeight: "bold",
+            fontFamily: "Noto Sans TC",
+            data: { key: "achieve_title_text" },
+          }),
+        );
+        return new fabric.Group(objs);
+      }
+
+      // --- Achievement Box ---
+      async function createAchieveBox(achieve, cfg) {
+        const finalObjs = [];
+        const w = cfg.width || 2240;
+        const h = cfg.height || 300;
+
+        // Background panel
+        finalObjs.push(
+          new fabric.Rect({
+            left: 0,
+            top: 0,
+            width: w,
+            height: h,
+            fill: "rgba(255,255,255,0.1)",
+            rx: 20,
+            ry: 20,
+            data: { key: "achieve_bg" },
+          }),
+        );
+
+        if (!achieve) return new fabric.Group(finalObjs, { data: { key: "achieveBox" } });
+
+        // Tier counts (initLevel 1=bronze, 2=silver, 3=gold)
+        const tierCounts = { 1: 0, 2: 0, 3: 0 };
+        (achieve.achieveMedals || []).forEach((m) => {
+          const t = m.achievementData.initLevel;
+          if (tierCounts[t] !== undefined) tierCounts[t]++;
+        });
+
+        const sidePad = 50;
+        const leftW = Math.round(w * 0.28);
+
+        // ── LEFT: count + label + tier hexes ──
+        finalObjs.push(
+          new fabric.Text(String(achieve.count ?? 0), {
+            left: sidePad,
+            top: sidePad,
+            fontSize: 100,
+            fontWeight: "bold",
+            fill: "#fff",
+            fontFamily: "Noto Sans TC",
+            data: { key: "achieve_count" },
+          }),
+        );
+        finalObjs.push(
+          new fabric.Text("總收集數", {
+            left: sidePad,
+            top: sidePad + 100 + 40,
+            fontSize: 28,
+            fill: "#888",
+            fontFamily: "Noto Sans TC",
+            data: { key: "achieve_count_label" },
+          }),
+        );
+
+        // Tier icons + counts row at bottom of left area
+        const tierIconSize = 40;
+        const tierY = h - sidePad - tierIconSize;
+        let tierX = sidePad;
+        const tierBgColors = ["#3d3d3d", "#e0e0e0", "#f4e05d"];
+        const tierLineColors = ["#aaaaaa", "#666666", "#7c6f2b"];
+        for (let t = 0; t < 3; t++) {
+          finalObjs.push(
+            ...makeStylizedHex(
+              tierX + tierIconSize / 2,
+              tierY + tierIconSize / 2,
+              tierIconSize / 2,
+              tierBgColors[t],
+              tierLineColors[t],
+            ),
+          );
+          tierX += tierIconSize + 15;
+          const countStr = String(tierCounts[t + 1] ?? 0);
+          finalObjs.push(
+            new fabric.Text(countStr, {
+              left: tierX,
+              top: tierY + tierIconSize - 2,
+              fontSize: 34,
+              fontWeight: "bold",
+              fill: "#cccccc",
+              fontFamily: "Noto Sans TC",
+              originY: "bottom",
+              data: { key: `achieve_tier_${t + 1}_count` },
+            }),
+          );
+          // approximate width for next column placement (rough heuristic)
+          tierX += countStr.length * 22 + 30;
+        }
+
+        // ── RIGHT: 5×2 honeycomb display medals (pointy-top) ──
+        const medalMap = new Map();
+        (achieve.achieveMedals || []).forEach((m) => medalMap.set(m.achievementData.id, m));
+
+        const hexAreaX = leftW;
+        const hexAreaW = w - leftW;
+        const hexR = Math.max(
+          Math.floor(Math.min(h / 3.5, hexAreaW / (5.5 * Math.sqrt(3)))),
+          1,
+        );
+        const hexColSpacing = hexR * Math.sqrt(3);
+        const hexRowSpacing = hexR * 1.5;
+        const gridStartX =
+          hexAreaX +
+          (hexAreaW - 5.5 * hexR * Math.sqrt(3)) / 2 +
+          (hexR * Math.sqrt(3)) / 2;
+        const gridStartY = hexR;
+
+        // Pre-load icons
+        const iconUrls = [];
+        const slotIcons = {};
+        for (let slot = 1; slot <= 10; slot++) {
+          const medalId = achieve.display?.[String(slot)];
+          const medal = medalId ? medalMap.get(medalId) : null;
+          if (!medal) continue;
+          const { achievementData, level, isPlated } = medal;
+          let iconUrl = "";
+          if (isPlated && achievementData.platedIcon) iconUrl = achievementData.platedIcon;
+          else if (level >= 3 && achievementData.reforge3Icon) iconUrl = achievementData.reforge3Icon;
+          else if (level >= 2 && achievementData.reforge2Icon) iconUrl = achievementData.reforge2Icon;
+          else iconUrl = achievementData.initIcon;
+          if (iconUrl) {
+            slotIcons[slot] = iconUrl;
+            iconUrls.push(iconUrl);
+          }
+        }
+        await Promise.all([...new Set(iconUrls)].map((u) => loadImg(u)));
+
+        // Build flat-top hex polygon vertices (rotated 30°)
+        const buildHexVerts = (cx, cy, r) => {
+          const verts = [];
+          for (let i = 0; i < 6; i++) {
+            const a = (Math.PI / 3) * i + (30 * Math.PI) / 180;
+            verts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+          }
+          return verts;
+        };
+
+        for (let slot = 1; slot <= 10; slot++) {
+          const col = Math.floor((slot - 1) / 2);
+          const row = (slot - 1) % 2;
+          const cx =
+            gridStartX +
+            col * hexColSpacing +
+            (row === 1 ? hexColSpacing / 2 : 0);
+          const cy = gridStartY + row * hexRowSpacing;
+
+          const verts = buildHexVerts(cx, cy, hexR);
+          const iconUrl = slotIcons[slot];
+
+          if (iconUrl) {
+            const img = await loadImg(iconUrl);
+            if (img) {
+              const cloned = await new Promise((r) => img.clone((c) => r(c)));
+              cloned.set({
+                left: cx - hexR,
+                top: cy - hexR,
+                scaleX: (hexR * 2) / cloned.width,
+                scaleY: (hexR * 2) / cloned.height,
+                clipPath: new fabric.Polygon(
+                  verts.map((v) => ({ x: v.x - (cx - hexR), y: v.y - (cy - hexR) })),
+                  { absolutePositioned: false, originX: "left", originY: "top" },
+                ),
+                data: { key: `achieve_slot_${slot}_img` },
+              });
+              finalObjs.push(cloned);
+            }
+            // Border on top
+            finalObjs.push(
+              new fabric.Polygon(verts, {
+                fill: "",
+                stroke: "rgba(255,255,255,0.4)",
+                strokeWidth: 4,
+                originX: "left",
+                originY: "top",
+                objectCaching: false,
+                data: { key: `achieve_slot_${slot}_border` },
+              }),
+            );
+          } else {
+            // Empty slot
+            finalObjs.push(
+              new fabric.Polygon(verts, {
+                fill: "rgba(255,255,255,0.05)",
+                stroke: "rgba(255,255,255,0.2)",
+                strokeWidth: 2,
+                originX: "left",
+                originY: "top",
+                objectCaching: false,
+                data: { key: `achieve_slot_${slot}_empty` },
+              }),
+            );
+          }
+        }
+
+        return new fabric.Group(finalObjs, { data: { key: "achieveBox" } });
       }
 
       // --- Core Logic: Character Grid (Flattened) ---
@@ -2351,6 +2710,11 @@
         const rowText = document.getElementById("row-text");
         const rowFS = document.getElementById("row-fontSize");
         const rowFF = document.getElementById("row-fontFamily");
+        const rowTextStyle = document.getElementById("row-text-style");
+        const rowTextAlign = document.getElementById("row-text-align");
+        const rowRadius = document.getElementById("row-radius");
+        const rowSize = document.getElementById("row-size");
+        const rowDash = document.getElementById("row-stroke-dash");
 
         stylePanel.style.display = "none";
         if (groupStylePanel) groupStylePanel.style.display = "none";
@@ -2368,6 +2732,11 @@
         rowText.style.display = "none";
         rowFS.style.display = "none";
         rowFF.style.display = "none";
+        if (rowTextStyle) rowTextStyle.style.display = "none";
+        if (rowTextAlign) rowTextAlign.style.display = "none";
+        if (rowRadius) rowRadius.style.display = "none";
+        if (rowSize) rowSize.style.display = "none";
+        if (rowDash) rowDash.style.display = "none";
 
         // Shadow/Border
         const shadow = target.shadow || {};
@@ -2375,6 +2744,12 @@
         document.getElementById("p-shadowBlur").value = shadow.blur || 0;
         document.getElementById("p-strokeWidth").value = target.strokeWidth || 0;
         document.getElementById("p-stroke").value = toHex(target.stroke || "#000000");
+        // Stroke dash
+        const dashEl = document.getElementById("p-strokeDash");
+        if (dashEl) {
+          const da = target.strokeDashArray;
+          dashEl.value = Array.isArray(da) && da.length > 0 ? da.join(",") : "";
+        }
 
         let showStyle = false;
 
@@ -2383,9 +2758,26 @@
           rowFill.style.display = "flex";
           rowFS.style.display = "flex";
           rowFF.style.display = "flex";
+          if (rowTextStyle) rowTextStyle.style.display = "flex";
+          if (rowTextAlign) rowTextAlign.style.display = "flex";
           document.getElementById("p-fill").value = toHex(target.fill);
           document.getElementById("p-fontSize").value = target.fontSize;
           document.getElementById("p-fontFamily").value = target.fontFamily;
+          // textAlign: prefer explicit, fallback to originX mapping
+          const taSel = document.getElementById("p-textAlign");
+          if (taSel) {
+            const ta = target.textAlign || (target.originX === "center" ? "center" : target.originX === "right" ? "right" : "left");
+            taSel.value = ["left","center","right"].includes(ta) ? ta : "left";
+          }
+          // Toggle button states
+          const setBtnActive = (id, on) => {
+            const b = document.getElementById(id);
+            if (b) b.style.background = on ? "var(--primary, #3498db)" : "";
+          };
+          setBtnActive("p-bold", target.fontWeight === "bold" || (typeof target.fontWeight === "number" && target.fontWeight > 500));
+          setBtnActive("p-italic", target.fontStyle === "italic");
+          setBtnActive("p-underline", !!target.underline);
+          setBtnActive("p-linethrough", !!target.linethrough);
 
           const key = target.data?.key || "";
           const isAPIValue =
@@ -2418,6 +2810,22 @@
           showStyle = true;
           rowFill.style.display = "flex";
           document.getElementById("p-fill").value = toHex(target.fill);
+
+          // Radius (rect rx)
+          if (rowRadius && target.type === "rect") {
+            rowRadius.style.display = "flex";
+            document.getElementById("p-radius").value = target.rx || 0;
+          }
+
+          // Width/Height (rect, image, group)
+          if (rowSize && (target.type === "rect" || target.type === "image" || target.type === "group")) {
+            rowSize.style.display = "flex";
+            document.getElementById("p-w").value = Math.round((target.width || 0) * (target.scaleX || 1));
+            document.getElementById("p-h").value = Math.round((target.height || 0) * (target.scaleY || 1));
+          }
+
+          // Stroke dash row visible whenever stroke is potentially used
+          if (rowDash) rowDash.style.display = "flex";
         }
 
         if (showStyle) stylePanel.style.display = "block";
@@ -2831,12 +3239,17 @@
         const template = Editor.state.sessionData.template;
         const chkMission = document.getElementById("chk-mission");
         const chkStamina = document.getElementById("chk-stamina");
+        const chkAchieve = document.getElementById("chk-achieve");
         if (chkMission)
           chkMission.checked =
             template.elements.activityBpBox.visible !== false;
         if (chkStamina)
           chkStamina.checked =
             template.elements.staminaBox.visible !== false;
+        if (chkAchieve)
+          chkAchieve.checked =
+            (template.elements.achieveTitle?.visible !== false) ||
+            (template.elements.achieveBox?.visible !== false);
       };
 
       function syncVisualOverlay(val) {
@@ -2954,6 +3367,21 @@
           obj.set("visible", visible);
         }
         Editor.state.sessionData.template.elements[key].visible = visible;
+        Editor.canvas.requestRenderAll();
+        saveState();
+      };
+
+      window.toggleAchieve = (visible) => {
+        ["achieveTitle", "achieveBox"].forEach((k) => {
+          const obj = Editor.state.registry[k];
+          if (obj) {
+            if (Array.isArray(obj)) obj.forEach((o) => o.set("visible", visible));
+            else obj.set("visible", visible);
+          }
+          if (Editor.state.sessionData.template.elements[k]) {
+            Editor.state.sessionData.template.elements[k].visible = visible;
+          }
+        });
         Editor.canvas.requestRenderAll();
         saveState();
       };
@@ -3247,6 +3675,11 @@
         const valText = document.getElementById("p-text").value;
         const valFS = parseInt(document.getElementById("p-fontSize").value);
         const valFF = document.getElementById("p-fontFamily").value;
+        const valTA = document.getElementById("p-textAlign")?.value;
+        const valDash = document.getElementById("p-strokeDash")?.value || "";
+        const valRadius = parseFloat(document.getElementById("p-radius")?.value);
+        const valW = parseFloat(document.getElementById("p-w")?.value);
+        const valH = parseFloat(document.getElementById("p-h")?.value);
 
         const applyTo = (obj) => {
           if (obj.type && obj.type.includes("text")) {
@@ -3268,6 +3701,7 @@
             if (valFill) obj.set("fill", valFill);
             if (!isNaN(valFS)) obj.set("fontSize", valFS);
             if (valFF) obj.set("fontFamily", valFF);
+            if (valTA && ["left","center","right"].includes(valTA)) obj.set("textAlign", valTA);
           } else if (
             obj.set &&
             (obj.type === "rect" ||
@@ -3278,6 +3712,16 @@
               obj.type === "image")
           ) {
             if (valFill) obj.set("fill", valFill);
+            // Radius (rect rx/ry)
+            if (obj.type === "rect" && !isNaN(valRadius) && valRadius >= 0) {
+              obj.set({ rx: valRadius, ry: valRadius });
+            }
+            // Width/Height for rect/image/group: write to width/height and reset scale to 1
+            if ((obj.type === "rect" || obj.type === "image" || obj.type === "group")
+                && !isNaN(valW) && valW > 0 && !isNaN(valH) && valH > 0) {
+              obj.set({ width: valW, height: valH, scaleX: 1, scaleY: 1 });
+              if (obj.type === "group") obj.dirty = true;
+            }
           }
 
           const shadowOffset =
@@ -3303,6 +3747,13 @@
           const strokeColor = document.getElementById("p-stroke").value;
           obj.set("stroke", strokeWidth > 0 ? strokeColor : null);
           obj.set("strokeWidth", strokeWidth);
+          // Stroke dash
+          if (valDash) {
+            const arr = valDash.split(",").map(n => parseFloat(n)).filter(n => !isNaN(n) && n > 0);
+            obj.set("strokeDashArray", arr.length ? arr : null);
+          } else {
+            obj.set("strokeDashArray", null);
+          }
         };
 
         // If in sub-target edit mode, apply style changes to the sub-object
@@ -3343,7 +3794,36 @@
         saveState();
       };
 
-      // Keyboard Shortcuts
+      // Toggle text-style flags (bold/italic/underline/linethrough) on the active text object
+      window.toggleTextStyle = (kind) => {
+        const active = Editor.canvas.getActiveObject();
+        const target = Editor.state.subTarget?.obj || active;
+        if (!target) return;
+        const apply = (obj) => {
+          if (!obj || !obj.type || !obj.type.includes("text")) return;
+          if (kind === "bold") {
+            const isBold = obj.fontWeight === "bold" || (typeof obj.fontWeight === "number" && obj.fontWeight > 500);
+            obj.set("fontWeight", isBold ? "normal" : "bold");
+          } else if (kind === "italic") {
+            obj.set("fontStyle", obj.fontStyle === "italic" ? "normal" : "italic");
+          } else if (kind === "underline") {
+            obj.set("underline", !obj.underline);
+          } else if (kind === "linethrough") {
+            obj.set("linethrough", !obj.linethrough);
+          }
+          // Skip if API-bound text — we still allow style overrides; only text *content* is API-bound
+        };
+        if (target.type === "activeSelection") {
+          target.getObjects().forEach(apply);
+        } else {
+          apply(target);
+        }
+        if (Editor.state.subTarget?.group) Editor.state.subTarget.group.dirty = true;
+        Editor.canvas.requestRenderAll();
+        fillInspector(target, Editor.state.subTarget?.group || null);
+        saveState();
+      };
+
       window.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && Editor.state.groupEditMode) {
           exitGroupEditMode();
