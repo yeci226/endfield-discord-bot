@@ -790,6 +790,7 @@ async function persistSimPoolRecordsFromLog(
 const POOL_TYPES = [
   "E_CharacterGachaPoolType_Standard",
   "E_CharacterGachaPoolType_Special",
+  "E_CharacterGachaPoolType_Joint",
   "E_CharacterGachaPoolType_Beginner",
 ];
 
@@ -1670,8 +1671,8 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         };
       })
       .sort((a, b) => {
-        const isLimitedA = a.type.includes("Special");
-        const isLimitedB = b.type.includes("Special");
+        const isLimitedA = a.type.includes("Special") || a.type.includes("Joint");
+        const isLimitedB = b.type.includes("Special") || b.type.includes("Joint");
         const isBeginnerA = a.type.includes("Beginner");
         const isBeginnerB = b.type.includes("Beginner");
         const isStandardA = a.type.includes("Standard");

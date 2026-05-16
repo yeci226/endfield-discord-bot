@@ -7,7 +7,8 @@ import {
 import path from "path";
 import fs from "fs";
 import moment from "moment";
-import { GachaLogData } from "./gachaLogUtils";
+import { GachaLogData, getPoolMetadata } from "./gachaLogUtils";
+import { CustomDatabase } from "./Database";
 import { fetchImage } from "./canvasUtils";
 
 // Register Fonts
@@ -95,6 +96,7 @@ export async function drawGachaStats(
   type: GachaType = "limited_char",
   selectedPoolId?: string,
   page: number = 0,
+  db?: CustomDatabase,
 ): Promise<Buffer> {
   const apiLang = data.info.lang || "zh-tw";
   const isEn = apiLang.toLowerCase().includes("en");
@@ -233,38 +235,31 @@ export async function drawGachaStats(
     poolId: string,
   ): Promise<string | undefined> => {
     if (!poolId) return undefined;
+    // In-process cache: avoids repeated DB lookups within one render
     if (poolBannerUrlMap.has(poolId)) return poolBannerUrlMap.get(poolId);
 
+    // 1. Global DB cache (persists across restarts, shared across all users)
+    if (db) {
+      const meta = await getPoolMetadata(db, poolId, apiLang, apiServerId);
+      const bannerUrl =
+        meta?.up6_image || meta?.up5_image || meta?.banner_image;
+      if (bannerUrl) {
+        poolBannerUrlMap.set(poolId, bannerUrl);
+        return bannerUrl;
+      }
+    }
+
+    // 2. Banner stored inside poolStats.pools (from import time)
     const cachedBanner = cachedPoolBannerMap.get(poolId);
     if (cachedBanner) {
       poolBannerUrlMap.set(poolId, cachedBanner);
       return cachedBanner;
     }
 
+    // 3. Current selected pool from already-fetched API data
     if (selectedPoolId === poolId && poolApiData?.up6_image) {
       poolBannerUrlMap.set(poolId, poolApiData.up6_image);
       return poolApiData.up6_image;
-    }
-
-    try {
-      const res = await fetch(
-        `https://ef-webview.gryphline.com/api/content?lang=${apiLang}&pool_id=${poolId}&server_id=${apiServerId}`,
-      );
-      if (!res.ok) return undefined;
-
-      const json = await res.json();
-      const pool = json?.data?.pool;
-      const bannerUrl =
-        pool?.up6_image || pool?.up5_image || pool?.banner_image;
-      if (bannerUrl) {
-        poolBannerUrlMap.set(poolId, bannerUrl);
-        return bannerUrl;
-      }
-    } catch (e) {
-      console.error(
-        `[drawGachaStats] Failed to fetch banner for pool ${poolId}`,
-        e,
-      );
     }
 
     return undefined;
@@ -354,7 +349,7 @@ export async function drawGachaStats(
           return p.type?.includes("Standard") && !p.name?.includes("新手");
         if (type === "beginner_char")
           return p.type?.includes("Beginner") || p.name?.includes("新手");
-        return p.type?.includes("Special"); // Default to Special for limited_char
+        return p.type?.includes("Special") || p.type?.includes("Joint"); // Default to Special/Joint for limited_char
       })
       .slice(0, 3);
 
@@ -682,7 +677,7 @@ export async function drawGachaStats(
       return p.type?.includes("Standard") && !p.name?.includes("新手");
     if (type === "beginner_char")
       return p.type?.includes("Beginner") || p.name?.includes("新手");
-    return p.type?.includes("Special");
+    return p.type?.includes("Special") || p.type?.includes("Joint");
   });
 
   const shownPoolIds = new Set(visualGroups.map((g) => g.pId).filter(Boolean));

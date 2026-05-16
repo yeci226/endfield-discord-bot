@@ -677,6 +677,7 @@ const command: Command = {
         pageType as any,
         poolId === "all" ? undefined : poolId,
         page,
+        db,
       );
       const attachment = new AttachmentBuilder(image, {
         name: "gacha_stats.webp",
