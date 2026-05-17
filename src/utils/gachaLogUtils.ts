@@ -1320,7 +1320,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
     const pId = record.poolId || "";
     const pName = record.poolName || "";
 
-    if (type.includes("Special") || pId.startsWith("c_special"))
+    if (type.includes("Special") || type.includes("Joint") || pId.startsWith("c_special"))
       return "SpecialShared";
     if (type.includes("Beginner") || pId.startsWith("c_beginner"))
       return "Beginner";
