@@ -25,6 +25,7 @@ import {
   buildIndieHardCard,
   IndieHardGroup,
 } from "../../utils/indieHardCanvasUtils";
+import { createTranslator, toI18nLang } from "../../utils/i18n";
 
 // Module-level cache: userId -> groups (expires after 10 min)
 const groupCache = new Map<string, { groups: IndieHardGroup[]; ts: number }>();
@@ -61,15 +62,16 @@ async function fetchAndCacheGroups(
   | { groups: IndieHardGroup[]; error: null }
   | { groups: null; error: string }
 > {
+  const tr = createTranslator(toI18nLang(locale));
   const accounts = await getAccounts(db, discordUserId);
   if (!accounts || accounts.length === 0) {
-    return { groups: null, error: "❌ 尚未綁定帳號，請先使用 `/login` 登入。" };
+    return { groups: null, error: tr("indieHard_NoAccount") };
   }
 
   const account = accounts[0];
   const primary = getPrimaryBindingRole(account.roles);
   if (!primary) {
-    return { groups: null, error: "❌ 找不到綁定的遊戲角色，請重新登入。" };
+    return { groups: null, error: tr("indieHard_RoleNotFound") };
   }
 
   const { role, binding } = primary;
@@ -85,7 +87,7 @@ async function fetchAndCacheGroups(
   }
 
   if (!data || !data.indieHardGroups || data.indieHardGroups.length === 0) {
-    return { groups: null, error: "❌ 無法取得影拓豐碑資料，請稍後再試。" };
+    return { groups: null, error: tr("indieHard_APIFailed") };
   }
 
   groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
@@ -98,7 +100,9 @@ async function sendGroupCard(
     | StringSelectMenuInteraction,
   groups: IndieHardGroup[],
   groupIndex: number,
+  locale: string,
 ) {
+  const tr = createTranslator(toI18nLang(locale));
   const group = groups[groupIndex];
 
   let imgBuffer: Buffer;
@@ -107,7 +111,7 @@ async function sendGroupCard(
   } catch (err: any) {
     console.error("[indieHard] Canvas error:", err);
     const container = new ContainerBuilder().addTextDisplayComponents(
-      new TextDisplayBuilder().setContent("❌ 圖片生成失敗，請稍後再試。"),
+      new TextDisplayBuilder().setContent(tr("indieHard_CanvasFailed")),
     );
     await interaction.editReply({
       flags: (1 << 15) | MessageFlags.IsComponentsV2,
@@ -120,10 +124,9 @@ async function sendGroupCard(
     name: "indie-hard.png",
   });
 
-  // Build select menu
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId(`影拓豐碑:select:${interaction.user.id}`)
-    .setPlaceholder("選擇期數")
+    .setPlaceholder(tr("indieHard_SelectPeriod"))
     .addOptions(
       groups.map((g, i) =>
         new StringSelectMenuOptionBuilder()
@@ -176,7 +179,7 @@ const command: Command = {
     const focusedValue = interaction.options.getFocused().toLowerCase();
     const discordUserId = interaction.user.id;
 
-    // Try to use cache first
+    // Try cache first
     const entry = groupCache.get(discordUserId);
     if (entry && Date.now() - entry.ts <= CACHE_TTL) {
       const choices = entry.groups
@@ -186,7 +189,7 @@ const command: Command = {
       return;
     }
 
-    // Fetch fresh data for autocomplete
+    // Fetch fresh data
     const accounts = await getAccounts(db, discordUserId);
     if (!accounts || accounts.length === 0) {
       await interaction.respond([]);
@@ -237,13 +240,14 @@ const command: Command = {
       if (!sel.customId.startsWith("影拓豐碑:select:")) return;
       await sel.deferUpdate();
 
+      const selTr = createTranslator(toI18nLang(sel.locale));
       const entry = groupCache.get(sel.user.id);
       if (!entry || Date.now() - entry.ts > CACHE_TTL) {
-        await sel.editReply({ content: "❌ 資料已過期，請重新使用指令。", components: [] });
+        await sel.editReply({ content: selTr("indieHard_DataExpired"), components: [] });
         return;
       }
       const idx = parseInt(sel.values[0]) || 0;
-      await sendGroupCard(sel as any, entry.groups, idx);
+      await sendGroupCard(sel as any, entry.groups, idx, sel.locale);
       return;
     }
 
@@ -251,6 +255,7 @@ const command: Command = {
     const ci = interaction as ChatInputCommandInteraction;
     await ci.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
 
+    const ciTr = createTranslator(toI18nLang(ci.locale));
     const discordUserId = ci.user.id;
 
     // Ensure account binding
@@ -268,7 +273,7 @@ const command: Command = {
       const result = await fetchAndCacheGroups(db, discordUserId, ci.locale);
       if (result.error || !result.groups) {
         const container = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(result.error ?? "❌ 發生未知錯誤。"),
+          new TextDisplayBuilder().setContent(result.error ?? ciTr("indieHard_UnknownError")),
         );
         await ci.editReply({
           flags: (1 << 15) | MessageFlags.IsComponentsV2,
@@ -289,7 +294,7 @@ const command: Command = {
       }
     }
 
-    await sendGroupCard(ci as any, groups, groupIndex);
+    await sendGroupCard(ci as any, groups, groupIndex, ci.locale);
   },
 };
 

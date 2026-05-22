@@ -432,6 +432,15 @@ const langs: Record<string, any> = {
   botProfile_ImageTooLarge:
     "Image size exceeds limit (max 9 MB, current <size> MB)",
   botProfile_ImageFetchFailed: "Failed to download image (HTTP <status>)",
+
+  // Indie Hard
+  indieHard_NoAccount: "❌ Account not bound. Please use `/login` first.",
+  indieHard_RoleNotFound: "❌ No bound game role found. Please log in again.",
+  indieHard_APIFailed: "❌ Failed to fetch Indie Hard data. Please try again later.",
+  indieHard_CanvasFailed: "❌ Failed to generate image. Please try again later.",
+  indieHard_DataExpired: "❌ Data expired. Please run the command again.",
+  indieHard_SelectPeriod: "Select Period",
+  indieHard_UnknownError: "❌ An unknown error occurred.",
 };
 
 export default langs;

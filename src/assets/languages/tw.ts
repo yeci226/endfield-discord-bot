@@ -416,6 +416,15 @@ const langs: Record<string, any> = {
   botProfile_ImageTooLarge:
     "圖片大小超過限制（最大 9 MB，目前 <size> MB）",
   botProfile_ImageFetchFailed: "無法下載圖片（HTTP <status>）",
+
+  // Indie Hard (影拓豐碑)
+  indieHard_NoAccount: "❌ 尚未綁定帳號，請先使用 `/login` 登入。",
+  indieHard_RoleNotFound: "❌ 找不到綁定的遊戲角色，請重新登入。",
+  indieHard_APIFailed: "❌ 無法取得影拓豐碑資料，請稍後再試。",
+  indieHard_CanvasFailed: "❌ 圖片生成失敗，請稍後再試。",
+  indieHard_DataExpired: "❌ 資料已過期，請重新使用指令。",
+  indieHard_SelectPeriod: "選擇期數",
+  indieHard_UnknownError: "❌ 發生未知錯誤。",
 };
 
 export default langs;
