@@ -3,6 +3,7 @@ import {
   ChatInputCommandInteraction,
   ModalSubmitInteraction,
   StringSelectMenuInteraction,
+  AutocompleteInteraction,
   MessageFlags,
   ContainerBuilder,
   TextDisplayBuilder,
@@ -50,6 +51,45 @@ async function getIndieHard(
   });
   if (!res || (res as any).code !== 0) return null;
   return (res as any).data?.indieHard ?? null;
+}
+
+async function fetchAndCacheGroups(
+  db: CustomDatabase,
+  discordUserId: string,
+  locale: string,
+): Promise<
+  | { groups: IndieHardGroup[]; error: null }
+  | { groups: null; error: string }
+> {
+  const accounts = await getAccounts(db, discordUserId);
+  if (!accounts || accounts.length === 0) {
+    return { groups: null, error: "❌ 尚未綁定帳號，請先使用 `/login` 登入。" };
+  }
+
+  const account = accounts[0];
+  const primary = getPrimaryBindingRole(account.roles);
+  if (!primary) {
+    return { groups: null, error: "❌ 找不到綁定的遊戲角色，請重新登入。" };
+  }
+
+  const { role, binding } = primary;
+  const roleId = String(role.roleId || "");
+  const serverId = String(role.serverId || "");
+  const skUserId = String(binding?.uid || account.info?.id || "");
+
+  let data: { indieHardGroups: IndieHardGroup[] } | null = null;
+  try {
+    data = await getIndieHard(roleId, serverId, skUserId, locale, account.cred, account.salt);
+  } catch (err) {
+    console.error("[indieHard] API error:", err);
+  }
+
+  if (!data || !data.indieHardGroups || data.indieHardGroups.length === 0) {
+    return { groups: null, error: "❌ 無法取得影拓豐碑資料，請稍後再試。" };
+  }
+
+  groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
+  return { groups: data.indieHardGroups, error: null };
 }
 
 async function sendGroupCard(
@@ -105,11 +145,82 @@ async function sendGroupCard(
 
 const command: Command = {
   data: new SlashCommandBuilder()
-    .setName("影拓豐碑")
-    .setDescription("查看影拓豐碑（獨立困難模式）進度")
+    .setName("indie-hard")
+    .setDescription("View Indie Hard Mode progress")
+    .setNameLocalizations({
+      "zh-TW": "影拓豐碑",
+      "zh-CN": "影拓丰碑",
+    })
     .setDescriptionLocalizations({
-      "en-US": "View Indie Hard Mode progress",
-    }) as SlashCommandBuilder,
+      "zh-TW": "查看影拓豐碑（獨立困難模式）進度",
+      "zh-CN": "查看影拓丰碑（独立困难模式）进度",
+    })
+    .addStringOption((option) =>
+      option
+        .setName("period")
+        .setDescription("Select a period to view")
+        .setNameLocalizations({ "zh-TW": "期數", "zh-CN": "期数" })
+        .setDescriptionLocalizations({
+          "zh-TW": "選擇要查看的期數",
+          "zh-CN": "选择要查看的期数",
+        })
+        .setAutocomplete(true)
+        .setRequired(false),
+    ) as SlashCommandBuilder,
+
+  autocomplete: async (
+    _client: ExtendedClient,
+    interaction: AutocompleteInteraction,
+    db: CustomDatabase,
+  ) => {
+    const focusedValue = interaction.options.getFocused().toLowerCase();
+    const discordUserId = interaction.user.id;
+
+    // Try to use cache first
+    const entry = groupCache.get(discordUserId);
+    if (entry && Date.now() - entry.ts <= CACHE_TTL) {
+      const choices = entry.groups
+        .map((g, i) => ({ name: g.activityName, value: String(i) }))
+        .filter((c) => c.name.toLowerCase().includes(focusedValue));
+      await interaction.respond(choices.slice(0, 25));
+      return;
+    }
+
+    // Fetch fresh data for autocomplete
+    const accounts = await getAccounts(db, discordUserId);
+    if (!accounts || accounts.length === 0) {
+      await interaction.respond([]);
+      return;
+    }
+    const account = accounts[0];
+    const primary = getPrimaryBindingRole(account.roles);
+    if (!primary) {
+      await interaction.respond([]);
+      return;
+    }
+    const { role, binding } = primary;
+    const roleId = String(role.roleId || "");
+    const serverId = String(role.serverId || "");
+    const skUserId = String(binding?.uid || account.info?.id || "");
+
+    try {
+      const data = await getIndieHard(
+        roleId, serverId, skUserId,
+        interaction.locale, account.cred, account.salt,
+      );
+      if (data?.indieHardGroups) {
+        groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
+        const choices = data.indieHardGroups
+          .map((g, i) => ({ name: g.activityName, value: String(i) }))
+          .filter((c) => c.name.toLowerCase().includes(focusedValue));
+        await interaction.respond(choices.slice(0, 25));
+        return;
+      }
+    } catch (err) {
+      console.error("[indieHard] autocomplete error:", err);
+    }
+    await interaction.respond([]);
+  },
 
   execute: async (
     client: ExtendedClient,
@@ -126,7 +237,6 @@ const command: Command = {
       if (!sel.customId.startsWith("影拓豐碑:select:")) return;
       await sel.deferUpdate();
 
-      // Retrieve cached data
       const entry = groupCache.get(sel.user.id);
       if (!entry || Date.now() - entry.ts > CACHE_TTL) {
         await sel.editReply({ content: "❌ 資料已過期，請重新使用指令。", components: [] });
@@ -142,75 +252,44 @@ const command: Command = {
     await ci.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
 
     const discordUserId = ci.user.id;
+
+    // Ensure account binding
     const accounts = await getAccounts(db, discordUserId);
-
-    if (!accounts || accounts.length === 0) {
-      const container = new ContainerBuilder().addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          "❌ 尚未綁定帳號，請先使用 `/login` 登入。",
-        ),
-      );
-      await ci.editReply({
-        flags: (1 << 15) | MessageFlags.IsComponentsV2,
-        components: [container],
-      });
-      return;
+    if (accounts && accounts.length > 0) {
+      await ensureAccountBinding(accounts[0], discordUserId, db, ci.locale);
     }
 
-    const account = accounts[0];
-    await ensureAccountBinding(account, discordUserId, db, ci.locale);
-
-    const primary = getPrimaryBindingRole(account.roles);
-    if (!primary) {
-      const container = new ContainerBuilder().addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          "❌ 找不到綁定的遊戲角色，請重新登入。",
-        ),
-      );
-      await ci.editReply({
-        flags: (1 << 15) | MessageFlags.IsComponentsV2,
-        components: [container],
-      });
-      return;
+    // Get groups (use cache or fetch)
+    let groups: IndieHardGroup[];
+    const cached = groupCache.get(discordUserId);
+    if (cached && Date.now() - cached.ts <= CACHE_TTL) {
+      groups = cached.groups;
+    } else {
+      const result = await fetchAndCacheGroups(db, discordUserId, ci.locale);
+      if (result.error || !result.groups) {
+        const container = new ContainerBuilder().addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(result.error ?? "❌ 發生未知錯誤。"),
+        );
+        await ci.editReply({
+          flags: (1 << 15) | MessageFlags.IsComponentsV2,
+          components: [container],
+        });
+        return;
+      }
+      groups = result.groups;
     }
 
-    const { role, binding } = primary;
-    const roleId = String(role.roleId || "");
-    const serverId = String(role.serverId || "");
-    const skUserId = String(binding?.uid || account.info?.id || "");
-
-    let data: { indieHardGroups: IndieHardGroup[] } | null = null;
-    try {
-      data = await getIndieHard(
-        roleId,
-        serverId,
-        skUserId,
-        ci.locale,
-        account.cred,
-        account.salt,
-      );
-    } catch (err: any) {
-      console.error("[indieHard] API error:", err);
+    // Determine which group to show
+    const periodValue = ci.options.getString("period");
+    let groupIndex = 0;
+    if (periodValue !== null) {
+      const parsed = parseInt(periodValue);
+      if (!isNaN(parsed) && parsed >= 0 && parsed < groups.length) {
+        groupIndex = parsed;
+      }
     }
 
-    if (!data || !data.indieHardGroups || data.indieHardGroups.length === 0) {
-      const container = new ContainerBuilder().addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-          "❌ 無法取得影拓豐碑資料，請稍後再試。",
-        ),
-      );
-      await ci.editReply({
-        flags: (1 << 15) | MessageFlags.IsComponentsV2,
-        components: [container],
-      });
-      return;
-    }
-
-    // Cache data for select menu
-    groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
-
-    // Show first (most recent) group
-    await sendGroupCard(ci as any, data.indieHardGroups, 0);
+    await sendGroupCard(ci as any, groups, groupIndex);
   },
 };
 
