@@ -7,6 +7,7 @@ import {
 } from "../utils/accountUtils";
 import { createTranslator } from "../utils/i18n";
 import { Logger } from "../utils/Logger";
+import { resolveBindingUid } from "../utils/bindingRoleUtils";
 import { ContainerBuilder, MessageFlags, TextDisplayBuilder } from "discord.js";
 import moment from "moment-timezone";
 
@@ -88,9 +89,10 @@ export class MonitorService {
       for (const account of accounts) {
         if (account.invalid) continue;
 
-        const primaryBinding = getPrimaryBindingRole(account.roles);
+        const primaryBinding = getPrimaryBindingRole(account.roles, 3);
         const role = primaryBinding?.role; // Monitor primary role
         if (!role) continue;
+        const uid = resolveBindingUid(primaryBinding, account.info?.id);
 
         const cardRes = (await withAutoRefresh(
           this.client,
@@ -100,7 +102,7 @@ export class MonitorService {
             getCardDetail(
               role.roleId,
               role.serverId,
-              account.info?.id || role.roleId,
+              uid,
               tr.lang,
               c,
               s,

@@ -30,6 +30,7 @@ import {
   getPrimaryBindingRole,
   withAutoRefresh,
 } from "../../utils/accountUtils";
+import { normalizeBindingRoles } from "../../utils/bindingRoleUtils";
 import {
   fetchAndMergeGachaLog,
   fetchAndMergeGachaLogFromAccount,
@@ -91,11 +92,7 @@ async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
               nickname: nick,
             });
           };
-          const gameRoles = Array.isArray(b.roles)
-            ? b.roles
-            : b.defaultRole
-              ? [b.defaultRole]
-              : [];
+          const gameRoles = normalizeBindingRoles(b);
           for (const r of gameRoles) {
             add(
               r.roleId || r.uid || b.uid,
@@ -1615,7 +1612,10 @@ const command: Command = {
           let targetUid = targetUidOption;
           if (!targetUid) {
             const accounts = await getAccounts(db, interaction.user.id);
-            const primaryBinding = getPrimaryBindingRole(accounts?.[0]?.roles);
+            const primaryBinding = getPrimaryBindingRole(
+              accounts?.[0]?.roles,
+              3,
+            );
             const firstRole = primaryBinding?.role;
             const firstBinding = primaryBinding?.binding;
             const gameUid = firstRole?.roleId || firstBinding?.uid;
@@ -1728,17 +1728,14 @@ const command: Command = {
               for (const acc of accounts) {
                 if (acc.roles) {
                   for (const binding of acc.roles) {
-                    if (!binding.roles || binding.roles.length === 0) {
+                    if (Number(binding?.gameId) !== 3) continue;
+
+                    for (const role of normalizeBindingRoles(binding)) {
+                      const roleUid =
+                        role.roleId || role.uid || binding.uid;
+                      if (!roleUid) continue;
                       roles.push({
-                        uid: `EF_${binding.uid}`,
-                        nickname:
-                          binding.nickName || binding.nickname || "Unknown",
-                      });
-                      continue;
-                    }
-                    for (const role of binding.roles) {
-                      roles.push({
-                        uid: `EF_${role.roleId || role.uid || binding.uid}`,
+                        uid: `EF_${roleUid}`,
                         nickname:
                           role.nickname ||
                           role.nickName ||

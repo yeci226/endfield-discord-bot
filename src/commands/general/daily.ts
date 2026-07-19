@@ -24,6 +24,7 @@ import { formatSkGameRole, getGamePlayerBinding } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { processRoleAttendance } from "../../utils/attendanceUtils";
 import { buildDailyAttendanceCard } from "../../utils/dailyCanvasUtils";
+import { normalizeBindingRoles } from "../../utils/bindingRoleUtils";
 import {
   DailyGameScope,
   normalizeAttendanceBindings,
@@ -764,11 +765,7 @@ function extractGameRolePreview(raw: any): {
 
   const pushBinding = (entry: any) => {
     const gameId = Number(entry?.gameId || 0);
-    const roles = Array.isArray(entry?.roles)
-      ? entry.roles
-      : entry?.defaultRole
-        ? [entry.defaultRole]
-        : [];
+    const roles = normalizeBindingRoles(entry);
     const role = roles[0];
     const roleInfo = role
       ? {

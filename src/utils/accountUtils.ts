@@ -10,6 +10,10 @@ import {
 import { extractAccountToken } from "../commands/account/login";
 import { decryptAccount, encryptAccount } from "./cryptoUtils";
 import { Logger } from "./Logger";
+import {
+  findPrimaryBindingRole,
+  normalizeBindingEntries as normalizeBindingEntriesPure,
+} from "./bindingRoleUtils";
 
 const logger = new Logger("AccountUtils");
 
@@ -27,37 +31,14 @@ function flattenBindingList(bindings: any[] | null | undefined): any[] {
 export function normalizeBindingEntries(
   bindings: any[] | null | undefined,
 ): any[] {
-  if (!Array.isArray(bindings)) return [];
-
-  const out: any[] = [];
-  for (const item of bindings) {
-    if (Array.isArray(item?.bindingList)) {
-      out.push(...item.bindingList);
-      continue;
-    }
-    out.push(item);
-  }
-  return out;
+  return normalizeBindingEntriesPure(bindings);
 }
 
 export function getPrimaryBindingRole(
   bindings: any[] | null | undefined,
+  gameId?: number,
 ): { binding: any; role: any } | null {
-  const normalized = normalizeBindingEntries(bindings);
-
-  for (const binding of normalized) {
-    const roles = Array.isArray(binding?.roles)
-      ? binding.roles
-      : binding?.defaultRole
-        ? [binding.defaultRole]
-        : [];
-    const role = roles[0];
-    if (role) {
-      return { binding, role };
-    }
-  }
-
-  return null;
+  return findPrimaryBindingRole(bindings, gameId);
 }
 
 /**
@@ -136,12 +117,7 @@ export async function ensureAccountBinding(
     !forceRefresh &&
     !account.invalid &&
     isRecent &&
-    (getPrimaryBindingRole(account.roles) ||
-      normalizeBindingEntries(account.roles).some(
-        (binding: any) =>
-          Number(binding?.gameId) === 1 &&
-          (binding?.uid || binding?.nickName),
-      ))
+    getPrimaryBindingRole(account.roles)
   ) {
     return false;
   }
