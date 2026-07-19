@@ -680,6 +680,7 @@ command.autocomplete = async (client, interaction, db) => {
                   c,
                   s,
                   options,
+                  acc.info?.id,
                 ),
               interaction.locale,
             );

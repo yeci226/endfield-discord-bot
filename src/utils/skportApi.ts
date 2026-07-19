@@ -946,6 +946,7 @@ export async function getGamePlayerBinding(
   cred?: string,
   salt?: string,
   options: any = {},
+  skportUserId?: string,
 ): Promise<GameBinding[] | null> {
   const res = await getGamePlayerBindingResponse(
     cookie,
@@ -953,6 +954,7 @@ export async function getGamePlayerBinding(
     cred,
     salt,
     options,
+    skportUserId,
   );
   if (res && res.code === 0 && res.data?.list) {
     return res.data.list;
@@ -966,6 +968,7 @@ export async function getGamePlayerBindingResponse(
   cred?: string,
   salt?: string,
   options: any = {},
+  skportUserId?: string,
 ): Promise<{
   code: number;
   status?: number;
@@ -982,6 +985,9 @@ export async function getGamePlayerBindingResponse(
     cred,
     salt,
     ...options,
+    params: skportUserId
+      ? { ...options.params, uid: skportUserId }
+      : options.params,
   });
 }
 

@@ -72,9 +72,10 @@ async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
   const roles: { uid: string; rawUid: string; bindingUid: string; nickname: string }[] = [];
   if (accounts) {
     for (const acc of accounts) {
+      await ensureAccountBinding(acc, userId, db, "tw");
       if (acc.roles) {
         for (const b of acc.roles) {
-          if (b.gameId !== 3) continue;
+          if (Number(b.gameId) !== 3) continue;
           const bindingUid = String(b.uid || "");
           const add = (rUid: string, nick: string) => {
             roles.push({
@@ -90,19 +91,20 @@ async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
               nickname: nick,
             });
           };
-          if (!b.roles || b.roles.length === 0) {
-            add(b.uid, b.nickName || b.nickname || "Unknown");
-          } else {
-            for (const r of b.roles) {
-              add(
-                r.roleId || r.uid || b.uid,
-                r.nickname ||
-                  r.nickName ||
-                  b.nickName ||
-                  b.nickname ||
-                  "Unknown",
-              );
-            }
+          const gameRoles = Array.isArray(b.roles)
+            ? b.roles
+            : b.defaultRole
+              ? [b.defaultRole]
+              : [];
+          for (const r of gameRoles) {
+            add(
+              r.roleId || r.uid || b.uid,
+              r.nickname ||
+                r.nickName ||
+                b.nickName ||
+                b.nickname ||
+                "Unknown",
+            );
           }
         }
       }
@@ -476,7 +478,10 @@ const command: Command = {
         // Find the account that owns this specific game UID
         const linkedAccount = userAccounts.find((acc: any) => {
           if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-          return acc.roles?.some((b: any) => b.gameId === 3 && String(b.uid) === efGameUid);
+          return acc.roles?.some(
+            (b: any) =>
+              Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+          );
         }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
         if (!linkedAccount) return false;
 
@@ -1554,7 +1559,10 @@ const command: Command = {
           // Find the account that owns this specific game UID
           const linkedAccount = userAccounts.find((acc: any) => {
             if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-            return acc.roles?.some((b: any) => b.gameId === 3 && String(b.uid) === efGameUid);
+            return acc.roles?.some(
+              (b: any) =>
+                Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+            );
           }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
           if (!linkedAccount || !efGameUid) {
             await replyError(tr("gacha_log_load_NoLinkedAccount"));
@@ -1858,7 +1866,10 @@ const command: Command = {
             // Find the account that owns this specific game UID
             const linkedAccount = userAccounts.find((acc: any) => {
               if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-              return acc.roles?.some((b: any) => b.gameId === 3 && String(b.uid) === efGameUid2);
+              return acc.roles?.some(
+                (b: any) =>
+                  Number(b.gameId) === 3 && String(b.uid) === efGameUid2,
+              );
             }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
             if (!linkedAccount) {
               await interaction.editReply({

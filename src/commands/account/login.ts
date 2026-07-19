@@ -42,56 +42,37 @@ function flattenBindingList(bindings: any[] | null | undefined): any[] {
   return out;
 }
 
-async function fetchFlattenedBindings(
-  cookie: string,
-  locale: string,
-  cred: string,
-  salt?: string,
-): Promise<any[]> {
-  // Some sessions occasionally fail when Cookie is attached; retry without cookie.
-  const first = await getGamePlayerBinding(cookie, locale, cred, salt);
-  let flattened = flattenBindingList(first);
-  if (flattened.length > 0) return flattened;
-
-  const second = await getGamePlayerBinding(undefined, locale, cred, salt);
-  flattened = flattenBindingList(second);
-  return flattened;
-}
-
 async function fetchBindingSnapshot(
-  cookie: string,
+  _cookie: string,
   locale: string,
   cred: string,
   salt?: string,
+  userId?: string,
 ): Promise<{
   roles: any[];
   raw: any[];
-  source: "cookie" | "no-cookie" | "none";
+  source: "no-cookie" | "none";
 }> {
-  // Skport binding API — no Cookie header (WAF blocks requests that include it)
-  const first = await getGamePlayerBinding(cookie, locale, cred, salt);
-  let flattened = flattenBindingList(first);
+  const raw = await getGamePlayerBinding(
+    undefined,
+    locale,
+    cred,
+    salt,
+    {},
+    userId,
+  );
+  const flattened = flattenBindingList(raw);
   if (flattened.length > 0) {
     return {
       roles: flattened,
-      raw: Array.isArray(first) ? first : [],
-      source: "cookie",
-    };
-  }
-
-  const second = await getGamePlayerBinding(undefined, locale, cred, salt);
-  flattened = flattenBindingList(second);
-  if (flattened.length > 0) {
-    return {
-      roles: flattened,
-      raw: Array.isArray(second) ? second : [],
+      raw: Array.isArray(raw) ? raw : [],
       source: "no-cookie",
     };
   }
 
   return {
     roles: [],
-    raw: Array.isArray(first) ? first : Array.isArray(second) ? second : [],
+    raw: Array.isArray(raw) ? raw : [],
     source: "none",
   };
 }
@@ -737,6 +718,7 @@ const command: Command = {
             interaction.locale,
             cred,
             result.token,
+            hgId,
           );
           const roles = snapshot.roles;
           const previousRoles = Array.isArray(exists?.roles)
@@ -900,6 +882,7 @@ async function handleLoginSuccess(
       interaction.locale,
       cred,
       (result as any).token,
+      hgId,
     );
     const roles = snapshot.roles;
     const previousRoles = Array.isArray(exists?.roles) ? exists.roles : [];

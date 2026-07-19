@@ -432,7 +432,14 @@ export class AutoDailyService {
               userId,
               account,
               (c: string, s: string, options: any) =>
-                getGamePlayerBinding(account.cookie, tr.lang, c, s, options),
+                getGamePlayerBinding(
+                  account.cookie,
+                  tr.lang,
+                  c,
+                  s,
+                  options,
+                  account.info?.id,
+                ),
               tr.lang,
             );
             const liveRoles = this.normalizeAttendanceBindings(

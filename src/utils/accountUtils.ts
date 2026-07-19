@@ -136,8 +136,12 @@ export async function ensureAccountBinding(
     !forceRefresh &&
     !account.invalid &&
     isRecent &&
-    Array.isArray(account.roles) &&
-    account.roles.length > 0
+    (getPrimaryBindingRole(account.roles) ||
+      normalizeBindingEntries(account.roles).some(
+        (binding: any) =>
+          Number(binding?.gameId) === 1 &&
+          (binding?.uid || binding?.nickName),
+      ))
   ) {
     return false;
   }
@@ -249,7 +253,14 @@ export async function ensureAccountBinding(
   let latestBindings: any[] = Array.isArray(account.roles) ? account.roles : [];
   try {
     const fetchBindings = async () =>
-      getGamePlayerBindingResponse(undefined, lang, newCred, newSalt);
+      getGamePlayerBindingResponse(
+        undefined,
+        lang,
+        newCred,
+        newSalt,
+        {},
+        account.info?.id,
+      );
 
     let bindingRes = await fetchBindings();
     if (bindingRes && bindingRes.code === 0) {

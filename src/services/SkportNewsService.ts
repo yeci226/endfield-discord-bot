@@ -214,7 +214,7 @@ export class SkportNewsService {
       }),
     );
 
-    const eligibleSubs = subData.filter((s) => !s.skip);
+    const eligibleSubs = subData.filter((s) => !s.skip && s.guildId !== "DM");
 
     // Broadcast ONCE to all clusters
     const broadcastResults = await this.client.cluster.broadcastEval(

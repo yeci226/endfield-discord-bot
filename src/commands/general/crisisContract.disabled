@@ -1,0 +1,174 @@
+import {
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+  ModalSubmitInteraction,
+  MessageFlags,
+  AttachmentBuilder,
+} from "discord.js";
+import { Command } from "../../interfaces/Command";
+import { ExtendedClient } from "../../structures/Client";
+import { CustomDatabase } from "../../utils/Database";
+import {
+  ensureAccountBinding,
+  getAccounts,
+  normalizeBindingEntries,
+  withAutoRefresh,
+} from "../../utils/accountUtils";
+import { getCardDetail, makeRequest } from "../../utils/skportApi";
+import { buildCrisisContractCard } from "../../utils/crisisContractCanvasUtils";
+
+const DEFAULT_CONTRACT_ID = "6e5575e7972af7d4ae63a26b98b87e9f";
+
+async function getCrisisContract(
+  roleId: string,
+  serverId: string,
+  userId: string,
+  contractId: string,
+  locale: string,
+  cred: string,
+  salt: string,
+  options: any = {},
+): Promise<any | null> {
+  return makeRequest(
+    "GET",
+    "https://zonai.skport.com/api/v1/game/endfield/card/crisis-contract",
+    {
+      params: { roleId, serverId, userId, contractId },
+      cred,
+      salt,
+      locale,
+      ...options,
+    },
+  );
+}
+
+function getEndfieldRole(bindings: any[]): { binding: any; role: any } | null {
+  for (const binding of normalizeBindingEntries(bindings)) {
+    if (Number(binding?.gameId) !== 3) continue;
+
+    const roles = Array.isArray(binding?.roles)
+      ? binding.roles
+      : binding?.defaultRole
+        ? [binding.defaultRole]
+        : [];
+    if (roles[0]) return { binding, role: roles[0] };
+  }
+
+  return null;
+}
+
+const command: Command = {
+  data: new SlashCommandBuilder()
+    .setName("crisis-contract")
+    .setDescription("Fetch Endfield Crisis Contract data")
+    .addStringOption((option) =>
+      option
+        .setName("contract_id")
+        .setDescription("Contract ID to fetch")
+        .setRequired(false),
+    ) as SlashCommandBuilder,
+
+  execute: async (
+    client: ExtendedClient,
+    interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
+    tr: any,
+    db: CustomDatabase,
+  ) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const accounts = await getAccounts(db, interaction.user.id);
+    if (!accounts || accounts.length === 0) {
+      await interaction.editReply({ content: tr("NoSetAccount") });
+      return;
+    }
+
+    const account = accounts[0];
+    await ensureAccountBinding(
+      account,
+      interaction.user.id,
+      db,
+      interaction.locale,
+    );
+
+    const primary = getEndfieldRole(account.roles);
+    if (!primary) {
+      await interaction.editReply({ content: tr("BindingNotFound") });
+      return;
+    }
+
+    const { binding, role } = primary;
+    const roleId = String(role.roleId || "");
+    const serverId = String(role.serverId || "");
+    const userId = String(account.info?.id || "");
+    const contractId =
+      interaction.options.getString("contract_id") || DEFAULT_CONTRACT_ID;
+
+    const { res, detail } = await withAutoRefresh(
+      client,
+      interaction.user.id,
+      account,
+      async (cred: string, salt: string, options: any) => {
+        const res = await getCrisisContract(
+          roleId,
+          serverId,
+          userId,
+          contractId,
+          interaction.locale,
+          cred,
+          salt,
+          options,
+        );
+        const detail = await getCardDetail(
+          roleId,
+          serverId,
+          userId,
+          interaction.locale,
+          cred,
+          salt,
+          options,
+        );
+        return { res, detail };
+      },
+      interaction.locale,
+    );
+
+    if (!res || res.code !== 0) {
+      await interaction.editReply({
+        content: `Failed to fetch crisis contract data. Code: \`${res?.code ?? "unknown"}\`, message: \`${res?.message ?? "unknown"}\``,
+      });
+      return;
+    }
+
+    const json = JSON.stringify(res, null, 2);
+    const crisisContract = res.data?.crisisContract;
+    const status = crisisContract?.status || {};
+    const image = await buildCrisisContractCard({
+      roleName: role.nickname || roleId,
+      roleLevel: Number(role.level || 0),
+      crisisContract,
+      detail: detail?.data?.detail,
+    });
+    const imageFile = new AttachmentBuilder(image, {
+      name: `crisis-contract-${roleId}.png`,
+    });
+    const jsonFile = new AttachmentBuilder(Buffer.from(json, "utf8"), {
+      name: `crisis-contract-${roleId}.json`,
+    });
+
+    await interaction.editReply({
+      content: [
+        `**${status.name || "Crisis Contract"}**`,
+        `Role: \`${role.nickname || roleId}\``,
+        `Contract: \`${contractId}\``,
+        `Highest: \`${status.highest ?? 0}\` | Challenges: \`${status.challengeCount ?? 0}\``,
+        `Missions: weekly \`${status.weeklyMission?.count ?? 0}/${status.weeklyMission?.total ?? 0}\`, indicator \`${status.indicatorMission?.count ?? 0}/${status.indicatorMission?.total ?? 0}\`, stage \`${status.stageMission?.count ?? 0}/${status.stageMission?.total ?? 0}\``,
+        `Indicators: \`${crisisContract?.indicators?.length ?? 0}\` | Records: \`${crisisContract?.history?.records?.length ?? 0}\``,
+      ].join("\n"),
+      files: [imageFile, jsonFile],
+    });
+  },
+};
+
+export default command;

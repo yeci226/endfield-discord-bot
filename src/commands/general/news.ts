@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   MessageFlags,
   PermissionFlagsBits,
+  InteractionContextType,
   ChannelType,
   ContainerBuilder,
   TextDisplayBuilder,
@@ -20,6 +21,7 @@ const command: Command = {
       "zh-TW": "新聞",
     })
     .setDescription("Manage news subscriptions")
+    .setContexts(InteractionContextType.Guild)
     .setDescriptionLocalizations({
       "zh-TW": "管理新聞訂閱",
     })
