@@ -11,7 +11,6 @@ import {
   getPrimaryBindingRole,
   withAutoRefresh,
 } from "../utils/accountUtils";
-import { resolveBindingUid } from "../utils/bindingRoleUtils";
 import { drawDashboard } from "../utils/canvasUtils";
 import { createTranslator } from "../utils/i18n";
 import fs from "fs";
@@ -169,11 +168,11 @@ export class WebManager {
       if (!account) return res.status(404).json({ error: "Account not found" });
 
       await ensureAccountBinding(account, userId, this.client.db, "tw");
-      const primaryBinding = getPrimaryBindingRole(account.roles, 3);
+      const primaryBinding = getPrimaryBindingRole(account.roles);
       const role = primaryBinding?.role;
       if (!role) return res.status(404).json({ error: "Role not found" });
 
-      const uid = resolveBindingUid(primaryBinding, account.info?.id);
+      const uid = account.info?.id || primaryBinding?.binding?.uid;
       const cardRes = await withAutoRefresh(
         this.client,
         userId,

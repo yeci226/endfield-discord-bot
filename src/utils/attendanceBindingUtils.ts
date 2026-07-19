@@ -1,5 +1,3 @@
-import { normalizeBindingRoles } from "./bindingRoleUtils";
-
 export type DailyGameScope = "endfield" | "arknights" | "both";
 
 export interface AttendanceBinding {
@@ -19,6 +17,33 @@ function isGameInScope(gameId: number, scope: DailyGameScope): boolean {
   return gameId === 3;
 }
 
+function getBindingRoles(entry: any, gameId: number): any[] {
+  const nestedRoles = Array.isArray(entry?.roles)
+    ? entry.roles.filter(Boolean)
+    : [];
+
+  if (nestedRoles.length > 0) return nestedRoles;
+  if (entry?.defaultRole) return [entry.defaultRole];
+
+  if (entry?.uid || entry?.nickName) {
+    return [
+      {
+        roleId: String(entry?.uid || ""),
+        serverId: String(entry?.channelMasterId || ""),
+        nickname: String(
+          entry?.nickName ||
+            entry?.uid ||
+            (gameId === 3 ? "Endfield" : "Arknights"),
+        ),
+        level: 0,
+        serverName: String(entry?.channelName || entry?.gameName || "-"),
+      },
+    ];
+  }
+
+  return [];
+}
+
 export function normalizeAttendanceBindings(
   raw: any,
   scope: DailyGameScope,
@@ -30,7 +55,7 @@ export function normalizeAttendanceBindings(
     if (!isSupportedAttendanceGame(gameId)) return;
     if (!isGameInScope(gameId, scope)) return;
 
-    const roles = normalizeBindingRoles(entry);
+    const roles = getBindingRoles(entry, gameId);
     if (roles.length > 0) normalized.push({ gameId, roles });
   };
 

@@ -30,7 +30,6 @@ import { ExtendedClient } from "../../structures/Client";
 import { VerificationClient } from "../../web/VerificationClient";
 import { getAccounts, saveAccounts } from "../../utils/accountUtils";
 import { decryptAccount } from "../../utils/cryptoUtils";
-import { normalizeBindingRoles } from "../../utils/bindingRoleUtils";
 
 function flattenBindingList(bindings: any[] | null | undefined): any[] {
   if (!Array.isArray(bindings)) return [];
@@ -154,7 +153,7 @@ function formatGameRoleDetails(
     if (!binding) continue;
 
     const gameName = tr(key);
-    const subRoles = normalizeBindingRoles(binding);
+    const subRoles: any[] = Array.isArray(binding.roles) ? binding.roles : [];
 
     if (subRoles.length === 0) {
       const nick = binding.nickName || binding.uid || "?";

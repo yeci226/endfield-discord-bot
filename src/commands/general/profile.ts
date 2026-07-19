@@ -25,10 +25,6 @@ import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
 import { getPrimaryBindingRole } from "../../utils/accountUtils";
 import {
-  resolveBindingUid,
-  selectAccountByIndex,
-} from "../../utils/bindingRoleUtils";
-import {
   ProfileTemplate,
   ProfileElement,
 } from "../../interfaces/ProfileTemplate";
@@ -145,13 +141,13 @@ const command: Command = {
       const parts = interaction.customId.split(":");
       if (parts[1] !== "char_select") return;
 
-      const [, , roleId, serverId, uid, ownerId, selectedAccountIndex] = parts;
+      const [, , roleId, serverId, uid, ownerId] = parts;
       const charId = interaction.values[0];
 
       // Use ownerId if present (for multi-user profile viewing)
       const targetUserId = ownerId || interaction.user.id;
       const accounts = await getAccounts(db, targetUserId);
-      const account = selectAccountByIndex(accounts, selectedAccountIndex);
+      const account = accounts?.[0];
 
       if (!account) {
         await interaction.followUp({
@@ -174,7 +170,7 @@ const command: Command = {
               getCardDetail(
                 roleId,
                 serverId,
-                uid || account.info?.id,
+                account.info?.id || uid,
                 tr.lang,
                 c,
                 s,
@@ -268,7 +264,7 @@ const command: Command = {
             getCardDetail(
               roleId,
               serverId,
-              uid || account.info?.id,
+              account.info?.id || uid,
               tr.lang,
               c,
               s,
@@ -534,9 +530,9 @@ const command: Command = {
       return;
     }
 
-    const primaryBinding = getPrimaryBindingRole(account.roles, 3);
+    const primaryBinding = getPrimaryBindingRole(account.roles);
     const role = primaryBinding?.role;
-    const uid = resolveBindingUid(primaryBinding, account.info?.id);
+    const uid = primaryBinding?.binding?.uid || account.info?.id;
 
     if (!role) {
       if (!(interaction.deferred && (interaction as any).ephemeral)) {
@@ -565,7 +561,7 @@ const command: Command = {
           getCardDetail(
             role.roleId,
             role.serverId,
-            uid,
+            account.info?.id || uid,
             tr.lang,
             c,
             s,
@@ -624,7 +620,7 @@ const command: Command = {
     }
     const attachment = new AttachmentBuilder(buffer, { name: "card.webp" });
 
-    const customId = `profile:char_select:${role.roleId}:${role.serverId}:${uid}:${targetUserId}:${accountIndex}`;
+    const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${targetUserId}`;
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId(customId)
       .setPlaceholder(tr("profile_SelectCharacter"))

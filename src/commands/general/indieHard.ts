@@ -69,7 +69,7 @@ async function fetchAndCacheGroups(
   }
 
   const account = accounts[0];
-  const primary = getPrimaryBindingRole(account.roles, 3);
+  const primary = getPrimaryBindingRole(account.roles);
   if (!primary) {
     return { groups: null, error: tr("indieHard_RoleNotFound") };
   }
@@ -196,7 +196,7 @@ const command: Command = {
       return;
     }
     const account = accounts[0];
-    const primary = getPrimaryBindingRole(account.roles, 3);
+    const primary = getPrimaryBindingRole(account.roles);
     if (!primary) {
       await interaction.respond([]);
       return;
