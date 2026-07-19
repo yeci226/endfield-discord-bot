@@ -24,9 +24,10 @@ import { formatSkGameRole, getGamePlayerBinding } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { processRoleAttendance } from "../../utils/attendanceUtils";
 import { buildDailyAttendanceCard } from "../../utils/dailyCanvasUtils";
-
-type DailyGameScope = "endfield" | "arknights" | "both";
-const DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
+import {
+  DailyGameScope,
+  normalizeAttendanceBindings,
+} from "../../utils/attendanceBindingUtils";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -569,57 +570,6 @@ function normalizeDailyHour(value: unknown, fallback: number): number {
   return one === null ? fallback : one;
 }
 
-function normalizeAttendanceBindings(
-  raw: any,
-  scope: DailyGameScope,
-): Array<{ gameId: number; roles: any[] }> {
-  const normalized: Array<{ gameId: number; roles: any[] }> = [];
-
-  const pushBinding = (entry: any) => {
-    const gameId = Number(entry?.gameId || 0);
-    if (!DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
-    if (!isGameInScope(gameId, scope)) return;
-
-    let roles = Array.isArray(entry?.roles)
-      ? entry.roles
-      : entry?.defaultRole
-        ? [entry.defaultRole]
-        : [];
-
-    if (roles.length === 0 && gameId === 1 && (entry?.uid || entry?.nickName)) {
-      roles = [
-        {
-          roleId: String(entry?.uid || ""),
-          serverId: String(entry?.channelMasterId || ""),
-          nickname: String(entry?.nickName || entry?.uid || "Arknights"),
-          level: 0,
-          serverName: String(entry?.channelName || entry?.gameName || "-"),
-        },
-      ];
-    }
-
-    if (roles.length > 0) {
-      normalized.push({ gameId, roles });
-    }
-  };
-
-  if (!Array.isArray(raw)) {
-    return normalized;
-  }
-
-  for (const item of raw) {
-    if (Array.isArray(item?.bindingList)) {
-      for (const binding of item.bindingList) {
-        pushBinding(binding);
-      }
-      continue;
-    }
-    pushBinding(item);
-  }
-
-  return normalized;
-}
-
 function normalizeGameScope(
   value: unknown,
   fallback: DailyGameScope,
@@ -628,12 +578,6 @@ function normalizeGameScope(
     return value;
   }
   return fallback;
-}
-
-function isGameInScope(gameId: number, scope: DailyGameScope): boolean {
-  if (scope === "both") return gameId === 1 || gameId === 3;
-  if (scope === "arknights") return gameId === 1;
-  return gameId === 3;
 }
 
 function toGameScopeLabel(tr: any, scope: DailyGameScope): string {

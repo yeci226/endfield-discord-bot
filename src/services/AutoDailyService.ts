@@ -23,9 +23,11 @@ import {
   DailyCardPayload,
 } from "../utils/dailyCanvasUtils";
 import { Readable } from "stream";
-
-type DailyGameScope = "endfield" | "arknights" | "both";
-const AUTO_DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
+import {
+  DailyGameScope,
+  isSupportedAttendanceGame,
+  normalizeAttendanceBindings,
+} from "../utils/attendanceBindingUtils";
 
 interface AutoDailyConfig {
   time: number; // 0-23
@@ -85,59 +87,6 @@ export class AutoDailyService {
     return parsed.length > 0 ? parsed[0] : fallback;
   }
 
-  private normalizeAttendanceBindings(
-    raw: any,
-    scope: DailyGameScope,
-  ): Array<{ gameId: number; roles: any[] }> {
-    const normalized: Array<{ gameId: number; roles: any[] }> = [];
-
-    const pushBinding = (entry: any) => {
-      const gameId = Number(entry?.gameId || 0);
-      if (!AUTO_DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
-      if (!this.isGameInScope(gameId, scope)) return;
-
-      let roles = Array.isArray(entry?.roles)
-        ? entry.roles
-        : entry?.defaultRole
-          ? [entry.defaultRole]
-          : [];
-
-      if (
-        roles.length === 0 &&
-        gameId === 1 &&
-        (entry?.uid || entry?.nickName)
-      ) {
-        roles = [
-          {
-            roleId: String(entry?.uid || ""),
-            serverId: String(entry?.channelMasterId || ""),
-            nickname: String(entry?.nickName || entry?.uid || "Arknights"),
-            level: 0,
-            serverName: String(entry?.channelName || entry?.gameName || "-"),
-          },
-        ];
-      }
-
-      if (roles.length > 0) {
-        normalized.push({ gameId, roles });
-      }
-    };
-
-    if (!Array.isArray(raw)) return normalized;
-
-    for (const item of raw) {
-      if (Array.isArray(item?.bindingList)) {
-        for (const binding of item.bindingList) {
-          pushBinding(binding);
-        }
-        continue;
-      }
-      pushBinding(item);
-    }
-
-    return normalized;
-  }
-
   private normalizeGameScope(
     value: unknown,
     fallback: DailyGameScope,
@@ -148,11 +97,6 @@ export class AutoDailyService {
     return fallback;
   }
 
-  private isGameInScope(gameId: number, scope: DailyGameScope): boolean {
-    if (scope === "both") return gameId === 1 || gameId === 3;
-    if (scope === "arknights") return gameId === 1;
-    return gameId === 3;
-  }
 
   constructor(client: ExtendedClient) {
     this.client = client;
@@ -422,7 +366,7 @@ export class AutoDailyService {
           );
 
           let liveBindings: any = null;
-          let roles = this.normalizeAttendanceBindings(
+          let roles = normalizeAttendanceBindings(
             account.roles,
             gameScope,
           );
@@ -442,7 +386,7 @@ export class AutoDailyService {
                 ),
               tr.lang,
             );
-            const liveRoles = this.normalizeAttendanceBindings(
+            const liveRoles = normalizeAttendanceBindings(
               liveBindings,
               gameScope,
             );
@@ -470,11 +414,11 @@ export class AutoDailyService {
           // Fallback: if the configured scope filtered out all roles (e.g. user has
           // only Endfield chars but scope was saved as "arknights"), retry with "both".
           if ((!roles || roles.length === 0) && gameScope !== "both") {
-            const fallbackRoles = this.normalizeAttendanceBindings(
+            const fallbackRoles = normalizeAttendanceBindings(
               account.roles,
               "both",
             );
-            const fallbackLive = this.normalizeAttendanceBindings(
+            const fallbackLive = normalizeAttendanceBindings(
               liveBindings,
               "both",
             );
@@ -487,7 +431,7 @@ export class AutoDailyService {
             const hasAnySupportedBinding =
               Array.isArray(account.roles) &&
               account.roles.some((r: any) =>
-                AUTO_DAILY_SUPPORTED_GAME_IDS.has(Number(r?.gameId)),
+                isSupportedAttendanceGame(r?.gameId),
               );
             if (!hasAnySupportedBinding) {
               this.logger.info(
