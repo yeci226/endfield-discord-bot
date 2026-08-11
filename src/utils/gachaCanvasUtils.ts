@@ -78,6 +78,36 @@ export type GachaType =
 
 export const ITEMS_PER_PAGE = 28; // 4 rows × 7 cols
 
+const WEAPON_ICON_FALLBACK_BASE_URL =
+  "https://endfield.ooo.run/ake/weapons";
+const OFFICIAL_WEAPON_ICON_URLS: Readonly<Record<string, string | undefined>> =
+  Object.freeze({
+    wpn_lance_0014:
+      "https://bbs.hycdn.cn/image/common/20260808/4634516/6a772fb96febdf01b964b1e2_f1525633.png",
+  });
+
+export function getGachaIconUrlCandidates(
+  isCharacter: boolean,
+  rawId: string,
+): string[] {
+  const cid = String(rawId || "").replace("icon_", "");
+  if (!cid) return [];
+
+  if (isCharacter) {
+    return [
+      `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`,
+    ];
+  }
+
+  return [
+    OFFICIAL_WEAPON_ICON_URLS[cid],
+    `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`,
+    `${WEAPON_ICON_FALLBACK_BASE_URL}/${cid}.webp`,
+  ].filter((url, index, candidates): url is string =>
+    Boolean(url) && candidates.indexOf(url) === index,
+  );
+}
+
 export function getDetailedPageCount(
   items: any[],
   includesPlaceholder: boolean,
@@ -298,12 +328,17 @@ export async function drawGachaStats(
       }
     }
 
-    const iconUrl = isCharacter
-      ? `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`
-      : `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`;
-
     const cacheName = isCharacter ? `icon_${cid}` : cid;
-    return await fetchImage(iconUrl, cacheName);
+    let lastError: unknown;
+    for (const iconUrl of getGachaIconUrlCandidates(isCharacter, rawId)) {
+      try {
+        return await fetchImage(iconUrl, cacheName);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+
+    throw lastError ?? new Error(`Failed to resolve icon for ${cid}`);
   };
 
   const drawBannerContain = (
