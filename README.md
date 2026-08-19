@@ -1,3 +1,5 @@
+
+
 <div align="center">
 
 <!-- Replace with your banner image -->
@@ -122,7 +124,7 @@ yarn start
 
 | Command            | Description                         |
 | ------------------ | ----------------------------------- |
-| `/movedailynotify` | Move the daily notification channel |
+| `/move-daily-notify` | Move the daily notification channel |
 
 ---
 
