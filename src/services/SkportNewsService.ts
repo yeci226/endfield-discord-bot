@@ -29,6 +29,8 @@ interface SkportNewsItem {
   item: {
     id: string;
     title: string;
+    resourceLocale?: string;
+    pubLocale?: string;
     caption: Array<{
       kind: string;
       text?: { text: string };
@@ -43,6 +45,18 @@ interface SkportNewsItem {
     nickname: string;
     avatar: string;
   };
+}
+
+export function selectTraditionalNews<T extends { item?: { resourceLocale?: string } }>(items: T[], force = false): T[] {
+  return items.filter((news) => news?.item?.resourceLocale === "zh_Hant")
+    .slice(0, force ? 1 : 3).reverse();
+}
+
+export function cleanNewsTitle(title: string): string {
+  // Property escapes via RegExp keep the project's ES6 compilation target.
+  const clean = title.replace(new RegExp("[0-9#*]\\uFE0F?\\u20E3|[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\p{Emoji_Modifier}\\uFE0E\\uFE0F\\u200D\\u{E0020}-\\u{E007F}]", "gu"), "")
+    .replace(/\s+/g, " ").trim() || "Endfield News";
+  return clean.replace(/[\\\[\]*_`~]/g, "\\$&");
 }
 
 export class SkportNewsService {
@@ -83,7 +97,7 @@ export class SkportNewsService {
         },
       });
 
-      let newsList: SkportNewsItem[] = [];
+      let newsList: SkportNewsItem[] | undefined;
       if (response && Array.isArray(response.list)) {
         newsList = response.list;
       } else if (
@@ -94,26 +108,15 @@ export class SkportNewsService {
         newsList = response.data.list;
       }
 
-      if (newsList.length === 0) {
+      if (!newsList || (response.code !== undefined && response.code !== 0)) {
         this.logger.error(
           `Failed to fetch Skport news: ${response?.message || "Invalid response structure or no news found"}`,
         );
         return;
       }
 
-      if (force) {
-        // Only process the single absolute latest item if forcing
-        if (newsList.length > 0) {
-          await this.processNews(newsList[0], true);
-        }
-        return;
-      }
-
-      // Process top 3 items, oldest first to maintain order if multiple new
-      const top3 = newsList.slice(0, 3).reverse();
-
-      for (const news of top3) {
-        await this.processNews(news);
+      for (const news of selectTraditionalNews(newsList, force)) {
+        await this.processNews(news, force);
       }
 
       // 新聞處理完成後手動觸發垃圾回收 (GC)
@@ -299,7 +302,7 @@ export class SkportNewsService {
     const link = `https://www.skport.com/article?id=${news.item.id}`;
 
     // Clean title: Remove leading/trailing brackets to avoid Markdown link issues
-    const cleanTitle = title.replace(/^\[|\]$/g, "").trim();
+    const cleanTitle = cleanNewsTitle(title);
 
     // Header: Using standard Markdown Header
     const headerContent = `### [${cleanTitle}](${link})\n-# ${author} • ${date}`;

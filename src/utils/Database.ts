@@ -1,7 +1,47 @@
 import Database from "better-sqlite3";
 
+export interface DatabaseTransaction {
+  get<T = any>(key: string): T | null;
+  set(key: string, value: unknown): void;
+  delete(key: string): void;
+  keys(prefix: string): string[];
+}
+
 export class CustomDatabase {
   private db: Database.Database;
+
+  /** Synchronous, atomic read-modify-write. Never await inside the callback. */
+  public transaction<T>(callback: (store: DatabaseTransaction) => T): T {
+    return this.db
+      .transaction(() => {
+        const result = callback({
+          get: <V = any>(key: string): V | null => {
+            const row = this.db
+              .prepare("SELECT json FROM json WHERE ID = ?")
+              .get(key) as { json: string } | undefined;
+            return row ? JSON.parse(row.json) : null;
+          },
+          set: (key, value) => {
+            this.db
+              .prepare("INSERT OR REPLACE INTO json (ID, json) VALUES (?, ?)")
+              .run(key, JSON.stringify(value));
+          },
+          delete: (key) => {
+            this.db.prepare("DELETE FROM json WHERE ID = ?").run(key);
+          },
+          keys: (prefix) =>
+            (
+              this.db
+                .prepare("SELECT ID FROM json WHERE ID >= ? AND ID < ?")
+                .all(prefix, prefix + "\uffff") as { ID: string }[]
+            ).map((row) => row.ID),
+        });
+        if (result && typeof (result as any).then === "function")
+          throw new Error("Database transaction callbacks must be synchronous");
+        return result;
+      })
+      .immediate();
+  }
 
   constructor(filePath: string) {
     this.db = new Database(filePath);
@@ -120,7 +160,31 @@ export class CustomDatabase {
   }
 
   /**
-   * Atomically claim a slot: sets key=value only if the stored value differs.
+   * Find entries under an exact, literal ID prefix using SQLite's primary-key index.
+   * The prefix is intentionally restricted to characters that are not GLOB metacharacters.
+   * @param prefix A literal ASCII ID prefix
+   * @param jsonPath SQLite json_extract path, e.g. '$.info.nickname'
+   */
+  public findFieldByGlobPrefix(
+    prefix: string,
+    jsonPath: string,
+  ): Array<{ id: string; field: string | null }> {
+    if (!/^[A-Za-z0-9_-]+$/.test(prefix)) {
+      throw new Error("Prefix must be a safe literal prefix.");
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT ID, json_extract(json, ?) as field FROM json WHERE ID GLOB ?`,
+      )
+      .all(jsonPath, `${prefix}*`) as Array<{
+      ID: string;
+      field: string | null;
+    }>;
+    return rows.map((row) => ({ id: row.ID, field: row.field ?? null }));
+  }
+
+  /**
+   * Atomically claim a slot: sets key=value only if the stored value differs,
    * Returns true if this process claimed the slot (performed the write),
    * false if the key already held the same value (another process beat us).
    * Safe across concurrent SQLite processes because better-sqlite3 transactions

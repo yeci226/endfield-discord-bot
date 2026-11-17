@@ -1,3 +1,7 @@
+import {
+  buildCardMessages,
+  deliverCardMessage,
+} from "../utils/cardNotification";
 import { ExtendedClient } from "../structures/Client";
 import { formatSkGameRole, getGamePlayerBinding } from "../utils/skportApi";
 import {
@@ -416,10 +420,7 @@ export class AutoDailyService {
             continue;
           }
 
-          const gameScope = this.normalizeGameScope(
-            config.game_scope,
-            "both",
-          );
+          const gameScope = this.normalizeGameScope(config.game_scope, "both");
 
           let liveBindings: any = null;
           let roles = this.normalizeAttendanceBindings(
@@ -615,13 +616,17 @@ export class AutoDailyService {
 
       if (config.notify && results.length > 0) {
         // Group non-error results by account, preserving order
-        const accountGroups = new Map<number, { res: (typeof results)[0]; idx: number }[]>();
+        const accountGroups = new Map<
+          number,
+          { res: (typeof results)[0]; idx: number }[]
+        >();
         const errorLines: string[] = [];
 
         for (const [idx, res] of results.entries()) {
           const accountIdx = res.accountIdx ?? 0;
           if (!res.isError) {
-            if (!accountGroups.has(accountIdx)) accountGroups.set(accountIdx, []);
+            if (!accountGroups.has(accountIdx))
+              accountGroups.set(accountIdx, []);
             accountGroups.get(accountIdx)!.push({ res, idx });
           } else {
             errorLines.push(`- ${res.roleName}: ${res.status}`);
@@ -679,74 +684,40 @@ export class AutoDailyService {
             const cardBuffer = await this.renderCardWithCache(cardPayload);
             const fileName = `auto-daily-${userId}-${fileCounter++}.png`;
             groupFileNames.push(fileName);
-            groupFiles.push(new AttachmentBuilder(cardBuffer, { name: fileName }));
-          }
-
-          cardGroups.push({ accountIdx, files: groupFiles, fileNames: groupFileNames });
-        }
-
-        const allFiles = cardGroups.flatMap((g) => g.files);
-        const multipleAccounts = cardGroups.length > 1;
-        const useComponentsV2 = allFiles.length > 1 || multipleAccounts;
-
-        let payload: any;
-        if (useComponentsV2) {
-          // All cards in one Components V2 message — account headers + separators
-          const container = new ContainerBuilder();
-
-          if (config.mention !== false) {
-            container.addTextDisplayComponents(
-              new TextDisplayBuilder().setContent(`<@${userId}>`),
+            groupFiles.push(
+              new AttachmentBuilder(cardBuffer, { name: fileName }),
             );
           }
 
-          for (let gi = 0; gi < cardGroups.length; gi++) {
-            const group = cardGroups[gi];
-
-            if (gi > 0) {
-              container.addSeparatorComponents(new SeparatorBuilder());
-            }
-
-            if (multipleAccounts) {
-              const accountName =
-                accounts[group.accountIdx]?.info?.nickname ||
-                `帳號 ${group.accountIdx + 1}`;
-              container.addTextDisplayComponents(
-                new TextDisplayBuilder().setContent(`**${accountName}**`),
-              );
-            }
-
-            for (const name of group.fileNames) {
-              const gallery = new MediaGalleryBuilder().addItems(
-                new MediaGalleryItemBuilder({ media: { url: `attachment://${name}` } }),
-              );
-              container.addMediaGalleryComponents(gallery);
-            }
-          }
-
-          payload = {
-            files: allFiles,
-            components: [container],
-            flags: MessageFlags.IsComponentsV2,
-          };
-        } else {
-          const headerText =
-            config.mention !== false ? `<@${userId}>` : undefined;
-          payload = { content: headerText, files: allFiles };
+          cardGroups.push({
+            accountIdx,
+            files: groupFiles,
+            fileNames: groupFileNames,
+          });
         }
 
-        try {
+        // With no cards, the error message below is the only notification.
+        const messages =
+          cardGroups.length === 0
+            ? []
+            : buildCardMessages(
+                cardGroups.map((group) => ({
+                  files: group.files,
+                  label:
+                    cardGroups.length > 1
+                      ? accounts[group.accountIdx]?.info?.nickname ||
+                        `帳號 ${group.accountIdx + 1}`
+                      : undefined,
+                })),
+                config.mention !== false ? `<@${userId}>` : undefined,
+                true,
+              );
+        for (const payload of messages)
           await this.sendNotification(userId, config, payload);
-        } catch (e) {
-          this.logger.error(
-            "Failed to send card notification: " +
-              (e instanceof Error ? e.message : e),
-          );
-        }
 
         if (errorLines.length > 0) {
           const mentionPrefix =
-            allFiles.length === 0 && config.mention !== false
+            messages.length === 0 && config.mention !== false
               ? `<@${userId}>\n`
               : "";
           try {
@@ -800,107 +771,6 @@ export class AutoDailyService {
     config: AutoDailyConfig,
     payload: any,
   ) {
-    const notifyMethod = config.notify_method;
-    const channelId = config.channelId;
-
-    try {
-      if (notifyMethod === "dm") {
-        let user = this.client.users.cache.get(userId);
-        if (!user) {
-          user = await this.client.users.fetch(userId);
-        }
-        const dmChannel = await user.createDM();
-        await dmChannel.send(payload);
-        return;
-      }
-
-      if (notifyMethod === "channel" && channelId) {
-        const channelPresence = await this.client.cluster.broadcastEval(
-          (c: any, context: any) => c.channels.cache.has(context.channelId),
-          { context: { channelId } },
-        );
-
-        const targetCluster = channelPresence.findIndex(Boolean);
-        if (targetCluster < 0) {
-          this.logger.warn(
-            `No cluster has channel ${channelId} in cache. Skip notification for user ${userId}.`,
-          );
-          return;
-        }
-
-        // Serialize files to base64 to pass through broadcastEval.
-        // AttachmentBuilder bytes are stored on `attachment`, not always on `data`.
-        const serializeAttachment = async (file: AttachmentBuilder) => {
-          const attachment = (file as any).attachment;
-          let buffer = Buffer.alloc(0);
-
-          if (Buffer.isBuffer(attachment)) {
-            buffer = Buffer.from(attachment);
-          } else if (attachment instanceof Uint8Array) {
-            buffer = Buffer.from(attachment);
-          } else if (attachment instanceof Readable) {
-            const chunks: Buffer[] = [];
-            for await (const chunk of attachment) {
-              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-            }
-            buffer = Buffer.concat(chunks);
-          }
-
-          return {
-            buffer: buffer.toString("base64"),
-            name: file.name,
-            description: file.description,
-          };
-        };
-
-        const serializedFiles = payload.files
-          ? await Promise.all(
-              payload.files.map((file: AttachmentBuilder) =>
-                serializeAttachment(file),
-              ),
-            )
-          : [];
-
-        const serializedPayload = {
-          content: payload.content,
-          files: serializedFiles,
-        };
-
-        await this.client.cluster.broadcastEval(
-          async (c: any, context: any) => {
-            const channel = c.channels.cache.get(context.channelId);
-            if (!channel) return false;
-
-            // Reconstruct AttachmentBuilder objects from serialized data
-            const { AttachmentBuilder } = await import("discord.js");
-            const reconstructedFiles = context.payload.files.map(
-              (file: any) =>
-                new AttachmentBuilder(Buffer.from(file.buffer, "base64"), {
-                  name: file.name,
-                  description: file.description,
-                }),
-            );
-
-            await channel.send({
-              content: context.payload.content,
-              files: reconstructedFiles,
-            });
-            return true;
-          },
-          {
-            cluster: targetCluster,
-            context: {
-              channelId,
-              payload: serializedPayload,
-            },
-          },
-        );
-      }
-    } catch (e) {
-      this.logger.error(
-        "Failed to broadcast notification: " +
-          (e instanceof Error ? e.message : e),
-      );
-    }
+    await deliverCardMessage(this.client, userId, config, payload);
   }
 }

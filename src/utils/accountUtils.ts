@@ -1,4 +1,5 @@
 import { CustomDatabase } from "./Database";
+import { writeAccounts } from "./accountData";
 import {
   getGamePlayerBinding,
   getGamePlayerBindingResponse,
@@ -82,19 +83,17 @@ export const getAccounts = async (
   db: CustomDatabase,
   userId: string,
 ): Promise<any[]> => {
-  let accounts = (await db.get(`${userId}.accounts`)) as any[];
-  if (!accounts) {
-    // Migration check for very old formats
-    const oldCookie = await db.get(`${userId}.cookie`);
-    const oldInfo = await db.get(`${userId}.info`);
-    if (oldCookie && oldInfo) {
-      accounts = [{ cookie: oldCookie, info: oldInfo }];
-      // Note: saveAccounts will handle encrypting this if key is present
-      await saveAccounts(db, userId, accounts);
-    } else {
-      accounts = [];
-    }
-  }
+  const accounts = db.transaction((store) => {
+    const key = `${userId}.accounts`;
+    const current = store.get<any[]>(key);
+    if (current) return current;
+    const oldCookie = store.get(`${userId}.cookie`);
+    const oldInfo = store.get(`${userId}.info`);
+    if (!oldCookie || !oldInfo) return [];
+    const migrated = [encryptAccount({ cookie: oldCookie, info: oldInfo })];
+    store.set(key, migrated);
+    return migrated;
+  });
 
   // Decrypt all accounts for runtime use
   return (accounts || []).map((acc: any) => decryptAccount(acc));
@@ -108,8 +107,7 @@ export const saveAccounts = async (
   userId: string,
   accounts: any[],
 ): Promise<void> => {
-  const encrypted = accounts.map((acc: any) => encryptAccount(acc));
-  await db.set(`${userId}.accounts`, encrypted);
+  writeAccounts(db, userId, accounts);
 };
 
 /**
@@ -139,8 +137,7 @@ export async function ensureAccountBinding(
     (getPrimaryBindingRole(account.roles) ||
       normalizeBindingEntries(account.roles).some(
         (binding: any) =>
-          Number(binding?.gameId) === 1 &&
-          (binding?.uid || binding?.nickName),
+          Number(binding?.gameId) === 1 && (binding?.uid || binding?.nickName),
       ))
   ) {
     return false;
@@ -228,16 +225,7 @@ export async function ensureAccountBinding(
       account.invalid = true;
       modified = true;
       // Save back to DB
-      const allAccounts = await getAccounts(db, userId);
-      if (allAccounts) {
-        const idx = allAccounts.findIndex(
-          (acc: any) => acc.info.id === account.info.id,
-        );
-        if (idx !== -1) {
-          allAccounts[idx] = account;
-          await saveAccounts(db, userId, allAccounts);
-        }
-      }
+      await saveAccounts(db, userId, [account]);
     }
     return modified;
   }
@@ -329,16 +317,7 @@ export async function ensureAccountBinding(
     account.lastRefresh = now;
     modified = true;
     // Save back to DB
-    const allAccounts = await getAccounts(db, userId);
-    if (allAccounts) {
-      const idx = allAccounts.findIndex(
-        (acc: any) => acc.info.id === account.info.id,
-      );
-      if (idx !== -1) {
-        allAccounts[idx] = account;
-        await saveAccounts(db, userId, allAccounts);
-      }
-    }
+    await saveAccounts(db, userId, [account]);
   }
 
   return modified;

@@ -202,7 +202,14 @@ const langs: Record<string, any> = {
   login_UnbindFail: "❌ **Unbinding Failed**\nPlease select an account.",
   login_UnbindInvalid: "❌ **Unbinding Failed**\nInvalid account index.",
   login_UnbindSuccess:
-    "✅ **Unbinding Successful**\nAdmin, account **<name>** (<id>) has been unbound.",
+    "✅ **Account unbound and data deleted**\nAccount **<name>** (<id>) has been unbound. Stored login credentials, linked character gacha history and leaderboard data, and reminders were removed from the live service. Removing the last account also removes auto check-in and personal card settings.\nHistorical logs, backups, and previously sent Discord messages are not cleared by this action.",
+  login_UnbindConfirm:
+    "⚠️ **Unbind and delete account data**\nAccount: **<name>** (<id>)\nThis deletes stored login credentials, linked character gacha history and leaderboard data, and reminders from the live service. Removing the last account also removes auto check-in and personal card settings. Other bound accounts will be kept.\n**Deletion cannot be undone. Binding again will not restore deleted history.** Your game account is unaffected. Historical logs, backups, and previously sent Discord messages are not cleared.",
+  login_UnbindConfirmButton: "Unbind and delete data",
+  login_UnbindCancelButton: "Cancel",
+  login_UnbindCancelled: "Cancelled. Your account and data were kept.",
+  login_UnbindExpired:
+    "This confirmation expired or the account changed. Please start unbinding again.",
   login_ListTitle: "**Bound Accounts (<current>/5)**",
   login_ListEmpty: "No accounts bound currently.",
   login_Welcome: "Admin, **<name>**",
@@ -246,6 +253,7 @@ const langs: Record<string, any> = {
   gacha_log_stats_CurrentPity: "Current Pity",
   gacha_log_stats_Total: "Total",
   gacha_log_stats_CharPool: "Character Search",
+  gacha_log_stats_RerunCharPool: "Reconstructed Headhunting",
   gacha_log_stats_LimitedCharPool: "Limited Character Search",
   gacha_log_stats_StandardCharPool: "Standard Character Search",
   gacha_log_stats_BeginnerCharPool: "Beginner Character Search",
@@ -298,6 +306,8 @@ const langs: Record<string, any> = {
   gacha_log_load_UrlPlaceholder: "Paste your URL here",
   gacha_log_load_NoLinkedAccount:
     "❌ No linked account found. Please use `/login` to link your account first.",
+  gacha_log_load_LinkedAccountExpired:
+    "❌ **Your linked account login has expired**\nPlease log in again at https://game.skport.com/endfield/sign-in, then use `/login` to re-link your account and try again.",
   gacha_log_token_expired_message:
     "If you see the this error, your token has expired. Please follow these steps to get a new token:\n\n1. Go to https://game.skport.com/endfield/sign-in and log in again\n2. Refresh the page\n3. Click the bookmark you saved earlier to copy a new token\n4. Use `/gacha log load` and paste the new token",
   gacha_sim_only_initiator:
@@ -436,8 +446,10 @@ const langs: Record<string, any> = {
   // Indie Hard
   indieHard_NoAccount: "❌ Account not bound. Please use `/login` first.",
   indieHard_RoleNotFound: "❌ No bound game role found. Please log in again.",
-  indieHard_APIFailed: "❌ Failed to fetch Indie Hard data. Please try again later.",
-  indieHard_CanvasFailed: "❌ Failed to generate image. Please try again later.",
+  indieHard_APIFailed:
+    "❌ Failed to fetch Indie Hard data. Please try again later.",
+  indieHard_CanvasFailed:
+    "❌ Failed to generate image. Please try again later.",
   indieHard_DataExpired: "❌ Data expired. Please run the command again.",
   indieHard_SelectPeriod: "Select Period",
   indieHard_UnknownError: "❌ An unknown error occurred.",

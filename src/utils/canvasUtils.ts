@@ -9,6 +9,7 @@ import {
 import path from "path";
 import fs from "fs";
 import axios from "axios";
+import { TtlCache } from "./shared";
 import { CardDetail } from "./skportApi";
 import { ProfileTemplate } from "../interfaces/ProfileTemplate";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
@@ -46,7 +47,9 @@ if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-const imageCache = new Map<string, Image>();
+// Decoded images are large (width x height x 4 bytes), so keep a bounded,
+// expiring set in memory; the on-disk remote_cache still avoids re-downloads.
+const imageCache = new TtlCache<string, Image>(60 * 60_000, 200);
 
 export async function drawDashboard(
   detail: CardDetail,
@@ -109,83 +112,7 @@ export async function drawDashboard(
     ctx.restore();
   };
 
-  // 1. Background
-  try {
-    const bgUrl = template.background?.url;
-    if (bgUrl) {
-      const bg = bgUrl.startsWith("http")
-        ? await fetchImage(bgUrl).catch(() => null)
-        : await loadLocalImage(bgUrl).catch(() => null);
-
-      if (bg) {
-        // 1.1 Handle Background Fill Color
-        if (template.background.fillColor) {
-          ctx.fillStyle = template.background.fillColor;
-          ctx.fillRect(0, 0, width, height);
-        }
-
-        // Main Background Drawing
-        const bgRatio = bg.width / bg.height;
-        const canvasRatio = width / height;
-
-        let drawW, drawH, offsetX, offsetY;
-
-        if (template.background.scale !== undefined) {
-          const scale = template.background.scale;
-          drawW = bg.width * scale;
-          drawH = bg.height * scale;
-          const bgX = template.background.x || 0;
-          const bgY = template.background.y || 0;
-          offsetX = bgX - drawW / 2;
-          offsetY = bgY - drawH / 2;
-          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
-        } else {
-          if (bgRatio > canvasRatio) {
-            drawH = height;
-            drawW = height * bgRatio;
-            offsetX = (width - drawW) / 2;
-            offsetY = 0;
-          } else {
-            drawW = width;
-            drawH = width / bgRatio;
-            offsetX = 0;
-            offsetY = (height - drawH) / 2;
-          }
-          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
-        }
-      } else {
-        throw new Error("Failed to load background image");
-      }
-    } else {
-      throw new Error("No background URL provided");
-    }
-  } catch (e) {
-    ctx.fillStyle = template.background?.fillColor || "#1e1e1e";
-    ctx.fillRect(0, 0, width, height);
-  }
-
-  // Overlay
-  if (template.background.overlay !== undefined) {
-    let alpha = 0;
-    if (typeof template.background.overlay === "number") {
-      alpha = template.background.overlay;
-    } else if (typeof template.background.overlay === "string") {
-      if (template.background.overlay.includes("rgba")) {
-        const match = template.background.overlay.match(
-          /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/,
-        );
-        if (match) alpha = parseFloat(match[1]);
-        else alpha = 0.3;
-      } else {
-        alpha = parseFloat(template.background.overlay);
-      }
-    }
-
-    if (!isNaN(alpha) && alpha > 0) {
-      ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
-      ctx.fillRect(0, 0, width, height);
-    }
-  }
+  await drawProfileBackground(ctx, width, height, template);
 
   const hasFabric = !!(
     template.fabricJson &&
@@ -1755,14 +1682,14 @@ function replacePlaceholders(text: string, detail: any): string {
     "{charNum}": b.charNum || 0,
     "{weaponNum}": b.weaponNum || 0,
     "{docNum}": b.docNum || 0,
-    "{staminaCur}": d.curStamina || 0,
-    "{staminaMax}": d.maxStamina || 240,
+    "{staminaCur}": d.curStamina ?? "—",
+    "{staminaMax}": d.maxStamina ?? "—",
     "{authLevel}": b.level || 1,
     "{mainMission}": m.description || "",
-    "{actDaily}": act.dailyActivation || 0,
-    "{actDailyMax}": act.maxDailyActivation || 100,
-    "{bpLevel}": bp.curLevel || 1,
-    "{bpMaxLevel}": bp.maxLevel || 50,
+    "{actDaily}": act.dailyActivation ?? "—",
+    "{actDailyMax}": act.maxDailyActivation ?? "—",
+    "{bpLevel}": bp.curLevel ?? "—",
+    "{bpMaxLevel}": bp.maxLevel ?? "—",
   };
 
   let result = text;
@@ -3276,4 +3203,85 @@ export async function drawCharacterDetail(
   }
 
   return canvas.toBuffer("image/webp", 90);
+}
+
+export async function drawProfileBackground(ctx: SKRSContext2D, width: number, height: number, template: ProfileTemplate): Promise<void> {
+  // 1. Background
+  try {
+    const bgUrl = template.background?.url;
+    if (bgUrl) {
+      const bg = bgUrl.startsWith("http")
+        ? await fetchImage(bgUrl).catch(() => null)
+        : await loadImage(path.join(ASSETS_DIR, bgUrl)).catch(() => null);
+
+      if (bg) {
+        // 1.1 Handle Background Fill Color
+        if (template.background.fillColor) {
+          ctx.fillStyle = template.background.fillColor;
+          ctx.fillRect(0, 0, width, height);
+        }
+
+        // Main Background Drawing
+        const bgRatio = bg.width / bg.height;
+        const canvasRatio = width / height;
+
+        let drawW, drawH, offsetX, offsetY;
+
+        if (template.background.scale !== undefined) {
+          const scale = template.background.scale;
+          drawW = bg.width * scale;
+          drawH = bg.height * scale;
+          const bgX = template.background.x || 0;
+          const bgY = template.background.y || 0;
+          offsetX = bgX - drawW / 2;
+          offsetY = bgY - drawH / 2;
+          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+        } else {
+          if (bgRatio > canvasRatio) {
+            drawH = height;
+            drawW = height * bgRatio;
+            offsetX = (width - drawW) / 2;
+            offsetY = 0;
+          } else {
+            drawW = width;
+            drawH = width / bgRatio;
+            offsetX = 0;
+            offsetY = (height - drawH) / 2;
+          }
+          ctx.drawImage(bg, offsetX, offsetY, drawW, drawH);
+        }
+      } else {
+        throw new Error("Failed to load background image");
+      }
+    } else {
+      throw new Error("No background URL provided");
+    }
+  } catch (e) {
+    ctx.fillStyle = template.background?.fillColor || "#1e1e1e";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // Overlay
+  if (template.background.overlay !== undefined) {
+    let alpha = 0;
+    if (typeof template.background.overlay === "number") {
+      alpha = template.background.overlay;
+    } else if (typeof template.background.overlay === "string") {
+      if (template.background.overlay.includes("rgba")) {
+        const match = template.background.overlay.match(
+          /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\s*\)/,
+        );
+        if (match) alpha = parseFloat(match[1]);
+        else alpha = 0.3;
+      } else {
+        alpha = parseFloat(template.background.overlay);
+      }
+    }
+
+    if (!isNaN(alpha) && alpha > 0) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
 }

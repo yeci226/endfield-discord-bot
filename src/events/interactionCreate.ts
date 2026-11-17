@@ -1,3 +1,4 @@
+import { trackCommand } from "../telemetry.js";
 import {
   Events,
   MessageFlags,
@@ -29,6 +30,13 @@ const localeCache = new TtlCache<string, string>(120000, 10000);
 const event: Event = {
   name: Events.InteractionCreate,
   execute: async (client, interaction) => {
+    if (
+      (interaction.isButton() || interaction.isModalSubmit()) &&
+      interaction.customId?.startsWith("contact-dev:")
+    ) {
+      return;
+    }
+
     const cachedLocale = await localeCache.getOrSetAsync(
       interaction.user.id,
       async () => (await client.db.get(`${interaction.user.id}.locale`)) || "",
@@ -47,7 +55,7 @@ const event: Event = {
           await ensureDeferredReply(interaction, ackPlan.ephemeral);
         }
 
-        await command.execute(client, interaction, tr, client.db);
+        await trackCommand(interaction, async () => command.execute(client, interaction, tr, client.db));
         const sub = (
           interaction as ChatInputCommandInteraction
         ).options.getSubcommand(false);
@@ -130,7 +138,7 @@ const event: Event = {
 
       if (command) {
         try {
-          await command.execute(client, interaction, tr, client.db);
+          await trackCommand(interaction, async () => command.execute(client, interaction, tr, client.db));
         } catch (error: any) {
           if (error.code === 10062 || error.code === 40060) return;
           console.log(error);
@@ -168,13 +176,17 @@ const event: Event = {
 
       if (command) {
         try {
-          await command.execute(client, interaction, tr, client.db);
+          await trackCommand(interaction, async () => command.execute(client, interaction, tr, client.db));
         } catch (error: any) {
           if (error.code === 10062 || error.code === 40060) return;
           console.error("Error handling modal submit:", error);
         }
       }
     } else if (interaction.isChannelSelectMenu()) {
+      if (interaction.customId.startsWith("reminder:")) {
+        await client.commands.get("reminder")?.execute(client, interaction as any, tr, client.db);
+        return;
+      }
       if (interaction.customId === "notification_channel") {
         if (!interaction.guildId || !interaction.guild) return;
 
@@ -353,7 +365,7 @@ const event: Event = {
         const command = client.commands.get(commandName);
         if (command) {
           try {
-            await command.execute(client, interaction as any, tr, client.db);
+            await trackCommand(interaction, async () => command.execute(client, interaction as any, tr, client.db));
           } catch (error: any) {
             if (error.code === 10062 || error.code === 40060) return;
             logger.error(`Error handling button interaction: ${error.message}`);

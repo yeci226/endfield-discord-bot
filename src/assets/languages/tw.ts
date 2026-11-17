@@ -200,7 +200,13 @@ const langs: Record<string, any> = {
   login_UnbindFail: "❌ **解除綁定失敗**\n請選擇一個帳號。",
   login_UnbindInvalid: "❌ **解除綁定失敗**\n無效的帳號索引。",
   login_UnbindSuccess:
-    "✅ **解除綁定成功**\n管理員，已成功解除綁定帳號：**<name>** (<id>)。",
+    "✅ **解除綁定並刪除資料成功**\n已解除帳號 **<name>** (<id>)，並刪除本服務線上儲存的登入憑證、對應角色的抽卡紀錄與排行榜資料、提醒設定。最後一個帳號解除後，也會移除自動簽到與個人名片設定。\n歷史日誌、備份及已發送的 Discord 訊息不會在此操作中清除。",
+  login_UnbindConfirm:
+    "⚠️ **解除綁定並刪除資料**\n帳號：**<name>** (<id>)\n將刪除本服務線上儲存的登入憑證、對應角色的抽卡紀錄與排行榜資料、提醒設定。最後一個帳號解除後，也會移除自動簽到與個人名片設定。其他綁定帳號會保留。\n**刪除後無法復原，重新綁定不會還原已刪除的紀錄。** 此操作不影響遊戲帳號本身；歷史日誌、備份及已發送的 Discord 訊息不會一併清除。",
+  login_UnbindConfirmButton: "解除綁定並刪除資料",
+  login_UnbindCancelButton: "取消",
+  login_UnbindCancelled: "已取消，帳號與資料未刪除。",
+  login_UnbindExpired: "此確認已過期或帳號資料已變更，請重新執行解除綁定。",
   login_ListTitle: "**已綁定帳號 (<current>/5)**",
   login_ListEmpty: "目前沒有綁定任何帳號。",
   login_Welcome: "管理員，**<name>**",
@@ -244,6 +250,7 @@ const langs: Record<string, any> = {
   gacha_log_stats_CurrentPity: "當前水位",
   gacha_log_stats_Total: "總累計",
   gacha_log_stats_CharPool: "角色尋訪",
+  gacha_log_stats_RerunCharPool: "重構尋訪",
   gacha_log_stats_LimitedCharPool: "特選/限定角色尋訪",
   gacha_log_stats_StandardCharPool: "一般/常駐角色尋訪",
   gacha_log_stats_BeginnerCharPool: "新手角色尋訪",
@@ -292,6 +299,8 @@ const langs: Record<string, any> = {
   gacha_log_load_UrlPlaceholder: "貼上網址",
   gacha_log_load_NoLinkedAccount:
     "❌ 找不到綁定帳號，請先使用 `/login` 綁定您的終末地帳號。",
+  gacha_log_load_LinkedAccountExpired:
+    "❌ **綁定帳號的登入已過期**\n請前往 https://game.skport.com/endfield/sign-in 重新登入，再使用 `/login` 重新綁定帳號後再試一次。",
   gacha_log_token_expired_message:
     "如果您看到該錯誤，說明您的令牌已過期。請按照以下步驟獲取新令牌：\n\n1. 前往 https://game.skport.com/endfield/sign-in 重新登入\n2. 重新整理頁面\n3. 點擊您先前儲存的書籤以複製新令牌\n4. 使用 `/gacha log load` 並貼上新令牌",
   gacha_sim_only_initiator: "⚠️ 只有指令發起者可以繼續抽卡。",
@@ -413,8 +422,7 @@ const langs: Record<string, any> = {
   botProfile_Target_Banner: "橫幅",
   botProfile_Target_All: "全部設定",
   botProfile_Error: "操作失敗：<error>",
-  botProfile_ImageTooLarge:
-    "圖片大小超過限制（最大 9 MB，目前 <size> MB）",
+  botProfile_ImageTooLarge: "圖片大小超過限制（最大 9 MB，目前 <size> MB）",
   botProfile_ImageFetchFailed: "無法下載圖片（HTTP <status>）",
 
   // Indie Hard (影拓豐碑)

@@ -1,4 +1,27 @@
-import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
+import {
+  Client,
+  Collection,
+  Events,
+  GatewayIntentBits,
+  Options,
+  Partials,
+} from "discord.js";
+
+// Only guilds/channels/roles caches are read by this bot. Everything else is
+// dropped; the bot's own member/user stays so permission checks still work.
+const isSelf = (x: { id: string; client: Client }) => x.id === x.client.user?.id;
+const makeCache = Options.cacheWithLimits({
+  ...Options.DefaultMakeCacheSettings,
+  MessageManager: 0,
+  ReactionManager: 0,
+  GuildEmojiManager: 0,
+  GuildStickerManager: 0,
+  PresenceManager: 0,
+  VoiceStateManager: 0,
+  ThreadMemberManager: 0,
+  UserManager: { maxSize: 0, keepOverLimit: isSelf },
+  GuildMemberManager: { maxSize: 0, keepOverLimit: isSelf },
+});
 import {
   ClusterClient,
   getInfo,
@@ -34,6 +57,7 @@ export class ExtendedClient extends Client {
       intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages,
       ],
       partials: [
         Partials.Channel,
@@ -41,12 +65,15 @@ export class ExtendedClient extends Client {
         Partials.Message,
         Partials.User,
       ],
+      makeCache,
       shards: isSharded ? getInfo().SHARD_LIST : [0],
       shardCount: isSharded ? getInfo().TOTAL_SHARDS : 1,
     });
 
     if (isSharded) {
       this.cluster = new ClusterClient(this);
+      // Enable the manager's heartbeat and restart-budget reset after login.
+      this.once(Events.ClientReady, () => this.cluster.triggerReady());
       new AutoResharderClusterClient(this.cluster);
     } else {
       // Standalone mode: Provide a mock for sharding properties

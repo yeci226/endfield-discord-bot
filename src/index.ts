@@ -1,3 +1,4 @@
+import { startTelemetry } from "./telemetry.js";
 import { ExtendedClient } from "./structures/Client";
 import { loadCommands } from "./handlers/commandHandler";
 import { loadEvents } from "./handlers/eventHandler";
@@ -16,6 +17,7 @@ dotenv.config();
 
 (async () => {
   const client = new ExtendedClient();
+  startTelemetry(client, client.cluster, 'endfield', 'Endfield', process.env.JLWEBHOOK);
   client.newsService = new SkportNewsService(client);
   client.autoDailyService = new AutoDailyService(client);
   client.monitorService = new MonitorService(client);
@@ -43,86 +45,12 @@ dotenv.config();
       ? new WebhookClient({ url: process.env.ERRWEBHOOK })
       : null;
 
-    // ====================================
-    // 設置統計數據推送到 personalWeb
-    // ====================================
-    const STATS_API = process.env.STATS_API_URL;
-    const STATS_API_TOKEN = process.env.STATS_API_TOKEN;
-
-    let statsInterval: NodeJS.Timeout | null = null;
-    if (STATS_API && optimizations.commandUsageTracker) {
-      statsInterval = setInterval(async () => {
-        try {
-          const stats = optimizations.commandUsageTracker?.getStats();
-          if (stats && Object.keys(stats).length > 0) {
-            // 計算聚合統計
-            const totalCommands = Object.values(
-              stats as Record<string, any>,
-            ).reduce((sum: number, cmd: any) => sum + (cmd.count || 0), 0);
-            const totalErrors = Object.values(
-              stats as Record<string, any>,
-            ).reduce((sum: number, cmd: any) => sum + (cmd.errors || 0), 0);
-
-            const headers: Record<string, string> = {
-              "Content-Type": "application/json",
-            };
-            if (STATS_API_TOKEN) {
-              headers.Authorization = `Bearer ${STATS_API_TOKEN}`;
-            }
-
-            await fetch(STATS_API, {
-              method: "POST",
-              headers,
-              body: JSON.stringify({
-                botId: "endfield",
-                botName: "Endfield",
-                timestamp: Date.now(),
-                stats: {
-                  totalCommands24h: totalCommands,
-                  totalErrors24h: totalErrors,
-                  topCommands: Object.entries(stats as Record<string, any>)
-                    .map(([name, data]: [string, any]) => ({
-                      name,
-                      count: data.count || 0,
-                      avgTimeMs:
-                        data.count > 0
-                          ? Math.round(data.totalExecutionMs / data.count)
-                          : 0,
-                      errors: data.errors || 0,
-                    }))
-                    .sort((a, b) => b.count - a.count)
-                    .slice(0, 10),
-                  byCommand: Object.entries(stats as Record<string, any>).map(
-                    ([name, data]: [string, any]) => ({
-                      name,
-                      count: data.count || 0,
-                      errors: data.errors || 0,
-                      avgTimeMs:
-                        data.count > 0
-                          ? Math.round(data.totalExecutionMs / data.count)
-                          : 0,
-                    }),
-                  ),
-                },
-              }),
-            }).catch((err) => {
-              logger.error(`Failed to push stats: ${err.message}`);
-            });
-          }
-        } catch (error) {
-          logger.error(`Error pushing stats: ${(error as Error).message}`);
-        }
-      }, 60_000);
-    } else if (!STATS_API) {
-      logger.error("STATS_API_URL is not set, stats push is disabled");
-    }
-
     // 啟動服務
     webManager.start();
     verifyClient.start();
     client.newsService.start();
     client.autoDailyService.start();
-    // client.monitorService.start();
+    client.monitorService.start();
     // client.wikiService.start();
 
     // Re-expose logger and webhook for the unhandled handlers below

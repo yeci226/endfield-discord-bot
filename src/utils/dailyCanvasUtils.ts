@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import axios from "axios";
 import moment from "moment-timezone";
+import { TtlCache } from "./shared";
 import { Translator } from "./i18n";
 
 const fontDir = path.join(__dirname, "../assets/fonts");
@@ -54,7 +55,7 @@ export interface DailyCardPayload {
   tr: Translator;
 }
 
-const imageCache = new Map<string, Buffer>();
+const imageCache = new TtlCache<string, Buffer>(60 * 60_000, 300);
 
 async function loadImageBuffer(url: string): Promise<Buffer> {
   const cached = imageCache.get(url);
@@ -274,18 +275,22 @@ export async function buildDailyAttendanceCard(
   const cardH = 260;
   const cardGap = 28;
   const base = moment().tz("Asia/Taipei").startOf("day");
-  const labels = [-1, 0, 1, 2, 3].map((offset) =>
-    base.clone().add(offset, "day").format("M/D"),
-  );
+  const labels = [-1, 0, 1, 2, 3].map((offset) => {
+    const day = base.clone().add(offset, "day");
+    return day.isSame(base, "month") ? day.format("M/D") : "";
+  });
   const items = [
     payload.yesterdayReward || { name: "-", icon: "", done: true },
     payload.todayReward || { name: "-", icon: "", done: false },
     payload.nextRewards[0] || { name: "-", icon: "" },
     payload.nextRewards[1] || { name: "-", icon: "" },
     payload.nextRewards[2] || { name: "-", icon: "" },
-  ];
+  ].map((item: DailyRewardItem, i) =>
+    labels[i] && !item.endOfPeriod ? item : null,
+  );
   const textMax = cardW - 32;
   const unifiedNameFontSize = items.reduce((minSize, item) => {
+    if (!item) return minSize;
     const name = item.name || "-";
     const size = fitText(ctx, name, textMax, 34, textFont, 18);
     return Math.min(minSize, size);
@@ -307,7 +312,7 @@ export async function buildDailyAttendanceCard(
     const isFuture = i >= 2;
     const isPast = i === 0;
     const todayClaimedNow = !!payload.todayClaimedNow;
-    const todayIsClaimed = !!(payload.todayClaimedNow || item.done);
+    const todayIsClaimed = !!(payload.todayClaimedNow || item?.done);
 
     roundedRect(ctx, x, y, cardW, cardH, 18);
     if (isToday) {
@@ -322,7 +327,7 @@ export async function buildDailyAttendanceCard(
         ctx.strokeStyle = "rgba(137, 237, 180, 0.48)";
       }
     } else if (isPast) {
-      if (item.done) {
+      if (item?.done) {
         ctx.fillStyle = "rgba(50, 93, 115, 0.28)";
         ctx.strokeStyle = "rgba(122, 188, 226, 0.42)";
       } else {
@@ -336,6 +341,8 @@ export async function buildDailyAttendanceCard(
     ctx.fill();
     ctx.lineWidth = isToday ? 1.8 : 1;
     ctx.stroke();
+
+    if (!item) continue;
 
     const iconSize = 124;
     const iconX = x + (cardW - iconSize) / 2;
@@ -398,17 +405,15 @@ export async function buildDailyAttendanceCard(
       ctx.font = `20px ${textFont}`;
       ctx.fillStyle = "#8f98a5";
       ctx.fillText(
-        item.endOfPeriod
-          ? payload.tr("daily_canvas_NextPeriod")
-          : i === 2
-            ? payload.tr("daily_canvas_AvailableTomorrow")
-            : payload.tr("daily_canvas_NotYetAvailable"),
+        i === 2
+          ? payload.tr("daily_canvas_AvailableTomorrow")
+          : payload.tr("daily_canvas_NotYetAvailable"),
         x + 16,
         subLabelY,
       );
     }
 
-    if (i < items.length - 1) {
+    if (items[i + 1]) {
       const arrowX = x + cardW + 7;
       const arrowY = timelineY;
       ctx.fillStyle = "rgba(200, 230, 255, 0.64)";

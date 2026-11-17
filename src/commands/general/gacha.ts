@@ -36,6 +36,7 @@ import {
   getGachaStats,
   GachaLogData,
   GachaLeaderboardEntry,
+  deduplicateLeaderboardAliases,
   syncExistingLogsToLeaderboard,
   clearGachaLog,
   migrateGachaLog,
@@ -63,54 +64,65 @@ import {
 import { createTranslator, toI18nLang } from "../../utils/i18n";
 import moment from "moment";
 import { CustomDatabase } from "../../utils/Database";
+import {
+  getGachaPityGroupId,
+  isGachaPoolInCategory,
+  paginateGachaOverviewPools,
+} from "../../utils/gachaPoolUtils";
 
-// Move here for global access
-async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
-  const accounts = await getAccounts(db, userId);
-  // bindingUid = b.uid (account-level uid, used for u8_token_by_uid OAuth exchange)
-  // rawUid     = r.roleId (server-role uid, used for game API calls)
-  const roles: { uid: string; rawUid: string; bindingUid: string; nickname: string }[] = [];
-  if (accounts) {
-    for (const acc of accounts) {
-      await ensureAccountBinding(acc, userId, db, "tw");
-      if (acc.roles) {
-        for (const b of acc.roles) {
-          if (Number(b.gameId) !== 3) continue;
-          const bindingUid = String(b.uid || "");
-          const add = (rUid: string, nick: string) => {
-            roles.push({
-              uid: `EF_${rUid}`,
-              rawUid: rUid,
-              bindingUid,
-              nickname: nick,
-            });
-            roles.push({
-              uid: `EF_CN_${rUid}`,
-              rawUid: rUid,
-              bindingUid,
-              nickname: nick,
-            });
-          };
-          const gameRoles = Array.isArray(b.roles)
-            ? b.roles
-            : b.defaultRole
-              ? [b.defaultRole]
-              : [];
-          for (const r of gameRoles) {
-            add(
-              r.roleId || r.uid || b.uid,
-              r.nickname ||
-                r.nickName ||
-                b.nickName ||
-                b.nickname ||
-                "Unknown",
-            );
-          }
-        }
+type PossibleUserRole = {
+  uid: string;
+  rawUid: string;
+  bindingUid: string;
+  nickname: string;
+};
+
+function mapPossibleUserRoles(
+  accounts: any[] | null | undefined,
+): PossibleUserRole[] {
+  const roles: PossibleUserRole[] = [];
+  for (const acc of accounts ?? []) {
+    if (!acc.roles) continue;
+    for (const b of acc.roles) {
+      if (Number(b.gameId) !== 3) continue;
+      const bindingUid = String(b.uid || "");
+      const add = (rUid: string, nick: string) => {
+        roles.push({
+          uid: `EF_${rUid}`,
+          rawUid: rUid,
+          bindingUid,
+          nickname: nick,
+        });
+        roles.push({
+          uid: `EF_CN_${rUid}`,
+          rawUid: rUid,
+          bindingUid,
+          nickname: nick,
+        });
+      };
+      const gameRoles = Array.isArray(b.roles)
+        ? b.roles
+        : b.defaultRole
+          ? [b.defaultRole]
+          : [];
+      for (const r of gameRoles) {
+        add(
+          r.roleId || r.uid || b.uid,
+          r.nickname || r.nickName || b.nickName || b.nickname || "Unknown",
+        );
       }
     }
   }
   return roles;
+}
+
+// Move here for global access
+async function getAllPossibleUserRoles(userId: string, db: CustomDatabase) {
+  const accounts = await getAccounts(db, userId);
+  for (const acc of accounts ?? []) {
+    await ensureAccountBinding(acc, userId, db, "tw");
+  }
+  return mapPossibleUserRoles(accounts);
 }
 
 function getSimCurrentUpCounterKey(userId: string, poolId: string): string {
@@ -257,9 +269,11 @@ const command: Command = {
                 .setNameLocalizations({
                   "zh-TW": "帳號",
                 })
-                .setDescription("Select account to import into")
+                .setDescription(
+                  "Search by character name or UID, then select a suggestion",
+                )
                 .setDescriptionLocalizations({
-                  "zh-TW": "選擇要匯入的帳號",
+                  "zh-TW": "輸入角色名稱或 UID 搜尋，並從下拉清單選取",
                 })
                 .setAutocomplete(true)
                 .setRequired(false),
@@ -393,6 +407,7 @@ const command: Command = {
         const t = String(rawPoolType || "");
         if (t.includes("Standard"))
           return tr("gacha_log_load_pool_type_standard");
+        if (t.includes("Rerun")) return tr("gacha_log_stats_RerunCharPool");
         if (t.includes("Special"))
           return tr("gacha_log_load_pool_type_limited");
         if (t.includes("Beginner"))
@@ -470,19 +485,20 @@ const command: Command = {
 
         const allRoles = await getAllPossibleUserRoles(interaction.user.id, db);
         const matchedRole = allRoles.find((r) => r.uid === targetUid);
-        const efGameUid =
-          matchedRole?.bindingUid ||
-          matchedRole?.rawUid;
+        const efGameUid = matchedRole?.bindingUid || matchedRole?.rawUid;
         if (!efGameUid) return false;
 
         // Find the account that owns this specific game UID
-        const linkedAccount = userAccounts.find((acc: any) => {
-          if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-          return acc.roles?.some(
-            (b: any) =>
-              Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+        const linkedAccount =
+          userAccounts.find((acc: any) => {
+            if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
+            return acc.roles?.some(
+              (b: any) => Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+            );
+          }) ||
+          userAccounts.find(
+            (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
           );
-        }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
         if (!linkedAccount) return false;
 
         const accountIndex = allRoles.findIndex((r) => r.uid === targetUid) + 1;
@@ -530,7 +546,14 @@ const command: Command = {
         if (!skipAutoLoad) {
           const loaded = await tryAutoLoadGachaLog(targetUid);
           if (loaded) {
-            await showGachaStats(targetUid, pageType, poolId, page, customContent, true);
+            await showGachaStats(
+              targetUid,
+              pageType,
+              poolId,
+              page,
+              customContent,
+              true,
+            );
             return;
           }
         }
@@ -552,7 +575,9 @@ const command: Command = {
         } else {
           const charPool = stats.char.pools.find((p: any) => p.id === poolId);
           if (charPool) {
-            if (charPool.type?.includes("Beginner")) pageType = "beginner_char";
+            if (charPool.type?.includes("Rerun")) pageType = "rerun_char";
+            else if (charPool.type?.includes("Beginner"))
+              pageType = "beginner_char";
             else if (
               charPool.type?.includes("Standard") ||
               charPool.type?.includes("Classic")
@@ -603,12 +628,9 @@ const command: Command = {
 
       // Filter pools based on current category
       const targetStats = pageType === "weapon" ? stats.weapon : stats.char;
-      const filteredPools = targetStats.pools.filter((p: any) => {
-        if (pageType === "weapon") return p.type?.includes("Weapon");
-        if (pageType === "standard_char") return p.type?.includes("Standard");
-        if (pageType === "beginner_char") return p.type?.includes("Beginner");
-        return p.type?.includes("Special"); // Default to Special for limited_char
-      });
+      const filteredPools = targetStats.pools.filter((p: any) =>
+        isGachaPoolInCategory(p, pageType),
+      );
 
       const poolRow =
         new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -656,6 +678,11 @@ const command: Command = {
                 value: "limited_char",
                 default: pageType === "limited_char",
               },
+              {
+                label: tr("gacha_log_stats_RerunCharPool"),
+                value: "rerun_char",
+                default: pageType === "rerun_char",
+              },
 
               {
                 label: tr("gacha_log_stats_WeaponPool"),
@@ -688,19 +715,57 @@ const command: Command = {
         name: "gacha_stats.webp",
       });
 
-      // Build pagination buttons only for detailed mode
+      // Build pagination buttons for overview and detailed modes
       const components: any[] = [poolRow, typeRow];
-      if (poolId && poolId !== "all") {
+      if (!poolId || poolId === "all") {
+        const overview = paginateGachaOverviewPools(
+          targetStats.pools,
+          pageType,
+          page,
+        );
+        if (overview.totalPages > 1) {
+          components.push(
+            new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder()
+                .setCustomId(
+                  `gacha:log_page:${targetUid}:${pageType}:all:${Math.max(0, overview.page - 1)}`,
+                )
+                .setLabel("◀")
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(overview.page === 0),
+              new ButtonBuilder()
+                .setCustomId(
+                  `gacha:log_page_info:${targetUid}:${pageType}:all:${overview.page}`,
+                )
+                .setLabel(`${overview.page + 1} / ${overview.totalPages}`)
+                .setStyle(ButtonStyle.Primary)
+                .setDisabled(true),
+              new ButtonBuilder()
+                .setCustomId(
+                  `gacha:log_page:${targetUid}:${pageType}:all:${Math.min(overview.totalPages - 1, overview.page + 1)}`,
+                )
+                .setLabel("▶")
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(overview.page >= overview.totalPages - 1),
+            ),
+          );
+        }
+      } else {
         const targetStats = pageType === "weapon" ? stats.weapon : stats.char;
         const pool = targetStats.pools.find((p: any) => p.id === poolId);
-        let gId = "SpecialShared";
-        if (pageType === "weapon") gId = pool?.id || poolId;
-        else if (pool?.type?.includes("Beginner")) gId = "Beginner";
-        else if (pool?.type?.includes("Standard")) gId = `Standard_${pool.id}`;
+        const gId = getGachaPityGroupId(
+          pool || {
+            id: poolId,
+            type: pageType === "weapon" ? "WeaponPool" : "",
+          },
+        );
         const gSummary = targetStats.summary;
         const pityData = gSummary[gId];
         const isBeginner = gId === "Beginner";
-        const newestPoolId = targetStats.pools[0]?.id;
+        const newestPoolId =
+          pageType === "rerun_char"
+            ? targetStats.pools.find((p: any) => p.type?.includes("Rerun"))?.id
+            : targetStats.pools[0]?.id;
         const hasPlaceholder = isBeginner
           ? !targetStats.history.some(
               (it: any) => it.poolId === poolId && it.rarity >= 6,
@@ -803,6 +868,9 @@ const command: Command = {
         entries = Object.values(entriesMap);
       }
 
+      entriesMap = await deduplicateLeaderboardAliases(db, entriesMap);
+      entries = Object.values(entriesMap);
+
       if (entries.length === 0) {
         await interaction.editReply({
           content: tr("gacha_log_leaderboard_Empty"),
@@ -834,6 +902,8 @@ const command: Command = {
       // Determine Category derived from poolId
       let currentCategory = "TOTAL";
       if (poolId === "SpecialShared") currentCategory = "Special";
+      else if (poolId === "RerunShared" || poolId.startsWith("rerun_chr_"))
+        currentCategory = "Rerun";
       else if (poolId === "StandardShared") currentCategory = "Standard";
       else if (poolId === "WeaponShared") currentCategory = "Weapon";
       else if (poolId.startsWith("special_"))
@@ -860,6 +930,11 @@ const command: Command = {
           label: tr("gacha_log_leaderboard_category_Special"),
           value: "SpecialShared",
           default: currentCategory === "Special",
+        },
+        {
+          label: tr("gacha_log_stats_RerunCharPool"),
+          value: "RerunShared",
+          default: currentCategory === "Rerun",
         },
         {
           label: tr("gacha_log_leaderboard_category_Standard"),
@@ -1519,6 +1594,11 @@ const command: Command = {
         if (subcommand === "load") {
           let selectedUid = interaction.options.getString("account");
 
+          await interaction.deferReply();
+          await interaction.editReply({
+            content: tr("gacha_log_load_Loading"),
+          });
+
           if (!selectedUid) {
             const allRoles = await getAllPossibleUserRoles(
               interaction.user.id,
@@ -1531,12 +1611,12 @@ const command: Command = {
             }
           }
 
-          await interaction.deferReply();
-          await interaction.editReply({ content: tr("gacha_log_load_Loading") });
-
           const replyError = async (msg: string) => {
             await interaction.deleteReply().catch(() => {});
-            await interaction.followUp({ content: msg, flags: MessageFlags.Ephemeral });
+            await interaction.followUp({
+              content: msg,
+              flags: MessageFlags.Ephemeral,
+            });
           };
 
           // Auto-sync from linked account
@@ -1557,13 +1637,17 @@ const command: Command = {
           // not rawUid (role-level roleId) which is for game API calls.
           const efGameUid = matchedRole?.bindingUid || matchedRole?.rawUid;
           // Find the account that owns this specific game UID
-          const linkedAccount = userAccounts.find((acc: any) => {
-            if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-            return acc.roles?.some(
-              (b: any) =>
-                Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+          const linkedAccount =
+            userAccounts.find((acc: any) => {
+              if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
+              return acc.roles?.some(
+                (b: any) =>
+                  Number(b.gameId) === 3 && String(b.uid) === efGameUid,
+              );
+            }) ||
+            userAccounts.find(
+              (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
             );
-          }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
           if (!linkedAccount || !efGameUid) {
             await replyError(tr("gacha_log_load_NoLinkedAccount"));
             return;
@@ -1589,7 +1673,14 @@ const command: Command = {
                 nickname,
               );
               stop();
-              await showGachaStats(selectedUid, "limited_char", "", 0, "", true);
+              await showGachaStats(
+                selectedUid,
+                "limited_char",
+                "",
+                0,
+                "",
+                true,
+              );
               if (mergeResult.hasDataGap) {
                 await interaction.followUp({
                   content: tr("gacha_log_load_gap_warning"),
@@ -1598,9 +1689,13 @@ const command: Command = {
               }
             } catch (error) {
               stop();
-              const errorMessage = tr("gacha_log_load_Error", {
-                error: error instanceof Error ? error.message : String(error),
-              });
+              const errorMessage =
+                error instanceof GachaApiError && error.apiCode === 40100
+                  ? tr("gacha_log_load_LinkedAccountExpired")
+                  : tr("gacha_log_load_Error", {
+                      error:
+                        error instanceof Error ? error.message : String(error),
+                    });
               await replyError(errorMessage);
             }
           }
@@ -1689,15 +1784,12 @@ const command: Command = {
 
             // If no bound account has data, check for guest logs associated with this user
             if (!targetUid) {
-              const gachaLogs =
-                await db.findByPrefix<GachaLogData>("GACHA_LOG_");
-              const userLogs = gachaLogs
-                .filter((log) => log.id.includes(userId)) // e.g. EF_GUEST_<userId>_...
-                .sort(
-                  (a, b) =>
-                    (b.value.info.export_timestamp || 0) -
-                    (a.value.info.export_timestamp || 0),
-                );
+              const userLogs = db
+                .findFieldByGlobPrefix(
+                  `GACHA_LOG_EF_GUEST_${userId}_`,
+                  "$.info.export_timestamp",
+                )
+                .sort((a, b) => Number(b.field || 0) - Number(a.field || 0));
 
               if (userLogs.length > 0) {
                 targetUid = userLogs[0].id.replace("GACHA_LOG_", "");
@@ -1864,13 +1956,17 @@ const command: Command = {
               return;
             }
             // Find the account that owns this specific game UID
-            const linkedAccount = userAccounts.find((acc: any) => {
-              if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
-              return acc.roles?.some(
-                (b: any) =>
-                  Number(b.gameId) === 3 && String(b.uid) === efGameUid2,
+            const linkedAccount =
+              userAccounts.find((acc: any) => {
+                if (!acc.cookie || !acc.info?.id || acc.invalid) return false;
+                return acc.roles?.some(
+                  (b: any) =>
+                    Number(b.gameId) === 3 && String(b.uid) === efGameUid2,
+                );
+              }) ||
+              userAccounts.find(
+                (acc: any) => acc.cookie && acc.info?.id && !acc.invalid,
               );
-            }) || userAccounts.find((acc: any) => acc.cookie && acc.info?.id && !acc.invalid);
             if (!linkedAccount) {
               await interaction.editReply({
                 content: tr("gacha_log_load_NoLinkedAccount"),
@@ -1898,7 +1994,14 @@ const command: Command = {
                   nickname,
                 );
                 stop();
-                await showGachaStats(selectedUid, "limited_char", "", 0, "", true);
+                await showGachaStats(
+                  selectedUid,
+                  "limited_char",
+                  "",
+                  0,
+                  "",
+                  true,
+                );
                 if (mergeResult.hasDataGap) {
                   await interaction.followUp({
                     content: tr("gacha_log_load_gap_warning"),
@@ -1909,10 +2012,12 @@ const command: Command = {
                 stop();
                 const errorMessage =
                   error instanceof GachaApiError && error.apiCode === 40100
-                    ? tr("gacha_log_token_expired_message")
+                    ? tr("gacha_log_load_LinkedAccountExpired")
                     : tr("gacha_log_load_Error", {
                         error:
-                          error instanceof Error ? error.message : String(error),
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
                       });
                 await interaction.editReply({ content: errorMessage });
               }
@@ -2112,8 +2217,7 @@ const command: Command = {
       const userId = interaction.user.id;
       const bannerOption = interaction.options.getString("banner");
       const countOption = (interaction.options.getInteger("count") || 10) as
-        | 1
-        | 10;
+        1 | 10;
       const recs = orderSimPools(await loadSimPoolRecords(db, userId));
       const poolsList: any[] = recs.map((r) => ({
         id: r.poolId,
@@ -2218,12 +2322,14 @@ const command: Command = {
     ) {
       const targetUser =
         (interaction.options.get("user")?.user as User) || interaction.user;
-      const allRoles = await getAllPossibleUserRoles(targetUser.id, db);
+      // Autocomplete must stay local and fast: binding refreshes may call SKPort.
+      const cachedAccounts = await getAccounts(db, targetUser.id);
+      const allRoles = mapPossibleUserRoles(cachedAccounts);
 
-      // Use lean field extraction — avoid deserializing full GachaLogData which
-      // can be thousands of records per user and causes autocomplete timeouts.
-      const gachaLogNicknames = db.findFieldByPrefix(
-        `GACHA_LOG_`,
+      // Guest IDs include their owner's Discord ID; use a literal indexed prefix
+      // rather than extracting nicknames from every user's full gacha log.
+      const gachaLogNicknames = db.findFieldByGlobPrefix(
+        `GACHA_LOG_EF_GUEST_${targetUser.id}_`,
         "$.info.nickname",
       );
 

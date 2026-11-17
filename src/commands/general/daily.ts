@@ -1,3 +1,4 @@
+import { buildCardMessages } from "../../utils/cardNotification";
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
@@ -119,12 +120,19 @@ const command: Command = {
         .addIntegerOption((op) =>
           op
             .setName("time")
-            .setDescription("Schedule time (1-24 UTC+8)")
+            .setDescription("Schedule time (Auto / 1-24 UTC+8)")
             .setNameLocalizations({ "zh-TW": "簽到時間" })
             .setDescriptionLocalizations({
-              "zh-TW": "簽到時間 1-24 UTC+8",
+              "zh-TW": "自動選擇人少時段，或指定 1-24 UTC+8",
             })
             .addChoices(
+              {
+                name: "Auto (least crowded)",
+                name_localizations: {
+                  "zh-TW": "自動選擇（人少時段）",
+                },
+                value: 0,
+              },
               ...Array.from({ length: 24 }, (_, i) => {
                 const hour = i + 1;
                 return {
@@ -134,7 +142,7 @@ const command: Command = {
               }),
             )
             .setRequired(false)
-            .setMinValue(1)
+            .setMinValue(0)
             .setMaxValue(24),
         )
         .addBooleanOption((op) =>
@@ -223,7 +231,7 @@ const command: Command = {
       return;
     }
 
-    await interaction.deferReply({ flags: (1 << 15) | MessageFlags.Ephemeral });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const userId = interaction.user.id;
     const accounts = await getAccounts(db, userId);
@@ -319,7 +327,7 @@ const command: Command = {
 
           if (!res) continue;
 
-          if (files.length < 10) {
+          {
             const isArknights = Number(binding.gameId || 3) === 1;
             const roleMeta = isArknights
               ? `${role.serverName || "-"}`
@@ -372,35 +380,10 @@ const command: Command = {
       return;
     }
 
-    if (files.length === 10) {
-      outputLines.push("- 已達附件上限 10 張，其餘角色請分批查詢。");
-    }
+    const messages = buildCardMessages([{ files }], `<@${userId}>`, true);
+    await interaction.editReply(messages[0]);
+    for (const payload of messages.slice(1)) await interaction.followUp(payload);
 
-    if (files.length > 1) {
-      // Multiple game cards → Components V2 MediaGallery
-      const container = new ContainerBuilder();
-      if (outputLines.length > 0) {
-        container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(outputLines.join("\n")),
-        );
-      }
-      for (const name of fileNames) {
-        const gallery = new MediaGalleryBuilder().addItems(
-          new MediaGalleryItemBuilder({ media: { url: `attachment://${name}` } }),
-        );
-        container.addMediaGalleryComponents(gallery);
-      }
-      await interaction.editReply({
-        files,
-        components: [container],
-        flags: MessageFlags.IsComponentsV2,
-      });
-    } else {
-      await interaction.editReply({
-        content: outputLines.join("\n") || undefined,
-        files,
-      });
-    }
   },
 };
 
@@ -418,7 +401,10 @@ async function handleSetup(
   const gameScopeInput = interaction.options.getString("game");
 
   // Load existing or default - Using granular keys
-  const userConfig = (await db.get(`autoDaily.${userId}`)) || {
+  const existingUserConfig = await db.get(`autoDaily.${userId}`);
+  const isNewAutoDailyConfig = !existingUserConfig;
+
+  const userConfig = existingUserConfig || {
     time: 13,
     notify: true,
     notify_method: "dm",
@@ -429,13 +415,21 @@ async function handleSetup(
 
   userConfig.time = normalizeDailyHour(userConfig.time, 13);
 
-  if (time !== null) {
-    userConfig.time = time; // 1-24 input
-    if (userConfig.time === 24) userConfig.time = 0;
-  } else {
-    // If user doesn't specify time, auto-assign the least crowded hour.
+  if (time === 0 || (time === null && isNewAutoDailyConfig)) {
+    // Auto mode: assign the currently least crowded hour.
     userConfig.time = await client.autoDailyService.getBalancedHour();
+    userConfig.auto_balance = true;
+  } else if (time !== null) {
+    // Fixed schedule selected by the user.
+    userConfig.time = time;
+
+    if (userConfig.time === 24) {
+      userConfig.time = 0;
+    }
+
+    userConfig.auto_balance = false;
   }
+  // Existing config + omitted time: preserve both time and auto_balance.
 
   if (notify !== null) {
     userConfig.notify = notify;
@@ -512,6 +506,11 @@ async function handleSetup(
   let setupContent =
     `### ${t("daily_SetupSuccess")}\n` +
     `**${t("daily_SetupTime")}**: \`${userConfig.time}:00\` (UTC+8)\n` +
+    (userConfig.auto_balance === true
+      ? interaction.locale === "zh-TW"
+        ? "💡 **自動選擇時段**：此時間由系統依目前各時段的使用人數，自動選擇較少人的時段。\n"
+        : "💡 **Automatic schedule**: This hour was selected automatically based on the currently less crowded time slots.\n"
+      : "") +
     `**${t("daily_SetupGame")}**: \`${toGameScopeLabel(t, userConfig.game_scope)}\`\n` +
     `**${t("daily_SetupNotify")}**: \`${userConfig.notify ? t("True") : t("False")}\`\n` +
     `**${t("daily_SetupMention")}**: \`${userConfig.mention ? t("True") : t("False")}\`\n` +

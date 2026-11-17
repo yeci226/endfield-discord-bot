@@ -2,6 +2,7 @@ import axios from "axios";
 import { CustomDatabase } from "./Database";
 import { mapLocaleToLang, refreshAccountToken } from "./skportApi";
 import moment from "moment";
+import { getGachaPityGroupId } from "./gachaPoolUtils";
 
 export class GachaApiError extends Error {
   apiCode: number;
@@ -13,6 +14,7 @@ export class GachaApiError extends Error {
 }
 
 export interface GachaRecord {
+  kind?: string;
   seqId: string;
   charId?: string;
   charName?: string;
@@ -65,6 +67,102 @@ export interface GachaLogData {
     charPityResetSeqId?: string;
     weaponPityResetSeqId?: string;
   };
+}
+
+function indexGachaLogRecords(
+  data: GachaLogData,
+): Map<string, string> | undefined {
+  const indexed = new Map<string, string>();
+  for (const [kind, records] of [
+    ["char", data.characterList],
+    ["weapon", data.weaponList],
+  ] as const) {
+    if (!Array.isArray(records)) return undefined;
+    for (const record of records) {
+      const seqId = String(record?.seqId ?? "");
+      if (!seqId) return undefined;
+      const key = `${kind}:${seqId}`;
+      if (indexed.has(key)) return undefined;
+      indexed.set(
+        key,
+        JSON.stringify([
+          record.charId ?? "",
+          record.weaponId ?? "",
+          record.rarity ?? "",
+          String(record.gachaTs ?? ""),
+          record.poolId ?? "",
+          Boolean(record.isFree),
+        ]),
+      );
+    }
+  }
+  return indexed;
+}
+
+function isGachaLogSubset(
+  candidate: GachaLogData,
+  superset: GachaLogData,
+): boolean {
+  const candidateRecords = indexGachaLogRecords(candidate);
+  const supersetRecords = indexGachaLogRecords(superset);
+  if (
+    !candidateRecords ||
+    !supersetRecords ||
+    candidateRecords.size === 0 ||
+    candidateRecords.size > supersetRecords.size
+  )
+    return false;
+  for (const [key, value] of candidateRecords) {
+    if (supersetRecords.get(key) !== value) return false;
+  }
+  return true;
+}
+
+/** Filters duplicate EF/EF_CN rows only when one same-role pull history is a subset of the other. */
+export async function deduplicateLeaderboardAliases(
+  db: Pick<CustomDatabase, "get">,
+  entries: Record<string, GachaLeaderboardEntry>,
+): Promise<Record<string, GachaLeaderboardEntry>> {
+  const filtered = { ...entries };
+  for (const cnUid of Object.keys(filtered)) {
+    const match = /^EF_CN_(\d+)$/.exec(cnUid);
+    if (!match) continue;
+    const rawUid = match[1];
+    const globalUid = `EF_${rawUid}`;
+    if (!filtered[globalUid]) continue;
+
+    const [globalData, cnData] = await Promise.all([
+      db.get<GachaLogData>(`GACHA_LOG_${globalUid}`),
+      db.get<GachaLogData>(`GACHA_LOG_${cnUid}`),
+    ]);
+    if (!globalData || !cnData) continue;
+    const normalizeUid = (uid: string | undefined) =>
+      String(uid || "")
+        .replace(/^EF_CN_/, "")
+        .replace(/^EF_/, "");
+    if (
+      normalizeUid(globalData.info?.uid) !== rawUid ||
+      normalizeUid(cnData.info?.uid) !== rawUid ||
+      !globalData.info?.serverId ||
+      String(globalData.info.serverId) !== String(cnData.info?.serverId)
+    )
+      continue;
+
+    const globalIsSubset = isGachaLogSubset(globalData, cnData);
+    const cnIsSubset = isGachaLogSubset(cnData, globalData);
+    if (!globalIsSubset && !cnIsSubset) continue;
+
+    const removeUid =
+      globalIsSubset && cnIsSubset
+        ? filtered[globalUid].lastUpdate >= filtered[cnUid].lastUpdate
+          ? cnUid
+          : globalUid
+        : globalIsSubset
+          ? globalUid
+          : cnUid;
+    delete filtered[removeUid];
+  }
+  return filtered;
 }
 
 interface SimPoolRecordChar {
@@ -375,7 +473,10 @@ export async function getEndfieldU8Token(
     );
   }
   const u8Token = u8Res.data?.data?.token ?? u8Res.data?.data?.u8_token;
-  if (!u8Token) throw new Error(`No u8_token in response (keys: ${Object.keys(u8Res.data?.data || {}).join(", ") || "empty"})`);
+  if (!u8Token)
+    throw new Error(
+      `No u8_token in response (keys: ${Object.keys(u8Res.data?.data || {}).join(", ") || "empty"})`,
+    );
 
   return u8Token;
 }
@@ -411,15 +512,26 @@ export async function fetchAndMergeGachaLogFromAccount(
     const isAuthError =
       firstErr?.response?.status === 400 ||
       firstErr?.response?.status === 401 ||
-      (firstErr instanceof GachaApiError && (firstErr.apiCode === 40100 || firstErr.apiCode === -1));
+      (firstErr instanceof GachaApiError &&
+        (firstErr.apiCode === 40100 || firstErr.apiCode === -1));
     if (!isAuthError) throw firstErr;
 
     if (onProgress) onProgress("Token expired, refreshing...");
     const refreshed = await refreshAccountToken(accountCookie);
-    if (!refreshed) throw firstErr;
+    if (!refreshed) {
+      throw new GachaApiError("Linked account login has expired", 40100);
+    }
 
     accountToken = refreshed;
-    u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+    try {
+      u8Token = await getEndfieldU8Token(accountToken, hgId, provider);
+    } catch (retryErr: any) {
+      const status = retryErr?.response?.status;
+      if (status === 400 || status === 401) {
+        throw new GachaApiError("Linked account login has expired", 40100);
+      }
+      throw retryErr;
+    }
   }
 
   // Reuse stored serverId, or auto-detect
@@ -436,8 +548,7 @@ export async function fetchAndMergeGachaLogFromAccount(
 
   if (!serverId) {
     if (onProgress) onProgress("Detecting server region...");
-    const serverCandidates =
-      provider === "gryphline" ? ["3", "2", "1"] : ["1"];
+    const serverCandidates = provider === "gryphline" ? ["3", "2", "1"] : ["1"];
     let firstValidServer: string | undefined;
     for (const candidate of serverCandidates) {
       try {
@@ -791,6 +902,7 @@ const POOL_TYPES = [
   "E_CharacterGachaPoolType_Standard",
   "E_CharacterGachaPoolType_Special",
   "E_CharacterGachaPoolType_Joint",
+  "E_CharacterGachaPoolType_Rerun",
   "E_CharacterGachaPoolType_Beginner",
 ];
 
@@ -812,6 +924,12 @@ export function isPullFree(record: any): boolean {
     record.isFree === "true" ||
     record.isFree === 1
   );
+}
+
+function isGachaPull(record: GachaRecord): boolean {
+  // New API records include non-draw events such as gift_intel_book.
+  // Legacy draw records predate the kind field and must still be counted.
+  return record.kind == null || record.kind === "draw";
 }
 
 export async function getPoolMetadata(
@@ -955,8 +1073,8 @@ export async function fetchAndMergeGachaLog(
   return {
     code: 0,
     message: "Success",
-    totalChar: newCharList.length,
-    totalWeapon: newWeaponList.length,
+    totalChar: newCharList.filter(isGachaPull).length,
+    totalWeapon: newWeaponList.filter(isGachaPull).length,
     hasDataGap,
     data: updatedData,
   };
@@ -1068,11 +1186,6 @@ export async function updateLeaderboard(
   gameNickname?: string,
 ) {
   const stats = await getGachaStats(db, data);
-  const leaderboard =
-    (await db.get<Record<string, GachaLeaderboardEntry>>(
-      "GACHA_LEADERBOARD_ENTRIES",
-    )) || {};
-
   const entry: GachaLeaderboardEntry = {
     uid,
     nickname:
@@ -1176,12 +1289,12 @@ export async function updateLeaderboard(
   const buildPerPoolStats = (list: GachaRecord[]) => {
     const grouped: Record<string, GachaRecord[]> = {};
     for (const rec of list) {
-      if (!rec.poolId) continue;
+      if (!rec.poolId || !isGachaPull(rec)) continue;
       if (!grouped[rec.poolId]) grouped[rec.poolId] = [];
       grouped[rec.poolId].push(rec);
     }
     for (const [pid, recs] of Object.entries(grouped)) {
-      const nonFree = recs.filter((r) => !r.isFree);
+      const nonFree = recs.filter((r) => !isPullFree(r));
       const six = nonFree.filter((r) => r.rarity >= 6).length;
       const five = nonFree.filter((r) => r.rarity >= 5 && r.rarity < 6).length;
       const total = nonFree.length;
@@ -1198,14 +1311,21 @@ export async function updateLeaderboard(
   buildPerPoolStats(data.characterList);
   buildPerPoolStats(data.weaponList);
 
-  if (!uid.startsWith("EF_GUEST_") && uid !== "EF_undefined") {
-    leaderboard[uid] = entry;
-  } else if (leaderboard[uid]) {
-    // If it was already in the leaderboard somehow, remove it
-    delete leaderboard[uid];
-  }
-
-  await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+  db.transaction((store) => {
+    // Re-read after async statistics work so concurrent deletion is never undone.
+    const leaderboard =
+      store.get<Record<string, GachaLeaderboardEntry>>(
+        "GACHA_LEADERBOARD_ENTRIES",
+      ) || {};
+    if (
+      !uid.startsWith("EF_GUEST_") &&
+      uid !== "EF_undefined" &&
+      store.get(`GACHA_LOG_${uid}`)
+    )
+      leaderboard[uid] = entry;
+    else delete leaderboard[uid];
+    store.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+  });
 }
 
 /**
@@ -1282,9 +1402,13 @@ export async function syncExistingLogsToLeaderboard(db: CustomDatabase) {
 }
 
 export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
+  // Filter on read so previously saved gift events no longer inflate stats.
+  // Keep the raw log intact for API pagination and import gap detection.
+  const characterList = data.characterList.filter(isGachaPull);
+  const weaponList = data.weaponList.filter(isGachaPull);
   const uniquePoolIds = new Set<string>();
-  data.characterList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
-  data.weaponList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
+  characterList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
+  weaponList.forEach((r) => r.poolId && uniquePoolIds.add(r.poolId));
 
   const poolMetaMap: Record<string, any> = {};
   for (const pid of uniquePoolIds) {
@@ -1303,7 +1427,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   // When a standard character appears off-rate in a limited/weapon pool and their pool
   // metadata is missing, this set ensures they are still correctly identified as off-rate.
   const dynamicStandardSixStars = new Set<string>(STANDARD_SIX_STARS);
-  for (const rec of data.characterList) {
+  for (const rec of characterList) {
     if (
       (rec.poolType?.includes("Standard") ||
         rec.poolType?.includes("Beginner")) &&
@@ -1315,31 +1439,6 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
     }
   }
 
-  const getPityGroupId = (record: GachaRecord) => {
-    const type = record.poolType || "";
-    const pId = record.poolId || "";
-    const pName = record.poolName || "";
-
-    if (type.includes("Special") || type.includes("Joint") || pId.startsWith("c_special"))
-      return "SpecialShared";
-    if (type.includes("Beginner") || pId.startsWith("c_beginner"))
-      return "Beginner";
-    if (
-      type.includes("Standard") ||
-      pId.startsWith("c_standard") ||
-      pName.includes("常駐")
-    )
-      return `Standard_${pId}`;
-
-    if (pName.includes("特選") || pName.includes("限定"))
-      return "SpecialShared";
-    if (pName.includes("新手")) return "Beginner";
-
-    if (record.poolType === "WeaponPool" || pId.startsWith("w_")) return pId;
-
-    return pId || "Unknown";
-  };
-
   const calculateDetailedHistory = (
     list: GachaRecord[],
     type: "char" | "weapon",
@@ -1347,7 +1446,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   ) => {
     const pityGroups = new Map<string, GachaRecord[]>();
     list.forEach((r) => {
-      const gId = getPityGroupId(r);
+      const gId = getGachaPityGroupId(r);
       if (!pityGroups.has(gId)) pityGroups.set(gId, []);
       pityGroups.get(gId)!.push(r);
     });
@@ -1471,6 +1570,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           if (
             rarityNum >= 6 &&
             (record.poolType?.includes("Special") ||
+              record.poolType?.includes("Rerun") ||
               record.poolType?.includes("WeaponPool") ||
               record.poolName?.includes("特選"))
           ) {
@@ -1544,6 +1644,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
                 !isOffRate &&
                 rarityNum >= 6 &&
                 (record.poolType?.includes("Special") ||
+                  record.poolType?.includes("Rerun") ||
                   record.poolType?.includes("WeaponPool") ||
                   record.poolName?.includes("特選"))
               ) {
@@ -1671,8 +1772,10 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         };
       })
       .sort((a, b) => {
-        const isLimitedA = a.type.includes("Special") || a.type.includes("Joint");
-        const isLimitedB = b.type.includes("Special") || b.type.includes("Joint");
+        const isLimitedA =
+          a.type.includes("Special") || a.type.includes("Joint");
+        const isLimitedB =
+          b.type.includes("Special") || b.type.includes("Joint");
         const isBeginnerA = a.type.includes("Beginner");
         const isBeginnerB = b.type.includes("Beginner");
         const isStandardA = a.type.includes("Standard");
@@ -1807,12 +1910,12 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   };
 
   const charStats = calculateDetailedHistory(
-    data.characterList,
+    characterList,
     "char",
     data.info.charPityResetSeqId,
   );
   const weaponStats = calculateDetailedHistory(
-    data.weaponList,
+    weaponList,
     "weapon",
     data.info.weaponPityResetSeqId,
   );

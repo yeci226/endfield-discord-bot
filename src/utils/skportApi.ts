@@ -388,6 +388,21 @@ export interface CardDetail {
   weeklyMission?: CardWeeklyMission;
   bpSystem: CardBpSystem;
   achieve?: CardAchieve;
+  config?: { charSwitch?: boolean; standingsSwitch?: boolean; modules?: Array<{ id: string; switch: boolean }> };
+  domain?: CardDomain[];
+  spaceShip?: { rooms?: Array<{ id: string; type: number; level: number; chars?: Array<{ charId: string; avatarUrl?: string; physicalStrength?: number; favorability?: number }> }> };
+  seekSuspicion?: CardProgress;
+  indieHard?: { indieHardGroups?: Array<{ id: string; name?: string; activityName?: string; isInActivity?: boolean; dungeonGroups?: Array<{ normalDungeon?: { name?: string; isPass?: boolean }; hardDungeon?: { isPass?: boolean } }> }> };
+  crisisContract?: Array<{ id: string; name?: string; highest?: number; challengeCount?: number }>;
+  warEchoes?: { seasons?: Array<{ id: string; name?: string; stars?: number; weeks?: Array<{ stars?: number }> }> };
+}
+
+export interface CardProgress { count?: number | string; total?: number | string }
+export interface CardDomain {
+  domainId: string; name?: string; level?: number;
+  settlements?: Array<{ id: string; name?: string; level?: number; remainMoney?: string; moneyMax?: string; exp?: string; expToLevelUp?: string; officerCharIds?: string | string[]; officerCharAvatar?: string; isFinalMaxLevel?: boolean }>;
+  levels?: Array<{ levelId: string; name?: string; puzzleCount?: CardProgress; trchestCount?: CardProgress; pieceCount?: CardProgress; blackboxCount?: CardProgress; equipTrchestCount?: CardProgress; trstarCount?: CardProgress }>;
+  moneyMgr?: CardProgress;
 }
 
 export interface CardDetailResponse {

@@ -1,4 +1,3 @@
-import path from "path";
 import {
   SlashCommandBuilder,
   ModalBuilder,
@@ -14,9 +13,8 @@ import {
   ThumbnailBuilder,
   ButtonBuilder,
   ButtonStyle,
-  MediaGalleryBuilder,
-  MediaGalleryItemBuilder,
   AutocompleteInteraction,
+  ButtonInteraction,
 } from "discord.js";
 import { CustomDatabase } from "../../utils/Database";
 import {
@@ -28,7 +26,12 @@ import {
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { VerificationClient } from "../../web/VerificationClient";
-import { getAccounts, saveAccounts } from "../../utils/accountUtils";
+import { getAccounts } from "../../utils/accountUtils";
+import { writeAccounts } from "../../utils/accountData";
+import {
+  promptAccountUnbind,
+  handleAccountUnbind,
+} from "../../utils/accountUnbind";
 import { decryptAccount } from "../../utils/cryptoUtils";
 
 function flattenBindingList(bindings: any[] | null | undefined): any[] {
@@ -252,11 +255,17 @@ const command: Command = {
 
   execute: async (
     client: ExtendedClient,
-    interaction: ChatInputCommandInteraction | ModalSubmitInteraction,
+    interaction:
+      ChatInputCommandInteraction | ModalSubmitInteraction | ButtonInteraction,
     tr: any,
     db: CustomDatabase,
   ) => {
     const userId = interaction.user.id;
+
+    if (interaction.isButton()) {
+      await handleAccountUnbind(interaction, db, tr);
+      return;
+    }
 
     if (interaction.isChatInputCommand()) {
       const action = interaction.options.getString("action") || "email";
@@ -340,7 +349,8 @@ const command: Command = {
             const user = acc.info;
             const roleDetails = formatGameRoleDetails(acc.roles, tr);
             const textDisplay = new TextDisplayBuilder().setContent(
-              tr("login_Welcome").replace("<name>", user.nickname) + roleDetails,
+              tr("login_Welcome").replace("<name>", user.nickname) +
+                roleDetails,
             );
 
             if (user.avatar) {
@@ -363,42 +373,37 @@ const command: Command = {
         });
         return;
       } else if (action === "help") {
-        const imagePath = path.join(__dirname, "../../assets/image.png");
-        const image2Path = path.join(__dirname, "../../assets/image2.png");
-
         const container = new ContainerBuilder()
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
               tr("login_HelpTitle") +
                 "\n" +
-                "**方法一：Application 分頁**\n" +
-                "1. 前往 [Skport](https://www.skport.com/) 並登入\n" +
-                "2. 按下 `F12` -> `Application` -> `Cookies` -> `https://www.skport.com`\n" +
-                "3. 找到 `ACCOUNT_TOKEN` 欄位並複製其數值",
-            ),
-          )
-          .addMediaGalleryComponents(
-            new MediaGalleryBuilder().addItems(
-              new MediaGalleryItemBuilder({
-                media: { url: "attachment://image1.png" },
-              }),
+                "照下面步驟複製登入資料即可，不用按 F12，也不用找 `ACCOUNT_TOKEN`。\n\n" +
+                "**① 先登入遊戲網頁**\n" +
+                "用 Chrome 或 Edge 開啟 [終末地簽到頁](https://game.skport.com/endfield/sign-in)，登入你要綁定的帳號。\n\n" +
+                "**② 打開登入資料頁**\n" +
+                "登入後，用剛才的瀏覽器開啟 [這個頁面](https://web-api.skport.com/cookie_store/account_token)。\n" +
+                "如果連結開在 Discord 裡，請複製連結，貼到剛才瀏覽器上方的網址列再開啟。",
             ),
           )
           .addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-              "\n**方法二：Network 分頁 (推薦)**\n" +
-                "1. 前往 [Skport](https://www.skport.com/) 並登入\n" +
-                "2. 按下 `F12` -> `Network` (網路)\n" +
-                "3. 在搜尋框輸入 `account_token` 並重新整理網頁\n" +
-                "4. 點擊任意一個請求，在右側的 `Request Headers` 中找到 `cookie` 欄位\n" +
-                "5. 複製整串 Cookie 內容並填入即可",
+              "**③ 複製 content 後面的那串文字**\n" +
+                '頁面上會是一串文字。找到 `"content"`，例如：\n' +
+                '```json\n{"code":0,"data":{"content":"AbCd1234範例文字"}}\n```\n' +
+                "以上面為例，只要複製 `AbCd1234範例文字`，前後的引號不用複製。\n" +
+                "這只是範例，請複製你自己頁面上顯示的完整內容。\n\n" +
+                "**④ 貼回機器人**\n" +
+                "回到 Discord，輸入 `/登入`（或 `/login`），動作選「輸入 Cookie 登入」。\n" +
+                "把剛才複製的文字貼進輸入框，再按「提交」。",
             ),
           )
-          .addMediaGalleryComponents(
-            new MediaGalleryBuilder().addItems(
-              new MediaGalleryItemBuilder({
-                media: { url: "attachment://image2.png" },
-              }),
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              "**沒有看到 content，或後面是空的？**\n" +
+                "回到第一步的簽到頁，登出再登入，然後重新開啟第二步的連結。\n" +
+                "還是不行的話，請聯絡開發者，告知頁面顯示的錯誤文字。\n\n" +
+                "🔒 複製的登入資料等同密碼，請只貼在登入表單，不要傳到聊天頻道或截圖分享。",
             ),
           );
 
@@ -406,10 +411,6 @@ const command: Command = {
           content: "",
           flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
           components: [container],
-          files: [
-            { attachment: imagePath, name: "image1.png" },
-            { attachment: image2Path, name: "image2.png" },
-          ],
         });
         return;
       } else if (action === "unbind") {
@@ -440,22 +441,7 @@ const command: Command = {
           return;
         }
 
-        const removed = accounts.splice(index, 1)[0];
-        await saveAccounts(db, userId, accounts);
-
-        const container = new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            tr("login_UnbindSuccess")
-              .replace("<name>", removed.info.nickname)
-              .replace("<id>", removed.info.id),
-          ),
-        );
-
-        await interaction.reply({
-          content: "",
-          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
-          components: [container],
-        });
+        await promptAccountUnbind(interaction, db, accounts[index], tr);
         return;
       }
     }
@@ -761,8 +747,8 @@ const command: Command = {
             accounts.push(accountData);
           }
 
-          // accountData fields are plaintext here, saveAccounts will handle encryption
-          await saveAccounts(db, userId, accounts);
+          // Save only this account; concurrent unbinding must not restore other accounts.
+          writeAccounts(db, userId, [exists || accountData], true);
 
           // Construct Container
           const container = new ContainerBuilder();
@@ -916,7 +902,7 @@ async function handleLoginSuccess(
       accounts.push(accountData);
     }
 
-    await saveAccounts(db, userId, accounts);
+    writeAccounts(db, userId, [exists || accountData], true);
 
     const container = new ContainerBuilder();
     const gameSummary = formatBoundGamesSummary(mergedRoles, tr);

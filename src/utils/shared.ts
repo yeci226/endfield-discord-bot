@@ -25,6 +25,10 @@ export class TtlCache<K, V> {
     return item.value;
   }
 
+  has(key: K): boolean {
+    return this.get(key) !== undefined;
+  }
+
   set(key: K, value: V): void {
     if (this.store.size >= this.maxSize) {
       const firstKey = this.store.keys().next().value;

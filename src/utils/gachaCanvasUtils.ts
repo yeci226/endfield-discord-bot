@@ -10,6 +10,11 @@ import moment from "moment";
 import { GachaLogData, getPoolMetadata } from "./gachaLogUtils";
 import { CustomDatabase } from "./Database";
 import { fetchImage } from "./canvasUtils";
+import {
+  getGachaPityGroupId,
+  isGachaPoolInCategory,
+  paginateGachaOverviewPools,
+} from "./gachaPoolUtils";
 
 // Register Fonts
 const fontDir = path.join(__dirname, "../assets/fonts");
@@ -71,19 +76,169 @@ function roundRect(
 }
 
 export type GachaType =
-  | "limited_char"
-  | "standard_char"
-  | "beginner_char"
-  | "weapon";
+  "limited_char" | "rerun_char" | "standard_char" | "beginner_char" | "weapon";
 
 export const ITEMS_PER_PAGE = 28; // 4 rows × 7 cols
 
-const WEAPON_ICON_FALLBACK_BASE_URL =
-  "https://endfield.ooo.run/ake/weapons";
+const OFFICIAL_CHARACTER_ICON_URLS: Readonly<
+  Record<string, string | undefined>
+> = Object.freeze({
+  chr_0004_pelica:
+    "https://bbs.hycdn.cn/image/common/20260128/5246026/6979ace2deae33c4ae1159c0_3eac6ad0.png",
+  chr_0005_chen:
+    "https://bbs.hycdn.cn/image/common/20260129/4826366/697b015c4973d8a1133f7876_6ad0f152.png",
+  chr_0006_wolfgd:
+    "https://bbs.hycdn.cn/image/common/20260203/5246026/6981cf549fd9f8e1d8fd61cc_3eac6ad0.png",
+  chr_0007_ikut:
+    "https://bbs.hycdn.cn/image/common/20260203/101423/6981b85449da91d62c6689cc_f1525633.png",
+  chr_0009_azrila:
+    "https://bbs.hycdn.cn/image/common/20260217/2054140/69940065223662a892b01da4_db193eac.png",
+  chr_0011_seraph:
+    "https://bbs.hycdn.cn/image/common/20260217/2054140/6993df14b32aacba0e7256d4_13673ac9.png",
+  chr_0012_avywen:
+    "https://bbs.hycdn.cn/image/common/20260208/4826366/6987747b94e337a3813bf30c_13673ac9.png",
+  chr_0013_aglina:
+    "https://bbs.hycdn.cn/image/common/20260203/101423/6980d4aa4973d8a11340c613_2f76db19.png",
+  chr_0014_aurora:
+    "https://bbs.hycdn.cn/image/common/20260202/4826366/6980bf4a3a151ae9156138f7_f1525633.png",
+  chr_0015_lifeng:
+    "https://bbs.hycdn.cn/image/common/20260204/2274383/69822586645bf8ceddc4e329_f1525633.png",
+  chr_0016_laevat:
+    "https://bbs.hycdn.cn/image/2025/12/29/2054140/9a215e451767e4527e1f8d1f8ce09fef.png",
+  chr_0017_yvonne:
+    "https://bbs.hycdn.cn/image/common/20260202/4850358/69807e73d262875d5b986600_2f76db19.png",
+  chr_0018_dapan:
+    "https://bbs.hycdn.cn/image/common/20260208/4826366/698771821acbba54e4b0e048_3eac6ad0.png",
+  chr_0019_karin:
+    "https://bbs.hycdn.cn/image/2026/01/12/2641152/00598faf8a7eccab9c4d64e102faac6b.png",
+  chr_0020_meurs:
+    "https://bbs.hycdn.cn/image/common/20260202/5246026/6980af993a151ae9156136ea_f1525633.png",
+  chr_0021_whiten:
+    "https://bbs.hycdn.cn/image/common/20260204/2274383/6982b354f139cae54d7333a2_6ad0f152.png",
+  chr_0022_bounda:
+    "https://bbs.hycdn.cn/image/2026/01/12/2641152/d50a55c6f0bb70419677592a21b635ef.png",
+  chr_0023_antal:
+    "https://bbs.hycdn.cn/image/common/20260204/4850358/69835ef9645bf8ceddc50a96_2f76db19.png",
+  chr_0024_deepfin:
+    "https://bbs.hycdn.cn/image/common/20260217/4826366/699434292468ffc1c1e2b772_f1525633.png",
+  chr_0025_ardelia:
+    "https://bbs.hycdn.cn/image/2026/01/26/4826366/3f24dfab756936f20757e5a5b5ddd966.png",
+  chr_0026_lastrite:
+    "https://bbs.hycdn.cn/image/common/20260203/101423/6981a44d9fd9f8e1d8fd5d22_56331367.png",
+  chr_0027_tangtang:
+    "https://bbs.hycdn.cn/image/common/20260312/2274383/69b211574298be0edf042cea_f1525633.png",
+  chr_0028_wulfa:
+    "https://bbs.hycdn.cn/image/common/20260329/4826366/69c8998745f7d92a73c88faf_2f76db19.png",
+  chr_0029_pograni:
+    "https://bbs.hycdn.cn/image/common/20260204/2054140/6983540cf139cae54d734e26_13673ac9.png",
+  chr_0030_zhuangfy:
+    "https://bbs.hycdn.cn/image/common/20260417/2641152/69e12fbefe4a20e7c0d83e4e_f1525633.png",
+  chr_0031_mifu:
+    "https://bbs.hycdn.cn/image/common/20260605/4826366/6a22112497bfaba8393d24e0_56331367.png",
+  chr_0032_lizhiyan:
+    "https://bbs.hycdn.cn/image/common/20260714/4634516/6a55d3861da1e29cd294f0d1_6ad0f152.png",
+  chr_0033_camille:
+    "https://bbs.hycdn.cn/image/common/20260626/5246026/6a3dfcd1690f9d18da26a0cd_3eac6ad0.png",
+  chr_0034_typhoea:
+    "https://bbs.hycdn.cn/image/common/20260902/221109/6a9772282e39b624e0143815_3eac6ad0.png",
+  chr_0035_liino:
+    "https://bbs.hycdn.cn/image/common/20260809/4826366/6a77c4b6a87c0071fa15da57_3eac6ad0.png",
+});
+
 const OFFICIAL_WEAPON_ICON_URLS: Readonly<Record<string, string | undefined>> =
   Object.freeze({
+    wpn_claym_0003:
+      "https://bbs.hycdn.cn/image/common/20260712/4634516/6a5273ed3fd5188add197c5f_56331367.png",
+    wpn_claym_0004:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a532691243287dc0488bab0_6ad0f152.png",
+    wpn_claym_0006:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a530f205a4a706f1ca0a1fd_3eac6ad0.png",
+    wpn_claym_0008:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a53038e278e43d09a4a988b_56331367.png",
+    wpn_claym_0009:
+      "https://bbs.hycdn.cn/image/common/20260712/4634516/6a5361dcc8001c330ab426f2_2f76db19.png",
+    wpn_claym_0011:
+      "https://bbs.hycdn.cn/image/common/20260716/3644013/6a58964f9555d0dbeb3be3d7_13673ac9.png",
+    wpn_claym_0012:
+      "https://bbs.hycdn.cn/image/common/20260713/4850358/6a54ca34a8fd4a2648a7803b_56331367.png",
+    wpn_claym_0014:
+      "https://bbs.hycdn.cn/image/common/20260713/4850358/6a54cf5368e6358adf7c4457_f1525633.png",
+    wpn_claym_0015:
+      "https://bbs.hycdn.cn/image/common/20260713/4850358/6a54d354504224056186ffe4_6ad0f152.png",
+    wpn_funnel_0001:
+      "https://bbs.hycdn.cn/image/common/20260712/4850358/6a537e3b5a4a706f1ca0a258_56331367.png",
+    wpn_funnel_0003:
+      "https://bbs.hycdn.cn/image/common/20260713/3644013/6a547ad09555d0dbeb3bddc1_f1525633.png",
+    wpn_funnel_0004:
+      "https://bbs.hycdn.cn/image/common/20260712/221109/6a533695625fc6185f8ab070_3eac6ad0.png",
+    wpn_funnel_0005:
+      "https://bbs.hycdn.cn/image/common/20260712/221109/6a532f56625fc6185f8ab06b_db193eac.png",
+    wpn_funnel_0007:
+      "https://bbs.hycdn.cn/image/common/20260712/221109/6a532bbd1e0a2272afdf9a1b_db193eac.png",
+    wpn_funnel_0008:
+      "https://bbs.hycdn.cn/image/common/20260705/3644013/6a4a5a0f758aae6784496fef_56331367.png",
+    wpn_funnel_0009:
+      "https://bbs.hycdn.cn/image/common/20260714/179550/6a5629ca68cdea4a26484d91_3eac6ad0.png",
+    wpn_funnel_0012:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a53705a5a4a706f1ca0a24d_2f76db19.png",
+    wpn_funnel_0014:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a536178860beb756f1b0ddc_2f76db19.png",
+    wpn_funnel_0016:
+      "https://bbs.hycdn.cn/image/common/20260716/221109/6a5828b068cdea4a26484f5d_f1525633.png",
+    wpn_funnel_0019:
+      "https://bbs.hycdn.cn/image/common/20260902/4826366/6a977074c40accef2ad54999_f1525633.png",
+    wpn_lance_0003:
+      "https://bbs.hycdn.cn/image/common/20260712/4634516/6a536692967194f4c24fd006_13673ac9.png",
+    wpn_lance_0004:
+      "https://bbs.hycdn.cn/image/common/20260716/3644013/6a588b2268e6358adf7c48c9_56331367.png",
+    wpn_lance_0006:
+      "https://bbs.hycdn.cn/image/common/20260712/2274383/6a5374c244ffd33c0c6651bc_6ad0f152.png",
+    wpn_lance_0008:
+      "https://bbs.hycdn.cn/image/common/20260712/4850358/6a5385014b9802b668e90b34_13673ac9.png",
+    wpn_lance_0010:
+      "https://bbs.hycdn.cn/image/common/20260706/3644013/6a4b552a17bac1f2c71ee605_3eac6ad0.png",
+    wpn_lance_0011:
+      "https://bbs.hycdn.cn/image/common/20260706/3644013/6a4b50551c1c7a6292e093e0_db193eac.png",
+    wpn_lance_0013:
+      "https://bbs.hycdn.cn/image/common/20260716/3644013/6a5888468e326c8c8730ae4e_3eac6ad0.png",
     wpn_lance_0014:
       "https://bbs.hycdn.cn/image/common/20260808/4634516/6a772fb96febdf01b964b1e2_f1525633.png",
+    wpn_pistol_0002:
+      "https://bbs.hycdn.cn/image/common/20260712/221109/6a53643cb58634b212e7c4ad_2f76db19.png",
+    wpn_pistol_0003:
+      "https://bbs.hycdn.cn/image/common/20260712/221109/6a53613f68cdea4a26484b7f_f1525633.png",
+    wpn_pistol_0004:
+      "https://bbs.hycdn.cn/image/common/20260712/3644013/6a5330d61e0a2272afdf9a20_db193eac.png",
+    wpn_pistol_0006:
+      "https://bbs.hycdn.cn/image/common/20260712/2274383/6a52fcf9504224056186fdf8_f1525633.png",
+    wpn_pistol_0008:
+      "https://bbs.hycdn.cn/image/common/20260706/3644013/6a4b4663278e43d09a4a92dc_56331367.png",
+    wpn_pistol_0009:
+      "https://bbs.hycdn.cn/image/common/20260706/3644013/6a4b179e860beb756f1b085c_2f76db19.png",
+    wpn_pistol_0012:
+      "https://bbs.hycdn.cn/image/common/20260712/3644013/6a5339718e326c8c8730a834_56331367.png",
+    wpn_sword_0005:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a53533f1e0a2272afdf9a2c_f1525633.png",
+    wpn_sword_0007:
+      "https://bbs.hycdn.cn/image/common/20260712/5246026/6a534fac9186cc76da288b05_2f76db19.png",
+    wpn_sword_0008:
+      "https://bbs.hycdn.cn/image/common/20260702/4634516/6a468abf504224056186f33f_3eac6ad0.png",
+    wpn_sword_0009:
+      "https://bbs.hycdn.cn/image/common/20260712/4634516/6a526cd05a4a706f1ca0a1c0_2f76db19.png",
+    wpn_sword_0011:
+      "https://bbs.hycdn.cn/image/common/20260716/736412/6a57bb979186cc76da288f40_6ad0f152.png",
+    wpn_sword_0012:
+      "https://bbs.hycdn.cn/image/common/20260708/736412/6a4d30567495486f8405dac4_db193eac.png",
+    wpn_sword_0013:
+      "https://bbs.hycdn.cn/image/common/20260708/736412/6a4d2800bf92cb409e3786b9_6ad0f152.png",
+    wpn_sword_0015:
+      "https://bbs.hycdn.cn/image/common/20260712/2641152/6a5394ff7495486f8405ddd0_56331367.png",
+    wpn_sword_0018:
+      "https://bbs.hycdn.cn/image/common/20260712/2641152/6a53a5bad7edf9a01564e5ee_3eac6ad0.png",
+    wpn_sword_0019:
+      "https://bbs.hycdn.cn/image/common/20260712/2641152/6a539c3536daa0d3b3b1f1c1_2f76db19.png",
+    wpn_sword_0020:
+      "https://bbs.hycdn.cn/image/common/20260712/2641152/6a53b4eba60e9ad15db7d71c_2f76db19.png",
   });
 
 export function getGachaIconUrlCandidates(
@@ -94,18 +249,31 @@ export function getGachaIconUrlCandidates(
   if (!cid) return [];
 
   if (isCharacter) {
+    const officialUrl = OFFICIAL_CHARACTER_ICON_URLS[cid];
     return [
+      officialUrl,
       `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`,
-    ];
+      `https://endfield.ooo.run/ake/operators/icon_${cid}.webp`,
+    ].filter((url): url is string => Boolean(url));
   }
 
-  return [
-    OFFICIAL_WEAPON_ICON_URLS[cid],
-    `https://endfieldtools.dev/assets/images/endfield/itemicon/${cid}.png`,
-    `${WEAPON_ICON_FALLBACK_BASE_URL}/${cid}.webp`,
-  ].filter((url, index, candidates): url is string =>
-    Boolean(url) && candidates.indexOf(url) === index,
-  );
+  const officialUrl = OFFICIAL_WEAPON_ICON_URLS[cid];
+  return officialUrl ? [officialUrl] : [];
+}
+
+// Win-rate counts for one pity-group summary. Numerator and denominator must
+// come from the same per-pool maps (both include free/expedited 6★); mixing in
+// the non-free sixStarPullCount pushed the rate above 100%.
+export function getWinRateCounts(summary: any): {
+  featured: number;
+  total: number;
+} {
+  const sum = (m: any) =>
+    Object.values(m || {}).reduce((acc: number, v: any) => acc + (v || 0), 0);
+  return {
+    featured: sum(summary?.poolFeaturedSixMap),
+    total: sum(summary?.poolSixStarPullMap),
+  };
 }
 
 export function getDetailedPageCount(
@@ -176,20 +344,14 @@ export async function drawGachaStats(
     if (p?.id && bannerUrl) cachedPoolBannerMap.set(String(p.id), bannerUrl);
   }
 
-  const resolveGroupIdForPool = (pool: any): string => {
-    if (type === "weapon") return pool?.id || "";
-    if (pool?.type?.includes("Beginner")) return "Beginner";
-    if (pool?.type?.includes("Standard") || pool?.type?.includes("Classic")) {
-      return `Standard_${pool.id}`;
-    }
-    return "SpecialShared";
-  };
-
   const getPoolPaddedCount = (poolId: string, groupId: string): number => {
     const categoryStats = stats[type === "weapon" ? "weapon" : "char"];
     const categorySummary = categoryStats.summary?.[groupId];
     const poolTotal = categorySummary?.poolTotalMap?.[poolId] || 0;
-    const newestPoolId = categoryStats.pools?.[0]?.id;
+    const newestPoolId =
+      type === "rerun_char"
+        ? categoryStats.pools?.find((p: any) => p.type?.includes("Rerun"))?.id
+        : categoryStats.pools?.[0]?.id;
 
     if (poolId === newestPoolId) {
       return Math.max(0, categorySummary?.currentPity || 0);
@@ -376,17 +538,11 @@ export async function drawGachaStats(
   }[] = [];
 
   if (!selectedPoolId) {
-    // Overview Mode: Find Top 3 Pools based on selected category (type)
-    const pools = (type === "weapon" ? stats.weapon.pools : stats.char.pools)
-      .filter((p: any) => {
-        if (type === "weapon") return p.type?.includes("Weapon");
-        if (type === "standard_char")
-          return p.type?.includes("Standard") && !p.name?.includes("新手");
-        if (type === "beginner_char")
-          return p.type?.includes("Beginner") || p.name?.includes("新手");
-        return p.type?.includes("Special") || p.type?.includes("Joint"); // Default to Special/Joint for limited_char
-      })
-      .slice(0, 3);
+    const pools = paginateGachaOverviewPools(
+      type === "weapon" ? stats.weapon.pools : stats.char.pools,
+      type,
+      page,
+    ).pools;
 
     for (const p of pools) {
       const items = history.filter(
@@ -395,14 +551,7 @@ export async function drawGachaStats(
           (Number(item.rarity || 0) >= 6 || item.isExpeditedBlock),
       );
 
-      let gId = "SpecialShared";
-      if (type === "weapon") {
-        gId = p.id;
-      } else if (p.type?.includes("Beginner")) {
-        gId = "Beginner";
-      } else if (p.type?.includes("Standard")) {
-        gId = `Standard_${p.id}`;
-      }
+      const gId = getGachaPityGroupId(p);
 
       const gSummary = stats[type === "weapon" ? "weapon" : "char"].summary;
       const pTotal = gSummary[gId]?.poolTotalMap?.[p.id] || 0;
@@ -424,14 +573,12 @@ export async function drawGachaStats(
       type === "weapon" ? stats.weapon.pools : stats.char.pools
     ).find((p: any) => p.id === selectedPoolId);
 
-    let gId = "SpecialShared";
-    if (type === "weapon") {
-      gId = pool?.id || selectedPoolId;
-    } else if (pool?.type?.includes("Beginner")) {
-      gId = "Beginner";
-    } else if (pool?.type?.includes("Standard")) {
-      gId = `Standard_${pool.id}`;
-    }
+    const gId = getGachaPityGroupId(
+      pool || {
+        id: selectedPoolId,
+        type: type === "weapon" ? "WeaponPool" : "",
+      },
+    );
 
     const gSummary = stats[type === "weapon" ? "weapon" : "char"].summary;
     const pTotal = gSummary[gId]?.poolTotalMap?.[selectedPoolId] || 0;
@@ -525,11 +672,13 @@ export async function drawGachaStats(
   ctx.fillStyle = "#888";
   ctx.font = "bold 40px NotoSans";
   const typeLabel =
-    type === "weapon"
-      ? tr("gacha_log_stats_WeaponPool")
-      : type === "limited_char"
-        ? tr("gacha_log_stats_LimitedCharPool")
-        : tr("gacha_log_stats_StandardCharPool");
+    type === "rerun_char"
+      ? tr("gacha_log_stats_RerunCharPool")
+      : type === "weapon"
+        ? tr("gacha_log_stats_WeaponPool")
+        : type === "limited_char"
+          ? tr("gacha_log_stats_LimitedCharPool")
+          : tr("gacha_log_stats_StandardCharPool");
   const recordDate = data.info.export_timestamp
     ? moment(data.info.export_timestamp).format("YYYY/MM/DD HH:mm")
     : moment().format("YYYY/MM/DD HH:mm");
@@ -550,6 +699,7 @@ export async function drawGachaStats(
   let categorySixCount = 0;
   let categorySixPullCount = 0; // Only non-free
   let featuredSixCount = 0;
+  let winRateSixCount = 0; // All 6★ incl. free, same basis as featuredSixCount
 
   // Specific pool values for header
   let specificPoolTotal = 0;
@@ -563,6 +713,8 @@ export async function drawGachaStats(
       isMatch = true;
     } else if (type === "limited_char") {
       isMatch = gid === "SpecialShared";
+    } else if (type === "rerun_char") {
+      isMatch = gid === "RerunShared";
     } else if (type === "standard_char") {
       isMatch = gid.startsWith("Standard");
     } else if (type === "beginner_char") {
@@ -577,12 +729,14 @@ export async function drawGachaStats(
 
       // For Win Rate in Overview (Limited or Weapon)
       if (
-        (type === "limited_char" || type === "weapon") &&
+        (type === "limited_char" ||
+          type === "rerun_char" ||
+          type === "weapon") &&
         sObj.poolFeaturedSixMap
       ) {
-        Object.values(sObj.poolFeaturedSixMap).forEach((v: any) => {
-          featuredSixCount += v || 0;
-        });
+        const counts = getWinRateCounts(sObj);
+        featuredSixCount += counts.featured;
+        winRateSixCount += counts.total;
       }
     }
   }
@@ -605,8 +759,8 @@ export async function drawGachaStats(
     ? poolSixStarPullCount > 0
       ? ((poolFeaturedSixCount / poolSixStarPullCount) * 100).toFixed(2) + "%"
       : (tr?.("gacha_log_canvas_NoData") ?? "未有資料")
-    : categorySixPullCount > 0
-      ? ((featuredSixCount / categorySixPullCount) * 100).toFixed(2) + "%"
+    : winRateSixCount > 0
+      ? ((featuredSixCount / winRateSixCount) * 100).toFixed(2) + "%"
       : (tr?.("gacha_log_canvas_NoData") ?? "未有資料");
 
   // Determine activeCategoryPity for headers
@@ -636,15 +790,22 @@ export async function drawGachaStats(
     },
     {
       label:
-        type === "limited_char"
+        type === "limited_char" || type === "rerun_char"
           ? (tr?.("gacha_log_canvas_UpCharWinRate") ?? "UP角色不歪率")
           : type === "weapon"
             ? (tr?.("gacha_log_canvas_UpWeaponWinRate") ?? "UP武器不歪率")
             : "",
-      value: type === "limited_char" || type === "weapon" ? rateUpWinRate : "",
+      value:
+        type === "limited_char" || type === "rerun_char" || type === "weapon"
+          ? rateUpWinRate
+          : "",
       subValue: "",
-      icon: type === "limited_char" || type === "weapon" ? "💍" : "",
-      hidden: type !== "limited_char" && type !== "weapon",
+      icon:
+        type === "limited_char" || type === "rerun_char" || type === "weapon"
+          ? "💍"
+          : "",
+      hidden:
+        type !== "limited_char" && type !== "rerun_char" && type !== "weapon",
     },
   ];
 
@@ -706,14 +867,7 @@ export async function drawGachaStats(
 
   const categoryPoolsForQuick = (
     type === "weapon" ? stats.weapon.pools : stats.char.pools
-  ).filter((p: any) => {
-    if (type === "weapon") return p.type?.includes("Weapon");
-    if (type === "standard_char")
-      return p.type?.includes("Standard") && !p.name?.includes("新手");
-    if (type === "beginner_char")
-      return p.type?.includes("Beginner") || p.name?.includes("新手");
-    return p.type?.includes("Special") || p.type?.includes("Joint");
-  });
+  ).filter((p: any) => isGachaPoolInCategory(p, type));
 
   const shownPoolIds = new Set(visualGroups.map((g) => g.pId).filter(Boolean));
   const hiddenPoolsWithData = categoryPoolsForQuick.filter((p: any) => {
@@ -903,7 +1057,12 @@ export async function drawGachaStats(
         if (!hasSix) showPlaceholder = true;
       } else if (gId?.includes("Standard")) {
         showPlaceholder = true;
-      } else if ((gId === "SpecialShared" || type === "weapon") && i === 0) {
+      } else if (
+        (gId === "SpecialShared" ||
+          gId === "RerunShared" ||
+          type === "weapon") &&
+        i === 0
+      ) {
         // Only show placeholder for the LATEST Limited pool in Overview
         showPlaceholder = true;
       }
@@ -988,7 +1147,10 @@ export async function drawGachaStats(
         const poolTotal = categorySummary?.poolTotalMap?.[group.pId || ""] || 0;
 
         const poolList = stats[type === "weapon" ? "weapon" : "char"].pools;
-        const newestPoolId = poolList[0]?.id;
+        const newestPoolId =
+          type === "rerun_char"
+            ? poolList.find((p: any) => p.type?.includes("Rerun"))?.id
+            : poolList[0]?.id;
         const isNewestPool = group.pId === newestPoolId;
 
         let displayPity = 0;
@@ -1052,7 +1214,8 @@ export async function drawGachaStats(
                     .replace("<carried>", String(carriedPity))
                     .replace("<pool>", String(thisPoolPulls))
                 : (
-                    tr?.("gacha_log_canvas_PaddedCount") ?? "已墊 <hardCount> 抽"
+                    tr?.("gacha_log_canvas_PaddedCount") ??
+                    "已墊 <hardCount> 抽"
                   ).replace("<hardCount>", String(displayPity));
             ctx.fillText(paddedText, curX + colW / 2, curY + 30);
 
@@ -1257,7 +1420,7 @@ export async function drawGachaStats(
       for (let idx = 0; idx < quickPoolsForOverview.length; idx++) {
         const p = quickPoolsForOverview[idx];
         const x = padding + idx * (quickCardW + quickGap);
-        const gId = resolveGroupIdForPool(p);
+        const gId = getGachaPityGroupId(p);
         const nonFree = p.total || 0;
         const free = p.freeCount || 0;
         const paddedCount = getPoolPaddedCount(p.id, gId);
@@ -1550,7 +1713,10 @@ export async function drawGachaStats(
         return !group.items.some((it: any) => (it.rarity || 0) >= 6);
       if (gId?.includes("Standard")) return true;
       const poolList = stats[type === "weapon" ? "weapon" : "char"].pools;
-      const newestPoolId = poolList[0]?.id;
+      const newestPoolId =
+        type === "rerun_char"
+          ? poolList.find((p: any) => p.type?.includes("Rerun"))?.id
+          : poolList[0]?.id;
       return selectedPoolId === newestPoolId;
     })();
 
@@ -2017,7 +2183,11 @@ function fillDynamicText(
   baseFontSize: number,
   bold: boolean = true,
 ) {
-  const normalizedText = (text || "").replace(/：/g, " : ").replace(/，/g, ", ").replace(/。/g, ". ").replace(/、/g, ", ");
+  const normalizedText = (text || "")
+    .replace(/：/g, " : ")
+    .replace(/，/g, ", ")
+    .replace(/。/g, ". ")
+    .replace(/、/g, ", ");
   let fontSize = baseFontSize;
   ctx.font = `${bold ? "bold " : ""}${fontSize}px ${bold ? "NotoSansTCBold" : "NotoSans"}`;
   let textWidth = ctx.measureText(normalizedText).width;

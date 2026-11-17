@@ -1,3 +1,4 @@
+import { handleProfilePage, profilePayload } from "../../utils/profileView";
 import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
@@ -23,7 +24,7 @@ import { ExtendedClient } from "../../structures/Client";
 import { getCardDetail, CardDetailResponse } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
-import { getPrimaryBindingRole } from "../../utils/accountUtils";
+import { getPrimaryBindingRole, normalizeBindingEntries } from "../../utils/accountUtils";
 import {
   ProfileTemplate,
   ProfileElement,
@@ -136,234 +137,8 @@ const command: Command = {
     let accountIndex = 0;
     let isConfig = false;
 
-    // 2. Handle Select Menu Interaction
-    if (interaction.isStringSelectMenu()) {
-      const parts = interaction.customId.split(":");
-      if (parts[1] !== "char_select") return;
-
-      const [, , roleId, serverId, uid, ownerId] = parts;
-      const charId = interaction.values[0];
-
-      // Use ownerId if present (for multi-user profile viewing)
-      const targetUserId = ownerId || interaction.user.id;
-      const accounts = await getAccounts(db, targetUserId);
-      const account = accounts?.[0];
-
-      if (!account) {
-        await interaction.followUp({
-          content: tr("NoSetAccount"),
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      await ensureAccountBinding(account, targetUserId, db, tr.lang);
-
-      if (charId === "home") {
-        let cardRes: any;
-        try {
-          cardRes = await withAutoRefresh(
-            client,
-            targetUserId,
-            account,
-            (c: string, s: string, options: any) =>
-              getCardDetail(
-                roleId,
-                serverId,
-                account.info?.id || uid,
-                tr.lang,
-                c,
-                s,
-                options,
-              ),
-            tr.lang,
-          );
-        } catch (e: any) {
-          cardRes = { code: 10000 };
-        }
-
-        if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-          console.error(
-            "[Profile] API failed or returned error (subcommand):",
-            cardRes,
-          );
-          const errorMsg =
-            cardRes?.code === 10000
-              ? tr("TokenExpired")
-              : `${tr("UnknownError")} (API Code: ${cardRes?.code ?? "NULL"}, Status: ${cardRes?.status ?? "NULL"})`;
-          await interaction.followUp({
-            content: errorMsg,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-
-        const detail = cardRes.data.detail;
-        const template = await ProfileTemplateService.getUserTemplate(
-          db,
-          targetUserId,
-        );
-
-        let buffer: Buffer;
-        try {
-          buffer = await drawDashboard(detail, tr, template);
-        } catch (drawErr: any) {
-          console.error("[Profile] Dashboard drawing failed:", drawErr);
-          await interaction.followUp({
-            content:
-              tr("Error") +
-              " (Draw Failure: " +
-              (drawErr.message || "Unknown") +
-              ")",
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const attachment = new AttachmentBuilder(buffer, { name: "card.webp" });
-
-        if (!interaction.message || !interaction.message.components[0]) {
-          await interaction.followUp({
-            content: tr("UnknownError"),
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-
-        const selectMenu = StringSelectMenuBuilder.from(
-          (interaction.message.components[0] as any).components[0] as any,
-        );
-        selectMenu.setOptions(
-          detail.chars.slice(0, 25).map((char: any) => ({
-            label: char.charData.name,
-            description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
-            value: char.id,
-          })),
-        );
-
-        if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({
-            files: [attachment],
-            components: [
-              new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-                selectMenu,
-              ),
-            ],
-          });
-        }
-        return;
-      }
-
-      // Handle Character Detail View
-      let cardRes: any;
-      try {
-        cardRes = await withAutoRefresh(
-          client,
-          targetUserId,
-          account,
-          (c: string, s: string, options: any) =>
-            getCardDetail(
-              roleId,
-              serverId,
-              account.info?.id || uid,
-              tr.lang,
-              c,
-              s,
-              options,
-            ),
-          tr.lang,
-        );
-      } catch (e: any) {
-        cardRes = { code: 10000 };
-      }
-
-      if (!cardRes || cardRes.code !== 0 || !cardRes.data?.detail) {
-        await interaction.followUp({
-          content:
-            cardRes?.code === 10000 ? tr("TokenExpired") : tr("UnknownError"),
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      const detail = cardRes.data.detail;
-      const charIdx = detail.chars.findIndex((c: any) => c.id === charId);
-      const selectedChar = detail.chars[charIdx];
-
-      if (!selectedChar) {
-        await interaction.followUp({
-          content: tr("daily_RoleNotFound"),
-          flags: MessageFlags.Ephemeral,
-        });
-        return;
-      }
-
-      try {
-        const enums = await EnumService.getEnumsCached(
-          db,
-          account.cred,
-          tr.lang,
-          account.salt,
-        );
-        const equipEnums = [
-          ...(enums?.equipProperties || []),
-          ...(enums?.equipAbilities || []),
-        ];
-        let buffer: Buffer;
-        try {
-          buffer = await drawCharacterDetail(
-            selectedChar,
-            tr,
-            detail,
-            equipEnums,
-            charIdx + 1,
-          );
-        } catch (drawErr) {
-          console.error("Character detail drawing failed:", drawErr);
-          throw drawErr;
-        }
-        const attachment = new AttachmentBuilder(buffer, {
-          name: "detail.webp",
-        });
-
-        if (!interaction.message || !interaction.message.components[0]) {
-          await interaction.followUp({
-            content: tr("UnknownError"),
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-
-        const selectMenu = StringSelectMenuBuilder.from(
-          (interaction.message.components[0] as any).components[0] as any,
-        );
-        if (!selectMenu.options.some((o) => o.data.value === "home")) {
-          selectMenu.setOptions([
-            { label: "🏠 " + tr("MainPage"), value: "home" },
-            ...detail.chars.slice(0, 24).map((char: any) => ({
-              label: char.charData.name,
-              description: `Lv.${char.level} | ${char.charData.profession?.value || ""}`,
-              value: char.id,
-            })),
-          ]);
-        }
-
-        if (interaction.deferred || interaction.replied) {
-          await interaction.editReply({
-            files: [attachment],
-            components: [
-              new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-                selectMenu,
-              ),
-            ],
-          });
-        }
-      } catch (e) {
-        console.error("Error generating detail:", e);
-        await interaction.followUp({
-          content: tr("Error"),
-          flags: MessageFlags.Ephemeral,
-        });
-      }
+    if (interaction.isStringSelectMenu() || interaction.isButton()) {
+      await handleProfilePage(client, interaction, tr);
       return;
     }
 
@@ -530,7 +305,7 @@ const command: Command = {
       return;
     }
 
-    const primaryBinding = getPrimaryBindingRole(account.roles);
+    const primaryBinding = getPrimaryBindingRole(normalizeBindingEntries(account.roles).filter((binding) => Number(binding.gameId) === 3));
     const role = primaryBinding?.role;
     const uid = primaryBinding?.binding?.uid || account.info?.id;
 
@@ -599,53 +374,12 @@ const command: Command = {
       return;
     }
 
-    const detail = cardRes.data.detail;
-    const template = await ProfileTemplateService.getUserTemplate(
-      db,
-      targetUserId,
-    );
-    let buffer: Buffer;
-    try {
-      buffer = await drawDashboard(detail, tr, template);
-    } catch (drawErr: any) {
-      console.error("[Profile] Dashboard drawing failed (main):", drawErr);
-      await interaction.editReply({
-        content:
-          tr("Error") +
-          " (Draw Failure: " +
-          (drawErr.message || "Unknown") +
-          ")",
-      });
-      return;
-    }
-    const attachment = new AttachmentBuilder(buffer, { name: "card.webp" });
+    const payload = await profilePayload(client, {
+      ownerId: targetUserId, uid: String(account.info?.id || uid),
+      roleId: String(role.roleId), serverId: String(role.serverId),
+    }, cardRes.data.detail, tr);
+    await interaction.editReply(payload);
 
-    const customId = `profile:char_select:${role.roleId}:${role.serverId}:${account.info?.id || uid}:${targetUserId}`;
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId(customId)
-      .setPlaceholder(tr("profile_SelectCharacter"))
-      .addOptions(
-        (detail.chars || []).slice(0, 25).map((char: any) => ({
-          label: char.charData?.name || "??",
-          description: `Lv.${char.level || 1} | ${char.charData?.profession?.value || ""}`,
-          value: char.id || "empty",
-        })),
-      );
-
-    if (detail.chars?.length === 0) {
-      (selectMenu as any).addOptions([
-        { label: "No Characters Found", value: "none", disabled: true },
-      ]);
-    }
-
-    await interaction.editReply({
-      files: [attachment],
-      components: [
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-          selectMenu,
-        ),
-      ],
-    });
   },
 
   autocomplete: async (

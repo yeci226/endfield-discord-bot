@@ -49,6 +49,20 @@ manager.extend(
   }),
 );
 
+const reclusterManager = manager.recluster as any;
+const originalReclusterStart = reclusterManager?.start?.bind(reclusterManager);
+if (originalReclusterStart) {
+  reclusterManager.start = async (...args: any[]) => {
+    const wasRespawnEnabled = manager.respawn;
+    manager.respawn = false;
+    try {
+      return await originalReclusterStart(...args);
+    } finally {
+      manager.respawn = wasRespawnEnabled;
+    }
+  };
+}
+
 const logger = new Logger("Cluster Manager");
 
 manager.on("clusterCreate", (cluster) => {
@@ -70,8 +84,9 @@ manager.on("clusterCreate", (cluster) => {
   });
 
   cluster.on("death", () => {
-    logger.info(`Restarting Cluster ${cluster.id}`);
-    manager.recluster?.start();
+    logger.info(
+      `Cluster ${cluster.id} exited; cluster-manager respawn handles single-worker recovery`,
+    );
   });
 });
 
