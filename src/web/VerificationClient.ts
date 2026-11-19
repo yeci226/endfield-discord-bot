@@ -1,60 +1,111 @@
-import { EventEmitter } from "node:events";
+import crypto from "crypto";
 import { Logger } from "../utils/Logger";
 import { ExtendedClient } from "../structures/Client";
+import type { CustomDatabase } from "../utils/Database";
+
+export const CAPTCHA_TTL_MS = 15 * 60 * 1000;
+export const CAPTCHA_POLL_MS = 1000;
+const SESSION_KEY = (sid: string) => `captcha_session:${sid}`;
+const RESULT_KEY = (sid: string) => `captcha_result:${sid}`;
 
 /**
- * VerificationClient handles the in-memory bridge between the Web callback
- * and the Discord command execution.
+ * Bridge between the web callback (which may run on another cluster process)
+ * and the Discord command waiting for the Geetest result. All state lives in
+ * the shared database, nothing in memory:
  *
- * Flow:
- * 1. Command starts -> VerificationClient.onResult(sessionId, callback)
- * 2. Web callback (Browser) -> WebManager -> VerificationClient.emitResult(sessionId, result)
- * 3. Command receives result and continues.
+ * 1. /login: createSession() -> sessionId, shows the verify link, then
+ *    waitForResult(sessionId) (polls the database).
+ * 2. Browser POSTs /callback -> submitResult() writes `captcha_result:<sid>`.
+ * 3. waitForResult() reads it once, deletes the rows and resolves.
  */
 export class VerificationClient {
   private static logger = new Logger("VerificationClient");
-  private static events = new EventEmitter();
+  private static db: CustomDatabase | null = null;
 
   constructor(client?: ExtendedClient) {
-    // Client reference kept for potential future cross-cluster logic
+    if (client?.db) VerificationClient.db = client.db;
+  }
+
+  private static getDb(db?: CustomDatabase): CustomDatabase {
+    const d = db ?? VerificationClient.db;
+    if (!d) throw new Error("VerificationClient has no database bound");
+    return d;
+  }
+
+  /** Creates a pending captcha session and returns its unguessable id. */
+  public static createSession(userId?: string, db?: CustomDatabase): string {
+    const sid = crypto.randomBytes(18).toString("base64url");
+    VerificationClient.getDb(db).setWithTtl(
+      SESSION_KEY(sid),
+      { userId: userId ?? null, createdAt: Date.now() },
+      CAPTCHA_TTL_MS,
+    );
+    return sid;
   }
 
   /**
-   * Register a listener for a verification result.
+   * Called by the web callback. Returns false (and stores nothing) when the
+   * session does not exist / expired / already has a result.
    */
-  public static onResult(sessionId: string, callback: (result: any) => void) {
-    VerificationClient.logger.info(
-      `Registered listener for session: ${sessionId}`,
-    );
-    this.events.once(`result:${sessionId}`, callback);
-
-    // Timeout registration cleanup after 15 minutes
-    setTimeout(
-      () => {
-        this.events.removeAllListeners(`result:${sessionId}`);
-      },
-      15 * 60 * 1000,
-    );
+  public static submitResult(
+    sessionId: string,
+    result: unknown,
+    db?: CustomDatabase,
+  ): boolean {
+    const d = VerificationClient.getDb(db);
+    if (typeof sessionId !== "string" || !d.getFresh(SESSION_KEY(sessionId)))
+      return false;
+    if (d.getFresh(RESULT_KEY(sessionId)) !== null) return false;
+    d.setWithTtl(RESULT_KEY(sessionId), result, CAPTCHA_TTL_MS);
+    VerificationClient.logger.success("Result stored for a captcha session");
+    return true;
   }
 
   /**
-   * Emit a verification result from the web callback.
+   * Polls the database until the result arrives (then deletes it) or rejects
+   * on timeout. Leaves no timers or listeners behind.
    */
-  public static emitResult(sessionId: string, result: any) {
-    VerificationClient.logger.success(
-      `Emitting result for session: ${sessionId}`,
-    );
-    this.events.emit(`result:${sessionId}`, result);
+  public static waitForResult<T = any>(
+    sessionId: string,
+    timeoutMs: number = CAPTCHA_TTL_MS,
+    db?: CustomDatabase,
+    pollMs: number = CAPTCHA_POLL_MS,
+  ): Promise<T> {
+    const d = VerificationClient.getDb(db);
+    return new Promise<T>((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const cleanup = () => {
+        void d.delete(RESULT_KEY(sessionId));
+        void d.delete(SESSION_KEY(sessionId));
+      };
+      const tick = () => {
+        try {
+          const found = d.getFresh<T>(RESULT_KEY(sessionId));
+          if (found !== null) {
+            cleanup();
+            return resolve(found);
+          }
+          if (Date.now() >= deadline) {
+            cleanup();
+            return reject(new Error("Captcha verification timed out"));
+          }
+          setTimeout(tick, Math.min(pollMs, deadline - Date.now()));
+        } catch (e) {
+          reject(e);
+        }
+      };
+      tick();
+    });
   }
 
   /**
    * Dummy methods for compatibility with index.ts initialization
    */
   public start() {
-    VerificationClient.logger.info("Verification Bridge started (Local Mode)");
+    VerificationClient.logger.info("Verification bridge started (database)");
   }
 
   public stop() {
-    VerificationClient.logger.info("Verification Bridge stopped");
+    VerificationClient.logger.info("Verification bridge stopped");
   }
 }

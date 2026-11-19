@@ -509,7 +509,12 @@ const command: Command = {
           const new_captcha = captchaData?.new_captcha;
           const aigisSessionId = aigisData?.session_id;
 
-          const sessionId = Math.random().toString(36).substring(2, 12);
+          // Unguessable id, stored in the shared DB so /callback (which may
+          // run on another cluster) can hand the result back to us.
+          const sessionId = VerificationClient.createSession(
+            interaction.user.id,
+            db,
+          );
           const baseUrl =
             process.env.VERIFY_HUB_URL || "http://localhost:3000/endfield";
 
@@ -527,7 +532,7 @@ const command: Command = {
 
           const verifyUrl = `${baseUrl}/verify?${params.toString()}`;
 
-          VerificationClient.onResult(sessionId, async (captchaResult: any) => {
+          const onCaptchaResult = async (captchaResult: any) => {
             try {
               const loginRes = await loginByEmailPassword(
                 { email, password },
@@ -557,7 +562,14 @@ const command: Command = {
             } catch (e: any) {
               console.error("[Login] Captcha auto-retry failed:", e);
             }
-          });
+          };
+          // Poll the database for the result (15 min); never blocks the reply.
+          VerificationClient.waitForResult(sessionId, 15 * 60 * 1000, db).then(
+            onCaptchaResult,
+            (e: any) => {
+              console.warn("[Login] Captcha wait ended:", e?.message ?? e);
+            },
+          );
 
           const container = new ContainerBuilder().addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
