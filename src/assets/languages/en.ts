@@ -546,6 +546,11 @@ const langs: Record<string, any> = {
   // --- G2 (gacha leaderboard & storage) ---
 
   // --- G3 (gacha stats) ---
+  gacha_log_view_AccountNotOwned:
+    "That account does not belong to {user}. You can only view accounts that user has linked or created.",
+  gacha_log_view_PoolsNewer: "◀ Newer pools",
+  gacha_log_view_PoolsOlder: "Older pools ▶",
+  gacha_log_view_PoolsPage: "Pool list page {page} / {total}",
 
   // --- G4 (gacha rendering) ---
 };

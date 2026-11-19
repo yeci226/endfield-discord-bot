@@ -31,6 +31,7 @@ export async function gachaAutocomplete(
     const targetUser =
       (interaction.options.get("user")?.user as User) || interaction.user;
     // Autocomplete must stay local and fast: binding refreshes may call SKPort.
+    // Only the selected user's (default: the invoker's) own UIDs are listed.
     const cachedAccounts = await getAccounts(db, targetUser.id);
     const allRoles = mapPossibleUserRoles(cachedAccounts);
 
@@ -50,10 +51,11 @@ export async function gachaAutocomplete(
         seenAutoRawUids.set(r.rawUid, r.uid);
       } else {
         const existing = seenAutoRawUids.get(r.rawUid)!;
+        // Existence only: never parse a multi-MB log row for an autocomplete.
         const existingHasData =
-          (await db.get(`GACHA_LOG_${existing}`)) != null;
+          db.getRowToken(`GACHA_LOG_${existing}`) !== null;
         if (!existingHasData) {
-          const thisHasData = (await db.get(`GACHA_LOG_${r.uid}`)) != null;
+          const thisHasData = db.getRowToken(`GACHA_LOG_${r.uid}`) !== null;
           if (thisHasData) seenAutoRawUids.set(r.rawUid, r.uid);
         }
       }

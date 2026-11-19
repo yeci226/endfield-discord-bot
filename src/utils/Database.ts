@@ -205,6 +205,53 @@ export class CustomDatabase {
   }
 
   /**
+   * Cheap version token of one row, without reading or parsing it in JS:
+   * the stored text length and (optionally) one JSON field, both computed by
+   * SQLite. Returns null when the row does not exist. A row that is not valid
+   * JSON still reports its length (field is null).
+   * @param key Exact row ID
+   * @param jsonPath Optional SQLite json_extract path, e.g. '$.info.updatedAt'
+   */
+  public getRowToken(
+    key: string,
+    jsonPath?: string,
+  ): { length: number; field: string | null } | null {
+    const toToken = (row: { len: number; field?: unknown } | undefined) =>
+      row
+        ? {
+            length: Number(row.len),
+            field:
+              row.field === null || row.field === undefined
+                ? null
+                : String(row.field),
+          }
+        : null;
+    if (jsonPath === undefined) {
+      return toToken(
+        this.db
+          .prepare("SELECT length(json) AS len FROM json WHERE ID = ?")
+          .get(key) as { len: number } | undefined,
+      );
+    }
+    try {
+      return toToken(
+        this.db
+          .prepare(
+            "SELECT length(json) AS len, json_extract(json, ?) AS field FROM json WHERE ID = ?",
+          )
+          .get(jsonPath, key) as { len: number; field: unknown } | undefined,
+      );
+    } catch {
+      // malformed JSON: json_extract throws; the length alone is still a token
+      return toToken(
+        this.db
+          .prepare("SELECT length(json) AS len FROM json WHERE ID = ?")
+          .get(key) as { len: number } | undefined,
+      );
+    }
+  }
+
+  /**
    * Atomically claim a slot: sets key=value only if the stored value differs,
    * Returns true if this process claimed the slot (performed the write),
    * false if the key already held the same value (another process beat us).

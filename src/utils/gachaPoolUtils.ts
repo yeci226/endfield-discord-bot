@@ -72,3 +72,75 @@ export function paginateGachaOverviewPools<T extends GachaPoolLike>(
     totalPages,
   };
 }
+
+// ---- Pool select paging -------------------------------------------------
+// A Discord select holds 25 options: the "overview" entry plus at most 24 more.
+// With more pools than that the select pages: the newest 23 first (one slot left
+// for "older"), 22 per middle page (two paging slots), the rest on the last page.
+
+/** Value prefix of the "older / newer" options inside the pool select. */
+export const POOL_PAGE_VALUE_PREFIX = "__pp:";
+
+export function poolPageValue(page: number): string {
+  return `${POOL_PAGE_VALUE_PREFIX}${page}`;
+}
+
+/** The page a paging option value asks for, or null for any other value. */
+export function parsePoolPageValue(value: string | undefined | null): number | null {
+  if (!value || !value.startsWith(POOL_PAGE_VALUE_PREFIX)) return null;
+  const rest = value.slice(POOL_PAGE_VALUE_PREFIX.length);
+  if (!/^\d{1,4}$/.test(rest)) return null;
+  return Number(rest);
+}
+
+function poolPageBounds(count: number): Array<[number, number]> {
+  if (count <= 24) return [[0, count]];
+  const bounds: Array<[number, number]> = [[0, 23]];
+  let start = 23;
+  while (count - start > 23) {
+    bounds.push([start, start + 22]);
+    start += 22;
+  }
+  bounds.push([start, count]);
+  return bounds;
+}
+
+export interface PoolOptionPage<T> {
+  items: T[];
+  /** Clamped page index. */
+  page: number;
+  totalPages: number;
+  /** A page of older pools exists (page + 1). */
+  hasOlder: boolean;
+  /** A page of newer pools exists (page - 1). */
+  hasNewer: boolean;
+}
+
+/** `pools` newest first. */
+export function pagePoolOptions<T>(
+  pools: T[],
+  requestedPage: number,
+): PoolOptionPage<T> {
+  const bounds = poolPageBounds(pools.length);
+  const page = Math.max(0, Math.min(Math.trunc(requestedPage) || 0, bounds.length - 1));
+  const [from, to] = bounds[page];
+  return {
+    items: pools.slice(from, to),
+    page,
+    totalPages: bounds.length,
+    hasOlder: page < bounds.length - 1,
+    hasNewer: page > 0,
+  };
+}
+
+/** The select page that contains this pool (0 when it is not in the list). */
+export function findPoolPage<T extends { id: string }>(
+  pools: T[],
+  poolId: string,
+): number {
+  const index = pools.findIndex((p) => p.id === poolId);
+  if (index < 0) return 0;
+  const bounds = poolPageBounds(pools.length);
+  const page = bounds.findIndex(([from, to]) => index >= from && index < to);
+  return page < 0 ? 0 : page;
+}

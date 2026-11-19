@@ -14,8 +14,8 @@ import {
   getGachaStats,
   GachaLogData,
   migrateGachaLog,
-  updateLeaderboard,
 } from "../../../utils/gachaLogUtils";
+import { getCachedGachaStats } from "../gachaStatsCache";
 import {
   drawGachaStats,
   GachaType,
@@ -23,13 +23,76 @@ import {
 } from "../../../utils/gachaCanvasUtils";
 import moment from "moment";
 import {
+  findPoolPage,
   getGachaPityGroupId,
   isGachaPoolInCategory,
+  pagePoolOptions,
   paginateGachaOverviewPools,
+  parsePoolPageValue,
+  poolPageValue,
 } from "../../../utils/gachaPoolUtils";
 import { GachaContext } from "./context";
-import { getAllPossibleUserRoles } from "./accounts";
+import {
+  getAllPossibleUserRoles,
+  mapPossibleUserRoles,
+  PossibleUserRole,
+} from "./accounts";
 import { tryAutoLoadGachaLog } from "./autoLoad";
+
+/** Pure: is the stored nickname just the UID (or empty / "Unknown")? */
+export function isGenericNickname(
+  nickname: string | undefined,
+  targetUid: string,
+): boolean {
+  const rawUid = targetUid.replace("EF_CN_", "").replace("EF_", "");
+  return (
+    !nickname ||
+    nickname === targetUid ||
+    nickname === rawUid ||
+    nickname === "Unknown"
+  );
+}
+
+/** Pure: the nickname to draw for a log whose stored nickname is generic. */
+export function pickDisplayNickname(
+  stored: string | undefined,
+  targetUid: string,
+  roles: PossibleUserRole[],
+): string | undefined {
+  const found = roles.find((r) => r.uid === targetUid);
+  if (found) return found.nickname;
+  if (targetUid.startsWith("EF_GUEST_")) return "Guest";
+  return stored;
+}
+
+/**
+ * Pure: may `ownerId`'s log be opened under `requestedUid`? The UID has to be
+ * one of the owner's own: a linked game role (global / CN key form or the bare
+ * id the oldest logs used) or one of their guest logs (the guest key embeds
+ * the Discord id of its creator).
+ */
+export function resolveViewableGachaUid(
+  requestedUid: string,
+  ownerId: string,
+  ownerRoles: PossibleUserRole[],
+): { ok: true; uid: string } | { ok: false } {
+  const uid = String(requestedUid || "");
+  if (!uid) return { ok: false };
+  for (const r of ownerRoles) {
+    if (uid === r.uid || (r.rawUid && uid === String(r.rawUid))) {
+      return { ok: true, uid };
+    }
+  }
+  const guestPrefix = `EF_GUEST_${ownerId}_`;
+  if (
+    ownerId &&
+    uid.startsWith(guestPrefix) &&
+    /^[A-Za-z0-9_-]+$/.test(uid.slice(guestPrefix.length))
+  ) {
+    return { ok: true, uid };
+  }
+  return { ok: false };
+}
 
 export async function showGachaStats(
   ctx: GachaContext,
@@ -42,9 +105,14 @@ export async function showGachaStats(
 ) {
   const { interaction, tr, db } = ctx;
   const dbKey = `GACHA_LOG_${targetUid}`;
-  const data = await db.get<GachaLogData>(dbKey);
 
-  if (!data) {
+  // A repeat view reads only the small cache row and writes nothing; the log row
+  // (up to several MB of JSON) is parsed only when the log has changed.
+  const cached = await getCachedGachaStats(db, dbKey, (log) =>
+    getGachaStats(db, log),
+  );
+
+  if (!cached) {
     if (!skipAutoLoad) {
       const loaded = await tryAutoLoadGachaLog(ctx, targetUid);
       if (loaded) {
@@ -68,7 +136,12 @@ export async function showGachaStats(
     return;
   }
 
-  const stats = await getGachaStats(db, data);
+  const stats = cached.stats;
+
+  // The pool select's "older / newer" entries re-render the overview with
+  // another page of pool options.
+  let poolSelectPage = parsePoolPageValue(poolId);
+  if (poolSelectPage !== null) poolId = "";
 
   // Auto-correct pageType based on poolId if a specific pool is selected
   if (poolId && poolId !== "all") {
@@ -91,49 +164,39 @@ export async function showGachaStats(
     }
   }
 
-  const rawUid = targetUid.replace("EF_CN_", "").replace("EF_", "");
-
-  const allPossibleRoles = await getAllPossibleUserRoles(
-    interaction.user.id,
-    db,
-  );
-  const found = allPossibleRoles.find((r) => r.uid === targetUid);
-
-  if (
-    !data.info.nickname ||
-    data.info.nickname === targetUid ||
-    data.info.nickname === rawUid ||
-    data.info.nickname === "Unknown"
-  ) {
-    if (found) {
-      data.info.nickname = found.nickname;
-      await db.set(`GACHA_LOG_${targetUid}`, data);
-    } else if (targetUid.startsWith("EF_GUEST_")) {
-      data.info.nickname = "Guest";
+  // The card only needs the log's info block; it is part of the cache row.
+  // A generic nickname is fixed for display only (nothing is written back).
+  const info = { ...cached.info };
+  if (isGenericNickname(info.nickname, targetUid)) {
+    const viewerRoles = async (refresh: boolean) =>
+      refresh
+        ? getAllPossibleUserRoles(interaction.user.id, db)
+        : mapPossibleUserRoles(await getAccounts(db, interaction.user.id));
+    let roles = await viewerRoles(false);
+    // Refresh the bindings only when the cached mapping does not know this UID
+    // and the stats had to be computed anyway.
+    if (!cached.hit && !roles.some((r) => r.uid === targetUid)) {
+      roles = await viewerRoles(true);
     }
+    info.nickname = pickDisplayNickname(info.nickname, targetUid, roles);
   }
-
-  // Always sync leaderboard to ensure any outdated display names or nicknames are fixed
-  try {
-    const accountIndex =
-      allPossibleRoles.findIndex((r) => r.uid === targetUid) + 1;
-    await updateLeaderboard(
-      db,
-      targetUid,
-      data,
-      interaction.user.displayName,
-      accountIndex > 0 ? accountIndex : undefined,
-      found?.nickname || data.info.nickname,
-    );
-  } catch (e) {
-    console.error(`[Leaderboard] Sync failed for ${targetUid}:`, e);
-  }
+  const data: GachaLogData = { characterList: [], weaponList: [], info };
 
   // Filter pools based on current category
   const targetStats = pageType === "weapon" ? stats.weapon : stats.char;
   const filteredPools = targetStats.pools.filter((p: any) =>
     isGachaPoolInCategory(p, pageType),
   );
+
+  if (poolSelectPage === null) {
+    poolSelectPage =
+      poolId && poolId !== "all" ? findPoolPage(filteredPools, poolId) : 0;
+  }
+  const poolOptionPage = pagePoolOptions(filteredPools, poolSelectPage);
+  const pageSuffix = {
+    page: String(poolOptionPage.page + 1),
+    total: String(poolOptionPage.totalPages),
+  };
 
   const poolRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
@@ -146,7 +209,7 @@ export async function showGachaStats(
             value: "all",
             default: !poolId,
           },
-          ...filteredPools.slice(0, 24).map((p) => {
+          ...poolOptionPage.items.map((p) => {
             let description = undefined;
             if (p.startTs && p.endTs) {
               const formatTs = (ts: string) => {
@@ -167,6 +230,24 @@ export async function showGachaStats(
               default: p.id === poolId,
             };
           }),
+          ...(poolOptionPage.hasNewer
+            ? [
+                {
+                  label: tr("gacha_log_view_PoolsNewer"),
+                  value: poolPageValue(poolOptionPage.page - 1),
+                  description: tr("gacha_log_view_PoolsPage", pageSuffix),
+                },
+              ]
+            : []),
+          ...(poolOptionPage.hasOlder
+            ? [
+                {
+                  label: tr("gacha_log_view_PoolsOlder"),
+                  value: poolPageValue(poolOptionPage.page + 1),
+                  description: tr("gacha_log_view_PoolsPage", pageSuffix),
+                },
+              ]
+            : []),
         ]),
     );
 
@@ -354,14 +435,41 @@ export async function handleGachaView(
   const targetUidOption = interaction.options.getString("account");
   let targetUid = targetUidOption;
 
+  // The log of someone else stays viewable only through `user:`; `account:`
+  // must name one of that user's own UIDs (never an arbitrary key).
+  if (targetUid) {
+    const ownerRoles = mapPossibleUserRoles(
+      await getAccounts(db, targetUser.id),
+    );
+    const allowed = resolveViewableGachaUid(
+      targetUid,
+      targetUser.id,
+      ownerRoles,
+    );
+    if (!allowed.ok) {
+      await interaction.editReply({
+        content: tr("gacha_log_view_AccountNotOwned", {
+          user: targetUser.toString(),
+        }),
+      });
+      return;
+    }
+    targetUid = allowed.uid;
+  }
+
   if (!targetUid) {
     const userId = targetUser.id;
-    const allRoles = await getAllPossibleUserRoles(userId, db);
+    // Cached binding mapping first (no SKPort call); refresh only when the
+    // user has no known roles at all.
+    let allRoles = mapPossibleUserRoles(await getAccounts(db, userId));
+    if (allRoles.length === 0) {
+      allRoles = await getAllPossibleUserRoles(userId, db);
+    }
 
     if (allRoles.length > 0) {
       // Try to find the first bound role that actually has gacha log data
       for (const role of allRoles) {
-        const hasData = await db.get(`GACHA_LOG_${role.uid}`);
+        const hasData = db.getRowToken(`GACHA_LOG_${role.uid}`) !== null;
         if (hasData) {
           targetUid = role.uid;
           break;
@@ -475,9 +583,9 @@ export async function handleGachaView(
     targetUser.id === interaction.user.id &&
     targetUid !== "EF_undefined"
   ) {
-    const currentData = await db.get(`GACHA_LOG_${targetUid}`);
+    const currentData = db.getRowToken(`GACHA_LOG_${targetUid}`);
     if (!currentData) {
-      const recoveryData = await db.get(`GACHA_LOG_EF_undefined`);
+      const recoveryData = db.getRowToken(`GACHA_LOG_EF_undefined`);
       if (recoveryData) {
         const recoverBtn = new ButtonBuilder()
           .setCustomId(`gacha:log_recover:${targetUid}`)

@@ -4,6 +4,13 @@ import moment from "moment";
 import { getPoolMetadata } from "./gachaApi";
 import { GachaLogData, GachaRecord, isGachaPull, isPullFree } from "./gachaTypes";
 
+/**
+ * Version of the statistics algorithm. Cached stats (gachaStatsCache.ts) carry
+ * the version they were computed with; bump this whenever getGachaStats can
+ * return different numbers for the same log.
+ */
+export const ENGINE_VERSION = 2;
+
 const STANDARD_SIX_STARS = [
   "chr_0009_azrila",
   "chr_0015_lifeng",
@@ -11,6 +18,89 @@ const STANDARD_SIX_STARS = [
   "chr_0026_lastrite",
   "chr_0029_pograni",
 ];
+
+export type FeaturedStatus = "featured" | "offRate" | "unknown";
+
+function sumMapValues(m: Map<string, number>): number {
+  let n = 0;
+  for (const v of m.values()) n += v;
+  return n;
+}
+
+/** Pools where a 6-star is either the rate-up item or an off-rate one. */
+export function isLimitedRateUpPool(record: {
+  poolType?: string;
+  poolName?: string;
+}): boolean {
+  return !!(
+    record.poolType?.includes("Special") ||
+    record.poolType?.includes("Rerun") ||
+    record.poolType?.includes("WeaponPool") ||
+    record.poolName?.includes("特選")
+  );
+}
+
+/**
+ * Was this 6-star the pool's rate-up item? Resolution order:
+ *   1. pool metadata (up6 ids, then up6 names),
+ *   2. the item's name in the pool title,
+ *   3. the standard (permanent) six-star list: off-rate,
+ *   4. otherwise "unknown" - never assumed featured.
+ * Pure: takes plain data only.
+ */
+export function classifyFeaturedSixStar(
+  record: GachaRecord,
+  name: string | undefined,
+  pMeta: any,
+  standardSixStars: ReadonlySet<string>,
+): FeaturedStatus {
+  const recordCid = String(record.charId || record.weaponId || "").replace(
+    "icon_",
+    "",
+  );
+
+  // Only the CURRENT up6 target counts (rotate_list is ignored on purpose).
+  const upCids: string[] = [];
+  if (pMeta?.all) {
+    const upName = pMeta.up6_name;
+    const upItemName = pMeta.up6_item_name;
+    if (upName || upItemName) {
+      for (const a of pMeta.all) {
+        if (
+          a.rarity >= 6 &&
+          (a.name === upName ||
+            a.name === upItemName ||
+            (upItemName && upItemName.includes(a.name)))
+        ) {
+          upCids.push(String(a.id).replace("icon_", ""));
+        }
+      }
+    }
+  }
+  if (upCids.length > 0) {
+    return upCids.includes(recordCid) ? "featured" : "offRate";
+  }
+
+  if (pMeta?.up6_item_name || pMeta?.up6_name) {
+    const upName = pMeta.up6_item_name || pMeta.up6_name;
+    return name === upName ||
+      record.charName === upName ||
+      record.weaponName === upName
+      ? "featured"
+      : "offRate";
+  }
+
+  const poolName = record.poolName || "";
+  if (
+    poolName &&
+    ((name && poolName.includes(name)) ||
+      (record.charName && poolName.includes(record.charName)))
+  ) {
+    return "featured";
+  }
+  if (recordCid && standardSixStars.has(recordCid)) return "offRate";
+  return "unknown";
+}
 
 export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
   // Filter on read so previously saved gift events no longer inflate stats.
@@ -100,6 +190,7 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
       const poolFreeTotalCounters = new Map<string, number>(); // poolId -> free total count
       const poolSixStarPullCounters = new Map<string, number>(); // poolId -> non-free 6* count
       const poolFeaturedSixCounters = new Map<string, number>(); // poolId -> non-free featured 6* count
+      const poolUnknownFeaturedCounters = new Map<string, number>(); // poolId -> 6* whose featured status is unknown
       let currentFreeBlock: any = null;
       let pityResetApplied = false;
 
@@ -174,102 +265,19 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             if (found) name = name || found.name;
           }
 
-          let isOffRate = false;
-          let isFeatured = false;
           const rarityNum = Number(record.rarity || 0);
-
-          if (
-            rarityNum >= 6 &&
-            (record.poolType?.includes("Special") ||
-              record.poolType?.includes("Rerun") ||
-              record.poolType?.includes("WeaponPool") ||
-              record.poolName?.includes("特選"))
-          ) {
-            // Priority 1: Match by ID
-            const recordCid = String(
-              record.charId || record.weaponId || "",
-            ).replace("icon_", "");
-
-            // Try to resolve only the CURRENT UP character ID from pool metadata.
-            // rotate_list is intentionally ignored here: if a 6-star is not the current
-            // up6 target for this pool, it should be treated as off-rate.
-            let upCids: string[] = [];
-            if (pMeta?.all) {
-              const upName = pMeta.up6_name;
-              const upItemName = pMeta.up6_item_name;
-
-              if (upName || upItemName) {
-                for (const a of pMeta.all) {
-                  if (
-                    a.rarity >= 6 &&
-                    (a.name === upName ||
-                      a.name === upItemName ||
-                      (upItemName && upItemName.includes(a.name)))
-                  ) {
-                    upCids.push(a.id.replace("icon_", ""));
-                  }
-                }
-              }
-            }
-
-            if (upCids.length > 0) {
-              if (upCids.includes(recordCid)) {
-                isFeatured = true;
-              } else {
-                isOffRate = true;
-              }
-            } else {
-              // Priority 2: Traditional Name Match
-              if (pMeta?.up6_item_name || pMeta?.up6_name) {
-                const upName = pMeta.up6_item_name || pMeta.up6_name;
-                // Compare with current localized name or standard name
-                if (
-                  name === upName ||
-                  record.charName === upName ||
-                  record.weaponName === upName
-                ) {
-                  isFeatured = true;
-                } else {
-                  isOffRate = true;
-                }
-              } else {
-                // Priority 3: Name match in pool title fallback
-                if (
-                  record.poolName &&
-                  (record.poolName.includes(name || "") ||
-                    (record.charName &&
-                      record.poolName.includes(record.charName)))
-                ) {
-                  isFeatured = true;
-                } else if (dynamicStandardSixStars.has(recordCid)) {
-                  // Priority 4: Standard List Fallback (dynamic + hardcoded)
-                  isOffRate = true;
-                } else {
-                  isFeatured = true;
-                }
-              }
-
-              // Final Fallback for featured status in Limited Pools
-              if (
-                !isFeatured &&
-                !isOffRate &&
-                rarityNum >= 6 &&
-                (record.poolType?.includes("Special") ||
-                  record.poolType?.includes("Rerun") ||
-                  record.poolType?.includes("WeaponPool") ||
-                  record.poolName?.includes("特選"))
-              ) {
-                const recordCid = String(
-                  record.charId || record.weaponId || "",
-                ).replace("icon_", "");
-                if (dynamicStandardSixStars.has(recordCid)) {
-                  isOffRate = true;
-                } else {
-                  isFeatured = true;
-                }
-              }
-            }
-          }
+          const featuredStatus: FeaturedStatus | null =
+            rarityNum >= 6 && isLimitedRateUpPool(record)
+              ? classifyFeaturedSixStar(
+                  record,
+                  name,
+                  pMeta,
+                  dynamicStandardSixStars,
+                )
+              : null;
+          const isFeatured = featuredStatus === "featured";
+          const isOffRate = featuredStatus === "offRate";
+          const isUnknownFeatured = featuredStatus === "unknown";
 
           allHistory.push({
             ...record,
@@ -282,10 +290,18 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             pityGroupId: gId,
             isFeatured,
             isOffRate,
+            ...(isUnknownFeatured ? { isUnknownFeatured: true } : {}),
             isFree: isActuallyFree,
           });
 
-          if (rarityNum >= 6) {
+          if (rarityNum >= 6 && isUnknownFeatured) {
+            // Unknown status: counted in neither numerator nor denominator of
+            // the win rate, but reported so the card can say so later.
+            poolUnknownFeaturedCounters.set(
+              pId,
+              (poolUnknownFeaturedCounters.get(pId) || 0) + 1,
+            );
+          } else if (rarityNum >= 6) {
             // Count all 6-stars (including free expedited) for win-rate tracking
             poolSixStarPullCounters.set(
               pId,
@@ -303,7 +319,10 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
             if (rarityNum >= 6) {
               pitySix = 0;
               pityLabel = 0;
-              if (isFeatured) {
+              // Pity bookkeeping keeps the old assumption for unknown 6-stars
+              // (they reset the hard-guarantee counter); only the win rate
+              // stopped counting them.
+              if (isFeatured || isUnknownFeatured) {
                 featuredPity = 0;
                 // Non-shared 120: Reset pool-specific featured pity
                 featuredCounters.set(pId, 0);
@@ -339,6 +358,8 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         poolFreeTotalMap: Object.fromEntries(poolFreeTotalCounters),
         poolSixStarPullMap: Object.fromEntries(poolSixStarPullCounters),
         poolFeaturedSixMap: Object.fromEntries(poolFeaturedSixCounters),
+        poolUnknownFeaturedMap: Object.fromEntries(poolUnknownFeaturedCounters),
+        unknownFeaturedCount: sumMapValues(poolUnknownFeaturedCounters),
         hasFeaturedMap: Object.fromEntries(hasFeaturedMap),
       } as any;
     }
@@ -421,6 +442,12 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
       total: globalTotal,
       nonFreeTotal: globalNonFree,
       freeTotal: globalFree,
+      // 6-stars in limited/weapon pools whose featured status could not be
+      // resolved (not in any win-rate number).
+      unknownFeaturedCount: Object.values(summary).reduce(
+        (sum, s) => sum + ((s as any).unknownFeaturedCount || 0),
+        0,
+      ),
       pools: sortedPools.map((p) => {
         // Find if this specific pool had free pulls
         let freeCount = 0;
@@ -452,6 +479,12 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           featuredSixCount:
             Object.values(summary).reduce(
               (sum, s) => sum + ((s as any).poolFeaturedSixMap?.[p.id] || 0),
+              0,
+            ) || 0,
+          unknownFeaturedCount:
+            Object.values(summary).reduce(
+              (sum, s) =>
+                sum + ((s as any).poolUnknownFeaturedMap?.[p.id] || 0),
               0,
             ) || 0,
         };
