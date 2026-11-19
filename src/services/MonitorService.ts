@@ -141,8 +141,10 @@ export class MonitorService {
           else state.retryAt = Date.now() + retryDelayMs(config);
           this.logger.warn(`Reminder ${permanent ? "paused" : `retry in ${Math.round(retryDelayMs(config) / 60000)} min`} (${error.code || "upstream"}).`);
         }
-        const latest = await this.client.db.get<ReminderConfig>(id);
-        if (latest?.revision === config.revision) await this.client.db.set(stateKey, state);
+        // Check-and-write in one transaction: a rule edited or deleted meanwhile (any cluster) keeps its fresh state.
+        this.client.db.transaction((store) => {
+          if (store.get<ReminderConfig>(id)?.revision === config.revision) store.set(stateKey, state);
+        });
       }
     } catch (error) { this.logger.error(`Monitoring loop failed: ${error}`); }
     finally { this.isRunning = false; }

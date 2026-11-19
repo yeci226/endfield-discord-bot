@@ -232,6 +232,30 @@ async function main() {
     },
   );
 
+  // a broadcast that throws (cluster restarting) must not use up retry attempts
+  await withService(
+    async (db) => {
+      await db.set("news.baseline.v1", { at: 1 });
+      await db.set(newsSubKey("g1", "c1"), sub("g1", "c1", now - 50 * HOUR));
+    },
+    async ({ svc, db, sentLog }) => {
+      const realBroadcast = svc.client.cluster.broadcastEval;
+      let calls = 0;
+      svc.client.cluster.broadcastEval = async (...args: any[]) => {
+        calls++;
+        if (calls <= 6) throw new Error("cluster restarting");
+        return realBroadcast(...args);
+      };
+      const items = [newsItem("21", HOUR, now)];
+      for (let i = 0; i < 6; i++) await svc.processFeed(items, false);
+      assert.equal(await db.get("news_dispatch.21.c1"), null, "no attempt recorded for a failed broadcast");
+      assert.equal((await db.get<any>("news_history.21")).complete, false);
+      await svc.processFeed(items, false);
+      assert.deepEqual(sentLog, ["send:c1"], "delivered once the cluster is back");
+      assert.equal((await db.get<any>("news_dispatch.21.c1")).delivered, true);
+    },
+  );
+
   // DM subscriptions are really delivered (by user id, or by channel for migrated legacy rows)
   await withService(
     async (db) => {

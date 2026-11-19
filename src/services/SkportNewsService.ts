@@ -93,12 +93,16 @@ export interface ClusterNewsResult {
   messageId?: string;
   code?: number;
   message?: string;
+  /** The broadcast itself failed: nothing is known about this delivery, so it must not use up a retry. */
+  skip?: boolean;
 }
 
 /**
  * Runs inside broadcastEval on every cluster, so it must be self-contained
- * (no imports, no helpers) and use Promise chains: with the ES6 build target an
- * async function is compiled to a helper that does not exist remotely.
+ * (no imports, no module-level helpers). Promise chains are used on purpose, as
+ * in cardNotification: the ES6 build target compiles async functions to a
+ * helper that may not exist in the evaluated context. A test runs the
+ * stringified function in a bare vm context to keep this true.
  * Each cluster only answers for guilds it owns.
  */
 export function deliverNewsOnCluster(
@@ -404,11 +408,13 @@ export class SkportNewsService {
     for (let i = 0; i < guildWork.length; i += GUILD_CHUNK) {
       const chunk = guildWork.slice(i, i + GUILD_CHUNK);
       let perCluster: ClusterNewsResult[][] = [];
+      let broadcastFailed = false;
       try {
         perCluster = await this.client.cluster.broadcastEval(deliverNewsOnCluster, {
           context: { payload, work: chunk },
         });
       } catch (error: any) {
+        broadcastFailed = true;
         this.logger.error(`News broadcast failed: ${error.message}`);
       }
       for (const results of perCluster) {
@@ -417,7 +423,14 @@ export class SkportNewsService {
       for (const w of chunk) {
         // No cluster owns the guild/channel (or the broadcast failed): retry later, not a permanent error.
         if (!outcomes.has(w.suffix))
-          outcomes.set(w.suffix, { suffix: w.suffix, ok: false, message: "no owner" });
+          outcomes.set(w.suffix, {
+            suffix: w.suffix,
+            ok: false,
+            message: broadcastFailed ? "broadcast failed" : "no owner",
+            // A failed broadcast says nothing about the channel: leave the item pending, free of charge.
+            // "No owner" after a successful broadcast does count, so orphaned guilds settle.
+            skip: broadcastFailed,
+          });
       }
     }
 
@@ -482,6 +495,7 @@ export class SkportNewsService {
       return true;
     }
 
+    if (outcome?.skip) return false;
     const code = outcome?.code;
     this.logger.warn(
       `News ${item.id} -> ${subKeyOf(w.sub)} failed (${code ?? "no code"}): ${outcome?.message ?? "unknown"}`,
