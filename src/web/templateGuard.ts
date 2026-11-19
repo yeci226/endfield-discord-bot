@@ -15,6 +15,34 @@ const PROXY_MARK = "/api/proxy?url=";
 
 export type TemplateCheck = { ok: true } | { ok: false; reason: string };
 
+/**
+ * Templates saved by the editor hold absolute links to the editor's own
+ * static assets (https://<editor host>/assets/...). Those are ours, not an
+ * outbound fetch target, so they pass when the path stays under /assets.
+ */
+function isOwnAssetUrl(v: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return false;
+  }
+  const own = [process.env.EDITOR_PUBLIC_URL, "http://localhost:3838"];
+  const isOwn = own.some((o) => {
+    try {
+      return !!o && new URL(o).origin === u.origin;
+    } catch {
+      return false;
+    }
+  });
+  if (!isOwn || u.username || u.password) return false;
+  // URL parsing has already resolved any ".." segments
+  return (
+    u.pathname.startsWith("/assets/") ||
+    u.pathname.startsWith("/endfield/assets/")
+  );
+}
+
 function checkImageRef(v: string): string | null {
   const proxyAt = v.indexOf(PROXY_MARK);
   if (proxyAt !== -1) {
@@ -29,6 +57,7 @@ function checkImageRef(v: string): string | null {
     return c.ok ? null : `image url refused (${c.reason})`;
   }
   if (/^https?:\/\//i.test(v)) {
+    if (isOwnAssetUrl(v)) return null;
     const c = validateProxyUrl(v);
     return c.ok ? null : `image url refused (${c.reason})`;
   }

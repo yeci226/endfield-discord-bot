@@ -66,3 +66,30 @@ bad({ background: { url: "//evil.com/a.png" } });
 }
 
 console.log("templateGuard tests passed");
+
+// Templates already saved in production link the editor's own assets absolutely.
+process.env.EDITOR_PUBLIC_URL = "https://editor.example.test";
+ok({ fabricJson: { objects: [{ type: "image", src: "https://editor.example.test/assets/phase/1.png" }] } });
+ok({
+  fabricJson: {
+    objects: [
+      {
+        type: "image",
+        src:
+          "https://editor.example.test/api/proxy?url=" +
+          encodeURIComponent("https://static.skport.com/a.png"),
+      },
+    ],
+  },
+});
+bad({ background: { url: "https://editor.example.test/api/profile/x" } });
+bad({ background: { url: "https://editor.example.test/assets/../../.env" } });
+bad({ background: { url: "https://editor.example.test.evil.com/assets/a.png" } });
+bad({ background: { url: "https://user@editor.example.test/assets/a.png" } });
+bad({
+  background: {
+    url:
+      "https://editor.example.test/api/proxy?url=" +
+      encodeURIComponent("http://127.0.0.1/x"),
+  },
+});
