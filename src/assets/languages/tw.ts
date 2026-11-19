@@ -505,6 +505,19 @@ const langs: Record<string, any> = {
   crisis_Card_Weapon: "武器",
 
   // --- G1 (gacha security) ---
+  gacha_uid_not_owned: "🔒 這個 UID 不屬於你綁定的帳號或你的訪客紀錄。",
+  gacha_component_not_yours:
+    "🔒 只有執行這個指令的人可以操作這些按鈕，請自己執行一次指令。",
+  gacha_import_url_refused:
+    "🚫 這個連結不是官方終末地紀錄頁面的網址，所以沒有使用。請回到遊戲內重新複製連結。",
+  gacha_import_url_invalid:
+    "⚠️ 無法讀取這個連結或 Token，請重新複製並確認內容完整。",
+  gacha_log_load_NoAccountForUid:
+    "⚠️ 你綁定的帳號中沒有擁有這個 UID 的帳號，所以沒有匯入。請先綁定該帳號，或改選其他 UID。",
+  gacha_log_load_incomplete:
+    "⚠️ 已匯入，但有部分內容讀取失敗而缺漏：\n{parts}\n已讀到的部分已儲存，請稍後再匯入一次補齊。",
+  gacha_import_part_weapon_pool: "武器池 {poolId}",
+  gacha_import_part_weapon_list: "武器池清單",
 
   // --- G2 (gacha leaderboard & storage) ---
 

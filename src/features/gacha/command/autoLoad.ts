@@ -4,8 +4,60 @@ import {
 import {
   fetchAndMergeGachaLogFromAccount,
 } from "../../../utils/gachaLogUtils";
+import {
+  IncompleteFetch,
+  takeIncompleteFetches,
+} from "../gachaApi";
+import { MessageFlags } from "discord.js";
 import { GachaContext } from "./context";
 import { getAllPossibleUserRoles, findLinkedAccount } from "./accounts";
+
+/** Human label of a character pool type (the importer's raw type name otherwise). */
+export function charPoolTypeLabel(rawPoolType: string, tr: any): string {
+  const t = String(rawPoolType || "");
+  if (t.includes("Standard")) return tr("gacha_log_load_pool_type_standard");
+  if (t.includes("Rerun")) return tr("gacha_log_stats_RerunCharPool");
+  if (t.includes("Special")) return tr("gacha_log_load_pool_type_limited");
+  if (t.includes("Beginner")) return tr("gacha_log_load_pool_type_beginner");
+  return t.replace("E_CharacterGachaPoolType_", "");
+}
+
+/** One line per part of an import that could not be fetched. */
+export function describeIncompleteFetches(
+  incomplete: IncompleteFetch[],
+  tr: any,
+): string[] {
+  return incomplete.map((item) => {
+    const name =
+      item.poolType === "WeaponPool"
+        ? item.poolId
+          ? tr("gacha_import_part_weapon_pool", { poolId: item.poolId })
+          : tr("gacha_import_part_weapon_list")
+        : charPoolTypeLabel(item.poolType, tr);
+    return `• ${name} (${item.reason})`;
+  });
+}
+
+/**
+ * After an import: if parts of the history could not be fetched, say so
+ * instead of letting the result pass for a complete one.
+ */
+export async function notifyIncompleteImport(
+  ctx: GachaContext,
+  onProgressUpdate: (message: string) => void,
+): Promise<boolean> {
+  const incomplete = takeIncompleteFetches(onProgressUpdate);
+  if (incomplete.length === 0) return false;
+  try {
+    await ctx.interaction.followUp({
+      content: ctx.tr("gacha_log_load_incomplete", {
+        parts: describeIncompleteFetches(incomplete, ctx.tr).join("\n"),
+      }),
+      flags: MessageFlags.Ephemeral,
+    });
+  } catch {}
+  return true;
+}
 
 export function buildProgressHandlers(ctx: GachaContext) {
   const { interaction, tr, isZhLocale } = ctx;
@@ -14,17 +66,8 @@ export function buildProgressHandlers(ctx: GachaContext) {
   let lastRenderedProgress = "";
   let progressTimer: NodeJS.Timeout | null = null;
 
-  const mapCharPoolTypeName = (rawPoolType: string): string => {
-    const t = String(rawPoolType || "");
-    if (t.includes("Standard"))
-      return tr("gacha_log_load_pool_type_standard");
-    if (t.includes("Rerun")) return tr("gacha_log_stats_RerunCharPool");
-    if (t.includes("Special"))
-      return tr("gacha_log_load_pool_type_limited");
-    if (t.includes("Beginner"))
-      return tr("gacha_log_load_pool_type_beginner");
-    return t;
-  };
+  const mapCharPoolTypeName = (rawPoolType: string): string =>
+    charPoolTypeLabel(rawPoolType, tr);
 
   const onProgressUpdate = (raw: string) => {
     const charMatch = raw.match(
@@ -127,6 +170,7 @@ export async function tryAutoLoadGachaLog(
         matchedRole?.nickname,
       );
       stop();
+      await notifyIncompleteImport(ctx, onProgressUpdate);
       return true;
     } catch {
       stop();

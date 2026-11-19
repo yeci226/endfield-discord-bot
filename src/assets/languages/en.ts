@@ -526,6 +526,20 @@ const langs: Record<string, any> = {
   crisis_Card_Weapon: "Weapon",
 
   // --- G1 (gacha security) ---
+  gacha_uid_not_owned:
+    "🔒 That UID is not one of your linked accounts or guest records.",
+  gacha_component_not_yours:
+    "🔒 Only the person who ran this command can use these controls. Run the command yourself.",
+  gacha_import_url_refused:
+    "🚫 That link does not point to the official Endfield records page, so it was not used. Copy the link again from inside the game.",
+  gacha_import_url_invalid:
+    "⚠️ That link or token could not be read. Copy it again and check it is complete.",
+  gacha_log_load_NoAccountForUid:
+    "⚠️ None of your linked accounts owns that UID, so nothing was imported. Link the account that owns it, or pick another UID.",
+  gacha_log_load_incomplete:
+    "⚠️ Imported, but some parts could not be loaded and are missing:\n{parts}\nWhat was loaded has been saved. Run the import again later to fill the gaps.",
+  gacha_import_part_weapon_pool: "Weapon banner {poolId}",
+  gacha_import_part_weapon_list: "Weapon banner list",
 
   // --- G2 (gacha leaderboard & storage) ---
 
