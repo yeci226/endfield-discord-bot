@@ -11,7 +11,11 @@ import {
   POOL_TYPES,
   RawFetchedGacha,
 } from "./gachaApi";
-import { lbKey, updateLeaderboard } from "./gachaLeaderboard";
+import {
+  invalidateLeaderboardCache,
+  lbKey,
+  updateLeaderboard,
+} from "./gachaLeaderboard";
 import { GachaApiError, GachaLogData, GachaRecord, isGachaPull } from "./gachaTypes";
 
 interface SimPoolRecordChar {
@@ -700,7 +704,7 @@ export function commitGachaLogMigration(
 ): GachaLogData | null {
   const sourceKey = `GACHA_LOG_${sourceUid}`;
   const targetKey = `GACHA_LOG_${targetUid}`;
-  return db.transaction((store) => {
+  const migrated = db.transaction((store) => {
     const stored = store.get<GachaLogData>(sourceKey);
     if (!stored) return null;
     const sourceData = normalizeStored(stored, sourceUid, "en-us");
@@ -766,6 +770,8 @@ export function commitGachaLogMigration(
     }
     return updatedData;
   });
+  if (migrated) invalidateLeaderboardCache(db);
+  return migrated;
 }
 
 function laterSeqId(a?: string, b?: string): string | undefined {
@@ -875,6 +881,7 @@ export async function clearGachaLog(
   });
 
   if (!outcome) return false;
+  invalidateLeaderboardCache(db); // the row may have been deleted in the transaction
   if (outcome.data) await updateLeaderboard(db, uid, outcome.data);
   return true;
 }

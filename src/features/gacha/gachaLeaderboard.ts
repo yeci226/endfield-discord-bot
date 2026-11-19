@@ -52,9 +52,85 @@ function isGachaLogSubset(
   return true;
 }
 
+/** What the alias check needs from the database: the logs, and (optionally) a cheap version token to cache by. */
+export type AliasDedupDb = Pick<CustomDatabase, "get"> &
+  Partial<Pick<CustomDatabase, "getRowToken">>;
+
+/** Outcome of comparing the two logs of one EF / EF_CN pair; independent of the board rows. */
+interface AliasVerdict {
+  globalIsSubset: boolean;
+  cnIsSubset: boolean;
+}
+
+const aliasVerdicts = new WeakMap<
+  object,
+  Map<string, { tokens: string; verdict: AliasVerdict | null }>
+>();
+
+function logToken(db: AliasDedupDb, uid: string): string | null {
+  const t = db.getRowToken?.(`GACHA_LOG_${uid}`, "$.info.updatedAt");
+  return t ? `${t.length}:${t.field ?? ""}` : null;
+}
+
+/**
+ * Compares the two logs of an alias pair (null = not a comparable pair). The
+ * verdict is cached per pair, keyed by both log rows' version tokens
+ * (stored length + info.updatedAt), so a view parses the logs again only after
+ * one of them changed. Without getRowToken nothing is cached.
+ */
+async function aliasVerdict(
+  db: AliasDedupDb,
+  globalUid: string,
+  cnUid: string,
+  rawUid: string,
+): Promise<AliasVerdict | null> {
+  const tokens =
+    db.getRowToken
+      ? [logToken(db, globalUid), logToken(db, cnUid)]
+      : [null, null];
+  const cacheable = tokens[0] !== null && tokens[1] !== null;
+  const pairKey = `${globalUid}|${cnUid}`;
+  let perDb = aliasVerdicts.get(db);
+  if (cacheable) {
+    const hit = perDb?.get(pairKey);
+    if (hit && hit.tokens === tokens.join("|")) return hit.verdict;
+  }
+
+  const [globalData, cnData] = await Promise.all([
+    db.get<GachaLogData>(`GACHA_LOG_${globalUid}`),
+    db.get<GachaLogData>(`GACHA_LOG_${cnUid}`),
+  ]);
+  let verdict: AliasVerdict | null = null;
+  if (globalData && cnData) {
+    const normalizeUid = (uid: string | undefined) =>
+      String(uid || "")
+        .replace(/^EF_CN_/, "")
+        .replace(/^EF_/, "");
+    if (
+      normalizeUid(globalData.info?.uid) === rawUid &&
+      normalizeUid(cnData.info?.uid) === rawUid &&
+      globalData.info?.serverId &&
+      String(globalData.info.serverId) === String(cnData.info?.serverId)
+    ) {
+      verdict = {
+        globalIsSubset: isGachaLogSubset(globalData, cnData),
+        cnIsSubset: isGachaLogSubset(cnData, globalData),
+      };
+    }
+  }
+  if (cacheable) {
+    if (!perDb) {
+      perDb = new Map();
+      aliasVerdicts.set(db, perDb);
+    }
+    perDb.set(pairKey, { tokens: tokens.join("|"), verdict });
+  }
+  return verdict;
+}
+
 /** Filters duplicate EF/EF_CN rows only when one same-role pull history is a subset of the other. */
 export async function deduplicateLeaderboardAliases(
-  db: Pick<CustomDatabase, "get">,
+  db: AliasDedupDb,
   entries: Record<string, GachaLeaderboardEntry>,
 ): Promise<Record<string, GachaLeaderboardEntry>> {
   const filtered = { ...entries };
@@ -65,25 +141,9 @@ export async function deduplicateLeaderboardAliases(
     const globalUid = `EF_${rawUid}`;
     if (!filtered[globalUid]) continue;
 
-    const [globalData, cnData] = await Promise.all([
-      db.get<GachaLogData>(`GACHA_LOG_${globalUid}`),
-      db.get<GachaLogData>(`GACHA_LOG_${cnUid}`),
-    ]);
-    if (!globalData || !cnData) continue;
-    const normalizeUid = (uid: string | undefined) =>
-      String(uid || "")
-        .replace(/^EF_CN_/, "")
-        .replace(/^EF_/, "");
-    if (
-      normalizeUid(globalData.info?.uid) !== rawUid ||
-      normalizeUid(cnData.info?.uid) !== rawUid ||
-      !globalData.info?.serverId ||
-      String(globalData.info.serverId) !== String(cnData.info?.serverId)
-    )
-      continue;
-
-    const globalIsSubset = isGachaLogSubset(globalData, cnData);
-    const cnIsSubset = isGachaLogSubset(cnData, globalData);
+    const verdict = await aliasVerdict(db, globalUid, cnUid, rawUid);
+    if (!verdict) continue;
+    const { globalIsSubset, cnIsSubset } = verdict;
     if (!globalIsSubset && !cnIsSubset) continue;
 
     const removeUid =
@@ -134,6 +194,29 @@ function hasKey(store: StoreView, key: string): boolean {
 }
 
 const setImmediateTick = () => new Promise<void>((r) => setImmediate(r));
+
+// ---------------------------------------------------------------------------
+// In-process cache of the de-duplicated board
+// ---------------------------------------------------------------------------
+
+/** How long a process reuses its parsed, de-duplicated board (other processes' writes show up after this). */
+export const LEADERBOARD_CACHE_TTL_MS = 60_000;
+
+const boardCache = new WeakMap<
+  object,
+  { at: number; entries: GachaLeaderboardEntry[] }
+>();
+const boardGeneration = new WeakMap<object, number>();
+
+/**
+ * Forget the cached board of this process. Called by everything in this
+ * process that writes or deletes a `GACHA_LB.*` row, so the writer sees its
+ * own change immediately (other processes catch up within the TTL).
+ */
+export function invalidateLeaderboardCache(db: object): void {
+  boardCache.delete(db);
+  boardGeneration.set(db, (boardGeneration.get(db) ?? 0) + 1);
+}
 
 export interface LeaderboardMigrationResult {
   status: "migrated" | "already-done" | "no-blob";
@@ -216,6 +299,7 @@ export async function migrateLeaderboardBlob(
         }
         return { migrated, skipped };
       });
+      if (counts.migrated > 0) invalidateLeaderboardCache(db);
       result.migrated += counts.migrated;
       result.skipped += counts.skipped;
       result.maxBatchMs = Math.max(result.maxBatchMs, Date.now() - t0);
@@ -251,19 +335,41 @@ export async function ensureLeaderboardMigrated(db: CustomDatabase): Promise<voi
   }
 }
 
-/** All leaderboard rows. */
+/**
+ * The board: every leaderboard row with duplicate EF / EF_CN aliases already
+ * removed (see deduplicateLeaderboardAliases), cached in this process for 60 s
+ * and dropped at once when this process writes a row. Returns shallow copies,
+ * so a caller that sets a top-level field (e.g. a fresher avatar) cannot change
+ * what the next caller gets; the nested `stats` objects are shared: read-only.
+ * `fresh: true` skips the cache (and refills it).
+ */
 export async function readLeaderboardEntries(
   db: CustomDatabase,
+  opts: { fresh?: boolean; now?: number } = {},
 ): Promise<GachaLeaderboardEntry[]> {
+  const now = opts.now ?? Date.now();
+  if (!opts.fresh) {
+    const cached = boardCache.get(db);
+    if (cached && now - cached.at < LEADERBOARD_CACHE_TTL_MS) {
+      return cached.entries.map((e) => ({ ...e }));
+    }
+  }
+  const generation = boardGeneration.get(db) ?? 0;
   await ensureLeaderboardMigrated(db);
   const rows = await db.findByPrefix<GachaLeaderboardEntry>(LB_PREFIX);
-  const out: GachaLeaderboardEntry[] = [];
+  const byUid: Record<string, GachaLeaderboardEntry> = {};
   for (const row of rows) {
     const value = row.value;
     if (!value || typeof value !== "object" || !value.stats) continue;
-    out.push({ ...value, uid: value.uid || row.id.slice(LB_PREFIX.length) });
+    const uid = value.uid || row.id.slice(LB_PREFIX.length);
+    byUid[uid] = { ...value, uid };
   }
-  return out;
+  const entries = Object.values(await deduplicateLeaderboardAliases(db, byUid));
+  // A write that happened while we were reading makes this snapshot suspect: do not keep it.
+  if ((boardGeneration.get(db) ?? 0) === generation) {
+    boardCache.set(db, { at: now, entries });
+  }
+  return entries.map((e) => ({ ...e }));
 }
 
 export async function removeLeaderboardEntry(
@@ -271,6 +377,7 @@ export async function removeLeaderboardEntry(
   uid: string,
 ): Promise<void> {
   await db.delete(lbKey(uid));
+  invalidateLeaderboardCache(db);
 }
 
 /**
@@ -285,7 +392,7 @@ export function noteLeaderboardGuild(
 ): boolean {
   if (!uid || !guildId) return false;
   const guild = String(guildId);
-  return db.transaction((store) => {
+  const changed = db.transaction((store) => {
     const row = store.get<GachaLeaderboardEntry>(lbKey(uid));
     if (!row) return false;
     const guilds = Array.isArray(row.guilds) ? row.guilds.map(String) : [];
@@ -297,6 +404,8 @@ export function noteLeaderboardGuild(
     });
     return true;
   });
+  if (changed) invalidateLeaderboardCache(db);
+  return changed;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +483,7 @@ export async function updateLeaderboard(
     }
     if (changed) store.set("GACHA_POOL_NAMES", names);
   });
+  invalidateLeaderboardCache(db);
 }
 
 export interface LeaderboardMetrics {
