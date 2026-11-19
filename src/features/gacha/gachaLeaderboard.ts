@@ -171,6 +171,8 @@ export const LB_BLOB_KEY = "GACHA_LEADERBOARD_ENTRIES";
 export const LB_MIGRATION_MARKER = "GACHA_LB_MIGRATED";
 /** Bump when the meaning of the stored numbers changes; older rows are recomputed in the background. */
 export const LEADERBOARD_METRICS_VERSION = 2;
+/** Written once no stale row is left; the refresh job then stops scanning. Deliberately NOT under LB_PREFIX. */
+export const LB_REFRESH_MARKER = `GACHA_LB_REFRESHED_V${LEADERBOARD_METRICS_VERSION}`;
 export const MAX_GUILDS_PER_ENTRY = 50;
 export const LB_MIGRATION_BATCH = 200; // <= 500 per the plan; 200 keeps one batch near 30 ms
 
@@ -577,28 +579,40 @@ export function computeLeaderboardMetrics(
 // Background jobs
 // ---------------------------------------------------------------------------
 
-const refreshFailures = new Set<string>();
+/** Rows already tried by this process (any outcome): a row that cannot be refreshed is not retried forever. */
+const refreshAttempted = new WeakMap<object, Set<string>>();
 
 /**
  * Rows migrated from the old blob carry the old (free-inclusive) six-star
- * numbers. Recompute a few per call from their logs until none are left.
- * Returns how many rows were processed. Cheap when there is nothing to do.
+ * numbers. Recompute up to `max` (default 10) per call from their logs. When a
+ * call finds nothing left, it writes LB_REFRESH_MARKER and every later call
+ * returns after one key lookup, with no scan. Returns how many rows were processed.
  */
 export async function refreshLegacyLeaderboardEntries(
   db: CustomDatabase,
   opts: { max?: number } = {},
 ): Promise<number> {
-  const max = opts.max ?? 3;
+  if (await db.get(LB_REFRESH_MARKER)) return 0;
+  // Rows only exist after the blob migration: finishing earlier would leave them stale for good.
+  if (!(await db.get(LB_MIGRATION_MARKER))) return 0;
+  const max = opts.max ?? 10;
+  let attempted = refreshAttempted.get(db);
+  if (!attempted) refreshAttempted.set(db, (attempted = new Set()));
   const stale = db
     .findFieldByPrefix(LB_PREFIX, "$.metricsVersion")
     .filter(
       (row) =>
         (Number(row.field) || 0) < LEADERBOARD_METRICS_VERSION &&
-        !refreshFailures.has(row.id),
+        !attempted!.has(row.id),
     )
     .slice(0, max);
+  if (!stale.length) {
+    await db.set(LB_REFRESH_MARKER, { done: true, at: Date.now(), version: LEADERBOARD_METRICS_VERSION });
+    return 0;
+  }
   let done = 0;
   for (const row of stale) {
+    attempted.add(row.id);
     const uid = row.id.slice(LB_PREFIX.length);
     try {
       const data = await db.get<GachaLogData>(`GACHA_LOG_${uid}`);
@@ -606,7 +620,6 @@ export async function refreshLegacyLeaderboardEntries(
       else await removeLeaderboardEntry(db, uid);
       done++;
     } catch (e) {
-      refreshFailures.add(row.id);
       console.error(`[Leaderboard] Refresh failed for ${uid}:`, e);
     }
     await setImmediateTick();
@@ -626,7 +639,7 @@ export function startGachaStorageJobs(
     await migrateLeaderboardBlob(db);
   });
   startup.every("gacha-leaderboard-refresh", 30_000, async () => {
-    await refreshLegacyLeaderboardEntries(db, { max: 3 });
+    await refreshLegacyLeaderboardEntries(db, { max: 10 });
   });
   // hourly: delete stats-cache rows older than 30 days
   startGachaCacheJobs(startup, db);
