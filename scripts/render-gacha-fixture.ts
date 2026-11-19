@@ -396,20 +396,30 @@ async function rgbaHash(buf: Buffer): Promise<string> {
   return hash.digest("hex");
 }
 
-export async function renderGachaFixture(
-  dumpDir?: string,
-): Promise<Record<string, string>> {
+/** Stubs installed, seeded db, fake log and its stats: shared with scripts/bench-gacha-render.ts. */
+export async function prepareFixture() {
   installStubs();
-  // RENDER_FIXTURE_NO_CARD_CACHE=1 reproduces the pre-cache path.
-  if (process.env.RENDER_FIXTURE_NO_CARD_CACHE === "1") {
-    renderedCardCache.enabled = false;
-  }
   const db = new CustomDatabase(":memory:");
   await seedPoolMetadata(db);
   const data = buildLog();
   const stats = await getGachaStats(db, data);
-  const tr = createTranslator("tw");
-  const trEn = createTranslator("en");
+  return {
+    db,
+    data,
+    stats,
+    tr: createTranslator("tw"),
+    trEn: createTranslator("en"),
+  };
+}
+
+export async function renderGachaFixture(
+  dumpDir?: string,
+): Promise<Record<string, string>> {
+  // RENDER_FIXTURE_NO_CARD_CACHE=1 reproduces the pre-cache path.
+  if (process.env.RENDER_FIXTURE_NO_CARD_CACHE === "1") {
+    renderedCardCache.enabled = false;
+  }
+  const { db, data, stats, tr, trEn } = await prepareFixture();
   const out: Record<string, string> = {};
   const record = async (name: string, buf: Buffer) => {
     out[name] = await rgbaHash(buf);
