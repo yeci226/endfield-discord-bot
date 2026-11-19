@@ -30,6 +30,7 @@ import {
   SimPullResult,
 } from "../src/utils/gachaSimulatorUtils";
 import { createTranslator } from "../src/utils/i18n";
+import { renderedCardCache } from "../src/features/gacha/statsCanvas/cardCache";
 
 // ---------------------------------------------------------------- seeded rng
 function mulberry32(seed: number) {
@@ -399,6 +400,10 @@ export async function renderGachaFixture(
   dumpDir?: string,
 ): Promise<Record<string, string>> {
   installStubs();
+  // RENDER_FIXTURE_NO_CARD_CACHE=1 reproduces the pre-cache path.
+  if (process.env.RENDER_FIXTURE_NO_CARD_CACHE === "1") {
+    renderedCardCache.enabled = false;
+  }
   const db = new CustomDatabase(":memory:");
   await seedPoolMetadata(db);
   const data = buildLog();
@@ -423,6 +428,11 @@ export async function renderGachaFixture(
   ) => {
     const buf = await drawGachaStats(data, stats, t, type, poolId, page, db);
     await record(name, buf);
+    if (renderedCardCache.enabled) {
+      // The card cache must hand back the very same buffer for the same inputs.
+      const again = await drawGachaStats(data, stats, t, type, poolId, page, db);
+      if (again !== buf) throw new Error(`card cache miss for ${name}`);
+    }
   };
 
   await stat("overview_limited", "limited_char");
