@@ -72,22 +72,36 @@ function logToken(db: AliasDedupDb, uid: string): string | null {
   return t ? `${t.length}:${t.field ?? ""}` : null;
 }
 
+/** Version of a log as the board row already knows it (no database read), or null for rows that lack the fields. */
+function entryToken(e: GachaLeaderboardEntry | undefined): string | null {
+  return e && typeof e.updatedAt === "number" && typeof e.logUpdatedAt === "number"
+    ? `${e.updatedAt}:${e.logUpdatedAt}`
+    : null;
+}
+
 /**
  * Compares the two logs of an alias pair (null = not a comparable pair). The
- * verdict is cached per pair, keyed by both log rows' version tokens
- * (stored length + info.updatedAt), so a view parses the logs again only after
- * one of them changed. Without getRowToken nothing is cached.
+ * verdict is cached per pair. The key is the two board rows' updatedAt /
+ * logUpdatedAt (rewritten whenever a log is saved), which costs no database
+ * read; rows without those fields fall back to the log rows' version tokens
+ * (stored length + info.updatedAt), which make SQLite walk the log rows. A view
+ * parses the logs again only after one of them changed. Without either, nothing is cached.
  */
 async function aliasVerdict(
   db: AliasDedupDb,
   globalUid: string,
   cnUid: string,
   rawUid: string,
+  globalEntry?: GachaLeaderboardEntry,
+  cnEntry?: GachaLeaderboardEntry,
 ): Promise<AliasVerdict | null> {
+  const fromEntries = [entryToken(globalEntry), entryToken(cnEntry)];
   const tokens =
-    db.getRowToken
-      ? [logToken(db, globalUid), logToken(db, cnUid)]
-      : [null, null];
+    fromEntries[0] !== null && fromEntries[1] !== null
+      ? fromEntries.map((t) => "e" + t)
+      : db.getRowToken
+        ? [logToken(db, globalUid), logToken(db, cnUid)]
+        : [null, null];
   const cacheable = tokens[0] !== null && tokens[1] !== null;
   const pairKey = `${globalUid}|${cnUid}`;
   let perDb = aliasVerdicts.get(db);
@@ -141,7 +155,7 @@ export async function deduplicateLeaderboardAliases(
     const globalUid = `EF_${rawUid}`;
     if (!filtered[globalUid]) continue;
 
-    const verdict = await aliasVerdict(db, globalUid, cnUid, rawUid);
+    const verdict = await aliasVerdict(db, globalUid, cnUid, rawUid, filtered[globalUid], filtered[cnUid]);
     if (!verdict) continue;
     const { globalIsSubset, cnIsSubset } = verdict;
     if (!globalIsSubset && !cnIsSubset) continue;
