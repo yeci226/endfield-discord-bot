@@ -16,6 +16,7 @@ async function main() {
   assert.deepEqual(seen, [
     { kind: "once", name: "gacha-leaderboard-migrate" },
     { kind: "every", name: "gacha-leaderboard-refresh" },
+    { kind: "every", name: "gacha-stats-cache-retention" },
   ]);
 
   // Hook names are unique per StartupHooks: a second call would throw, so there must be one call site.
