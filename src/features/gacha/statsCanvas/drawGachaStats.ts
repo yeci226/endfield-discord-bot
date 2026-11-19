@@ -1,5 +1,5 @@
-import { createCanvas, loadImage } from "@napi-rs/canvas";
-import path from "path";
+import { createCanvas } from "@napi-rs/canvas";
+import { loadAssetImage } from "../../../utils/canvasUtils";
 import { CustomDatabase } from "../../../utils/Database";
 import {
   getGachaPityGroupId,
@@ -307,13 +307,13 @@ export async function drawGachaStats(
 
   // Draw bottom-right decoration FIRST (behind all content)
   try {
-    const bgRbImg = await loadImage(
-      path.join(__dirname, "../../../assets/bg-rb.png"),
-    );
-    ctx.save();
-    ctx.globalAlpha = 0.3;
-    ctx.drawImage(bgRbImg, width - bgRbImg.width, height - bgRbImg.height);
-    ctx.restore();
+    const bgRbImg = await loadAssetImage("bg-rb.png");
+    if (bgRbImg) {
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.drawImage(bgRbImg, width - bgRbImg.width, height - bgRbImg.height);
+      ctx.restore();
+    }
   } catch (e) {
     console.error("[drawGachaStats] Error drawing bg-rb.png", e);
   }

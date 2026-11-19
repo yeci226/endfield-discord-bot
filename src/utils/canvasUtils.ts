@@ -9,7 +9,7 @@ import {
 import path from "path";
 import fs from "fs";
 import axios from "axios";
-import { TtlCache } from "./shared";
+import { decodedImageCache as imageCache } from "./byteLruCache";
 import { CardDetail } from "./skportApi";
 import { ProfileTemplate } from "../interfaces/ProfileTemplate";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
@@ -48,9 +48,9 @@ if (!fs.existsSync(CACHE_DIR)) {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
 }
 
-// Decoded images are large (width x height x 4 bytes), so keep a bounded,
-// expiring set in memory; the on-disk remote_cache still avoids re-downloads.
-const imageCache = new TtlCache<string, Image>(60 * 60_000, 200);
+// Decoded images are large (width x height x 4 bytes): `imageCache` is the
+// shared LRU bounded by count and bytes (see byteLruCache.ts); the on-disk
+// remote_cache still avoids re-downloads.
 
 export async function drawDashboard(
   detail: CardDetail,
@@ -1484,6 +1484,11 @@ async function loadLocalImage(relPath: string) {
   const img = await loadImage(fs.readFileSync(fullPath));
   imageCache.set(relPath, img);
   return img;
+}
+
+/** Decoded image from the bot's own assets folder (shared cache); null when missing. */
+export async function loadAssetImage(relPath: string): Promise<Image | null> {
+  return loadLocalImage(relPath);
 }
 
 export async function fetchImage(

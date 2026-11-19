@@ -370,6 +370,13 @@ function installStubs() {
     if (/\/assets\/(remote_cache|cache)(\/|$)/.test(s)) return false;
     return realExists(p);
   };
+  // The icon loader indexes those directories with readdirSync instead of probing.
+  const realReaddir = fs.readdirSync;
+  (fs as any).readdirSync = (p: any, ...rest: any[]) => {
+    const s = String(p).replace(/\\/g, "/");
+    if (/\/assets\/(remote_cache|cache)\/?$/.test(s)) return [];
+    return (realReaddir as any)(p, ...rest);
+  };
 
   // Any leftover randomness (avatar fallback picks a random profile image).
   Math.random = mulberry32(1);

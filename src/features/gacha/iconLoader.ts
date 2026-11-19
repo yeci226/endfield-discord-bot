@@ -2,6 +2,7 @@ import { loadImage } from "@napi-rs/canvas";
 import path from "path";
 import fs from "fs";
 import { fetchImage } from "../../utils/canvasUtils";
+import { decodedImageCache } from "../../utils/byteLruCache";
 
 const OFFICIAL_CHARACTER_ICON_URLS: Readonly<
   Record<string, string | undefined>
@@ -184,19 +185,12 @@ export function getGachaIconUrlCandidates(
   return officialUrl ? [officialUrl] : [];
 }
 
-export const loadGachaIconImage = async (
+/** Names probed for one icon id, in priority order inside one directory. */
+export function localIconCandidateNames(
   isCharacter: boolean,
-  rawId: string,
-): Promise<any> => {
-  const cid = String(rawId || "").replace("icon_", "");
-  if (!cid) throw new Error("Missing icon id");
-
-  const localDirs = [
-    path.join(__dirname, "../../assets/remote_cache"),
-    path.join(__dirname, "../../assets/cache"),
-  ];
-
-  const candidateNames = isCharacter
+  cid: string,
+): string[] {
+  return isCharacter
     ? [`icon_${cid}.png`, `icon_${cid}.webp`, `icon_${cid}.jpg`]
     : [
         `${cid}.png`,
@@ -206,15 +200,101 @@ export const loadGachaIconImage = async (
         `icon_${cid}.webp`,
         `icon_${cid}.jpg`,
       ];
+}
 
-  for (const dir of localDirs) {
-    for (const fileName of candidateNames) {
-      const localPath = path.join(dir, fileName);
-      if (!fs.existsSync(localPath)) continue;
-      try {
-        return await loadImage(fs.readFileSync(localPath));
-      } catch {}
+export interface IconDirIndex {
+  dir: string;
+  files: Set<string>;
+}
+
+/** Every existing local file for the candidates, directory-major, name-minor (the old probing order). */
+export function pickLocalIconPaths(
+  index: IconDirIndex[],
+  names: string[],
+): string[] {
+  const out: string[] = [];
+  for (const { dir, files } of index) {
+    for (const name of names) {
+      if (files.has(name)) out.push(path.join(dir, name));
     }
+  }
+  return out;
+}
+
+export function buildIconIndex(
+  dirs: string[],
+  readdir: (dir: string) => string[] = (d) => fs.readdirSync(d),
+): IconDirIndex[] {
+  return dirs.map((dir) => {
+    let names: string[] = [];
+    try {
+      names = readdir(dir);
+    } catch {}
+    return { dir, files: new Set(names) };
+  });
+}
+
+export const ICON_INDEX_REFRESH_MS = 10 * 60_000;
+const LOCAL_ICON_DIRS = [
+  path.join(__dirname, "../../assets/remote_cache"),
+  path.join(__dirname, "../../assets/cache"),
+];
+let iconIndex: { builtAt: number; index: IconDirIndex[] } | null = null;
+
+/** Directory listing built once and refreshed at most every 10 minutes. */
+export function getLocalIconIndex(
+  now: number = Date.now(),
+  dirs: string[] = LOCAL_ICON_DIRS,
+): IconDirIndex[] {
+  if (!iconIndex || now - iconIndex.builtAt >= ICON_INDEX_REFRESH_MS) {
+    iconIndex = { builtAt: now, index: buildIconIndex(dirs) };
+  }
+  return iconIndex.index;
+}
+
+export function resetLocalIconIndex(): void {
+  iconIndex = null;
+}
+
+const inFlightIcons = new Map<string, Promise<any>>();
+
+export const loadGachaIconImage = async (
+  isCharacter: boolean,
+  rawId: string,
+): Promise<any> => {
+  const cid = String(rawId || "").replace("icon_", "");
+  if (!cid) throw new Error("Missing icon id");
+
+  const cacheKey = `gacha-icon:${isCharacter ? "c" : "w"}:${cid}`;
+  const cached = decodedImageCache.get(cacheKey);
+  if (cached) return cached;
+  const pending = inFlightIcons.get(cacheKey);
+  if (pending) return pending;
+
+  const job = resolveGachaIcon(isCharacter, rawId, cid).then((img) => {
+    decodedImageCache.set(cacheKey, img);
+    return img;
+  });
+  inFlightIcons.set(cacheKey, job);
+  try {
+    return await job;
+  } finally {
+    inFlightIcons.delete(cacheKey);
+  }
+};
+
+async function resolveGachaIcon(
+  isCharacter: boolean,
+  rawId: string,
+  cid: string,
+): Promise<any> {
+  for (const localPath of pickLocalIconPaths(
+    getLocalIconIndex(),
+    localIconCandidateNames(isCharacter, cid),
+  )) {
+    try {
+      return await loadImage(await fs.promises.readFile(localPath));
+    } catch {}
   }
 
   const cacheName = isCharacter ? `icon_${cid}` : cid;
@@ -228,4 +308,4 @@ export const loadGachaIconImage = async (
   }
 
   throw lastError ?? new Error(`Failed to resolve icon for ${cid}`);
-};
+}
