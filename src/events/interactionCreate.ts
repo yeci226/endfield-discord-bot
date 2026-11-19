@@ -24,6 +24,7 @@ import {
   sendInteractionError,
 } from "../utils/shared";
 import { createRateLimiter } from "../utils/rateLimit";
+import { addGuildNewsChannel, setGuildNewsChannels } from "../utils/newsSubscriptions";
 
 const webhook = process.env.CMDWEBHOOK
   ? new WebhookClient({ url: process.env.CMDWEBHOOK })
@@ -299,30 +300,8 @@ async function handleInteraction(
           }
         }
 
-        // Update Database
-        const subscriptions =
-          ((await client.db.get("news_subscriptions")) as Array<{
-            guildId: string;
-            channelId: string;
-            boundAt: number;
-          }>) || [];
-
-        // Remove old subscriptions for this guild
-        const otherGuildSubscriptions = subscriptions.filter(
-          (s) => s.guildId !== interaction.guildId,
-        );
-
-        // Add new valid subscriptions
-        const newSubscriptions = [
-          ...otherGuildSubscriptions,
-          ...validChannels.map((channelId) => ({
-            guildId: interaction.guildId!,
-            channelId,
-            boundAt: Date.now(),
-          })),
-        ];
-
-        await client.db.set("news_subscriptions", newSubscriptions);
+        // Update Database: one row per bound channel (replaces this guild's set)
+        setGuildNewsChannels(client.db, interaction.guildId!, validChannels);
 
         // Build Confirmation Response
         const container = new ContainerBuilder();
@@ -395,21 +374,7 @@ async function handleInteraction(
           return;
         }
 
-        const subscriptions =
-          ((await client.db.get("news_subscriptions")) as Array<{
-            guildId: string;
-            channelId: string;
-            boundAt: number;
-          }>) || [];
-
-        if (!subscriptions.some((s) => s.channelId === channel.id)) {
-          subscriptions.push({
-            guildId: interaction.guildId,
-            channelId: channel.id,
-            boundAt: Date.now(),
-          });
-          await client.db.set("news_subscriptions", subscriptions);
-        }
+        addGuildNewsChannel(client.db, interaction.guildId, channel.id);
 
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(

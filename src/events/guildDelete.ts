@@ -1,6 +1,7 @@
 import { Events, WebhookClient, EmbedBuilder } from "discord.js";
 import { Event } from "../interfaces/Event";
 import moment from "moment";
+import { removeGuildNews } from "../utils/newsSubscriptions";
 
 const webhook = process.env.JLWEBHOOK
   ? new WebhookClient({ url: process.env.JLWEBHOOK })
@@ -9,6 +10,12 @@ const webhook = process.env.JLWEBHOOK
 const event: Event = {
   name: Events.GuildDelete,
   execute: async (client: any, guild) => {
+    // The bot left (an outage reports available=false and must not count): its news channels are gone for good.
+    if (guild.available !== false) {
+      try {
+        removeGuildNews(client.db, guild.id);
+      } catch {}
+    }
     const results = await client.cluster.broadcastEval(
       (c: any) => c.guilds.cache.size,
     );
