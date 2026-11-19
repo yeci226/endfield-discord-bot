@@ -17,7 +17,25 @@ import {
   migrateGachaLog,
 } from "../../../utils/gachaLogUtils";
 import { GachaContext } from "./context";
-import { getAllPossibleUserRoles } from "./accounts";
+import {
+  getAllPossibleUserRoles,
+  getOwnedGachaUids,
+  isOwnGuestUid,
+  resolveOwnedGachaUid,
+} from "./accounts";
+
+/** Legacy shared bucket of logs saved before the UID was known. */
+export const RECOVERY_SOURCE_UID = "EF_undefined";
+
+/** Range values travel in a customId split on ":", so colons are escaped. */
+function decodeRangePart(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+}
 
 export async function handleLogClear(
   ctx: GachaContext,
@@ -29,8 +47,20 @@ export async function handleLogClear(
   const startTime = interaction.options.getString("start_time");
   const endTime = interaction.options.getString("end_time");
 
+  const owned = await getOwnedGachaUids(db, interaction.user.id);
+
   let targetUid = targetUidOption;
-  if (!targetUid) {
+  if (targetUid) {
+    const resolved = resolveOwnedGachaUid(targetUid, owned);
+    if (!resolved.ok) {
+      await interaction.reply({
+        content: tr("gacha_uid_not_owned"),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    targetUid = resolved.uid;
+  } else {
     const accounts = await getAccounts(db, interaction.user.id);
     const efRole = getPrimaryBindingRoleForGame(
       accounts?.[0]?.roles,
@@ -50,7 +80,7 @@ export async function handleLogClear(
 
   const confirmBtn = new ButtonBuilder()
     .setCustomId(
-      `gacha:log_clear_confirm:${targetUid}:${startTime || ""}:${endTime || ""}`,
+      `gacha:log_clear_confirm:${targetUid}:${encodeURIComponent(startTime || "")}:${encodeURIComponent(endTime || "")}`,
     )
     .setLabel(tr("Confirm"))
     .setStyle(ButtonStyle.Danger);
@@ -88,11 +118,21 @@ export async function handleClearConfirmButton(
 ) {
   const { tr, db } = ctx;
 
-  await btnInteraction.deferUpdate();
   const targetUid = parts[2];
-  const startTime = parts[3];
-  const endTime = parts[4];
+  const startTime = decodeRangePart(parts[3]);
+  const endTime = decodeRangePart(parts[4]);
 
+  // The UID in the customId proves nothing: check it against the clicker.
+  const owned = await getOwnedGachaUids(db, btnInteraction.user.id);
+  if (!resolveOwnedGachaUid(targetUid, owned).ok) {
+    await btnInteraction.update({
+      content: tr("gacha_uid_not_owned"),
+      components: [],
+    });
+    return;
+  }
+
+  await btnInteraction.deferUpdate();
   await clearGachaLog(db, targetUid, startTime, endTime);
 
   await btnInteraction.editReply({
@@ -122,9 +162,19 @@ export async function handleRecoverButton(
 ) {
   const { interaction, tr, db } = ctx;
 
-  await btnInteraction.deferUpdate();
   const targetUid = parts[2];
-  const sourceUid = "EF_undefined";
+  const sourceUid = RECOVERY_SOURCE_UID;
+
+  const owned = await getOwnedGachaUids(db, btnInteraction.user.id);
+  if (!resolveOwnedGachaUid(targetUid, owned).ok) {
+    await btnInteraction.update({
+      content: tr("gacha_uid_not_owned"),
+      components: [],
+    });
+    return;
+  }
+
+  await btnInteraction.deferUpdate();
 
   // Fetch accounts again to calculate index
   const allRoles = await getAllPossibleUserRoles(interaction.user.id, db);
@@ -167,6 +217,20 @@ export async function handleMigrateSelect(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const sourceUid = parts[2];
   const targetUid = interaction.values[0];
+
+  // Source: one of the clicker's own guest logs (or the legacy shared bucket);
+  // target: one of the clicker's own UIDs. Neither may rest on the customId alone.
+  const owned = await getOwnedGachaUids(db, interaction.user.id);
+  if (
+    !(
+      sourceUid === RECOVERY_SOURCE_UID ||
+      isOwnGuestUid(sourceUid, interaction.user.id)
+    ) ||
+    !resolveOwnedGachaUid(targetUid, owned).ok
+  ) {
+    await interaction.editReply({ content: tr("gacha_uid_not_owned") });
+    return;
+  }
 
   // Fetch accounts again to calculate index
   const allRoles = await getAllPossibleUserRoles(interaction.user.id, db);
