@@ -71,31 +71,6 @@ function hasSupportedBinding(bindings: any[] | null | undefined): boolean {
 }
 
 /**
- * @deprecated Returns the first role of ANY game, so on a mixed account the Arknights role
- * can come back where an Endfield role is expected. Use getPrimaryBindingRoleForGame from
- * ./bindingRoles. Kept only for callers outside lane L3.
- */
-export function getPrimaryBindingRole(
-  bindings: any[] | null | undefined,
-): { binding: any; role: any } | null {
-  const normalized = normalizeBindingEntries(bindings);
-
-  for (const binding of normalized) {
-    const roles = Array.isArray(binding?.roles)
-      ? binding.roles
-      : binding?.defaultRole
-        ? [binding.defaultRole]
-        : [];
-    const role = roles[0];
-    if (role) {
-      return { binding, role };
-    }
-  }
-
-  return null;
-}
-
-/**
  * Ensures that the account has valid bindings (roles) and credentials.
  * Implements a robust 2-step check:
  * 1. Try existing cred/salt (fastest).
