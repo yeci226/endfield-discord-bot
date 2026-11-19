@@ -36,6 +36,7 @@ import { AutoDailyService } from "../services/AutoDailyService";
 import { MonitorService } from "../services/MonitorService";
 import { CharacterWikiService } from "../services/CharacterWikiService";
 import { Logger } from "../utils/Logger";
+import { StartupHooks } from "../utils/startup";
 
 dotenv.config();
 
@@ -48,6 +49,7 @@ export class ExtendedClient extends Client {
   public wikiService!: CharacterWikiService;
   public cluster: ClusterClient<Client>;
   private logger!: Logger;
+  public startup: StartupHooks;
   private memoryInterval: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -84,6 +86,11 @@ export class ExtendedClient extends Client {
     }
     this.db = new CustomDatabase("json.sqlite");
     this.logger = new Logger(`Cluster ${this.cluster.id}`);
+    this.startup = new StartupHooks({
+      info: (msg) => this.logger.info(msg),
+      error: (msg, err) =>
+        err === undefined ? this.logger.error(msg) : this.logger.error(msg, err),
+    });
   }
 
   public start() {

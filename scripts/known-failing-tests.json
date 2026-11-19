@@ -1,0 +1,6 @@
+[
+  "src/utils/gachaAutocomplete.test.ts",
+  "src/utils/gachaCanvasUtils.test.ts",
+  "src/utils/gachaLoadAck.test.ts",
+  "src/utils/gachaNonDrawEvents.test.ts"
+]
