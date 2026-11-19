@@ -5,6 +5,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { CustomDatabase } from "../utils/Database";
 import { newsSubKey } from "../utils/newsSubscriptions";
+import { StartupHooks } from "../utils/startup";
 import { SkportNewsService, deliverNewsOnCluster, newsItemHash } from "./SkportNewsService";
 
 const HOUR = 3600 * 1000;
@@ -257,6 +258,31 @@ async function main() {
       await svc.processFeed([newsItem("8", HOUR, now, "first")], false);
       await svc.processFeed([newsItem("8", HOUR, now, "edited title")], false);
       assert.deepEqual(sentLog, ["send:c1", "edit:c1"]);
+    },
+  );
+
+  // startup: the legacy array is migrated BEFORE the first poll starts, and only the primary cluster does anything
+  await withService(
+    async (db) => {
+      await db.set("news_subscriptions", [{ guildId: "g1", channelId: "c1", boundAt: 1 }]);
+    },
+    async ({ db }) => {
+      const hooks = new StartupHooks({ info: () => {}, error: (m, e) => console.error(m, e) });
+      const svc: any = new SkportNewsService({ db, startup: hooks } as any);
+      const seen: string[][] = [];
+      svc.start = () => void seen.push(db.findKeysByPrefix("news_sub."));
+      svc.register();
+      await hooks.run(true);
+      assert.deepEqual(seen, [["news_sub.g1.c1"]], "first poll already sees the migrated rows");
+      hooks.stop();
+
+      const other = new StartupHooks({ info: () => {}, error: () => {} });
+      const svc2: any = new SkportNewsService({ db, startup: other } as any);
+      let started = 0;
+      svc2.start = () => void started++;
+      svc2.register();
+      await other.run(false);
+      assert.equal(started, 0, "secondary clusters never poll");
     },
   );
 
