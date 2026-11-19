@@ -1,22 +1,28 @@
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import { renderGachaFixture } from "../../../scripts/render-gacha-fixture";
+import { spawnSync } from "child_process";
 
-async function main() {
-  const baseline = JSON.parse(
-    fs.readFileSync(
-      path.join(__dirname, "__fixtures__", "render-baseline.json"),
-      "utf8",
-    ),
-  );
-  const actual = await renderGachaFixture();
-  assert.deepEqual(actual, baseline);
-}
+// The fixture lives in scripts/ (outside tsconfig's rootDir), so run it as a
+// child process and compare the hashes it prints with the stored baseline.
+const root = path.join(__dirname, "..", "..", "..");
+const baseline = JSON.parse(
+  fs.readFileSync(
+    path.join(__dirname, "__fixtures__", "render-baseline.json"),
+    "utf8",
+  ),
+);
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+const res = spawnSync(
+  process.execPath,
+  ["-r", "ts-node/register", path.join(root, "scripts", "render-gacha-fixture.ts")],
+  {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 120000,
+    maxBuffer: 16 * 1024 * 1024,
+    env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1", NODE_ENV: "test" },
+  },
+);
+assert.equal(res.status, 0, res.stderr);
+assert.deepEqual(JSON.parse(res.stdout), baseline);
