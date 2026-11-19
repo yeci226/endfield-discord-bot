@@ -212,6 +212,55 @@ async function main() {
       assert.ok(replies[replies.length - 1].files?.length === 1);
     }
 
+    // --- own view inside a guild notes the guild; repeats write nothing; others' logs never note
+    {
+      const VIEWER = "111111111111111111";
+      const OWNER = "222222222222222222";
+      const db = new CustomDatabase(":memory:");
+      const acct = (b: string) => [
+        { info: { id: `acc${b}` }, roles: [{ gameId: 3, uid: b, roles: [{ roleId: "424242", nickname: "羽冰" }] }] },
+      ];
+      await db.set(`${VIEWER}.accounts`, acct("b"));
+      await db.set(`${OWNER}.accounts`, []);
+      await db.set(LOG_KEY, buildLog("羽冰"));
+      await db.set(`GACHA_LB.${UID}`, { uid: UID, guilds: [] });
+      await db.set("GACHA_POOL_METADATA_c_special_t_1", {
+        data: { up6_name: "Char 0", all: [{ id: "chr_0", name: "Char 0", rarity: 6 }] },
+        lastFetch: 0,
+      });
+      const view = async (guildId: string | null, userOpt: any = null) => {
+        const interaction: any = {
+          user: { id: VIEWER, displayName: "Viewer" },
+          guildId,
+          options: { getUser: () => userOpt, getString: () => null },
+          deferReply: async () => {},
+          editReply: async () => {},
+          followUp: async () => {},
+        };
+        const ctx: any = { interaction, tr: Object.assign((k: string) => k, { lang: "tw" }), db };
+        await handleGachaView(ctx, interaction);
+      };
+      const guilds = async () => (await db.get<any>(`GACHA_LB.${UID}`)).guilds;
+      await view("g1");
+      assert.deepEqual(await guilds(), ["g1"], "first view in a guild records it");
+      let before = totalChanges(db);
+      await view("g1");
+      assert.equal(totalChanges(db), before, "second view in the same guild: zero DB writes");
+      await view("g2");
+      assert.deepEqual(await guilds(), ["g1", "g2"], "a new guild is added");
+      before = totalChanges(db);
+      await view(null);
+      assert.equal(totalChanges(db), before, "a DM view writes nothing");
+      // someone else's log (their own UID resolved through user:) never notes a guild
+      await db.set(`${OWNER}.accounts`, acct("b"));
+      await view("g3", { id: OWNER, toString: () => `<@${OWNER}>` });
+      assert.deepEqual(await guilds(), ["g1", "g2"], "viewing another user's log notes nothing");
+      // no leaderboard row: never created
+      await db.delete(`GACHA_LB.${UID}`);
+      await view("g4");
+      assert.equal(await db.get(`GACHA_LB.${UID}`), null, "no row is created by a view");
+    }
+
     // --- more than 24 pools: the pool select pages, every pool stays reachable
     {
       const { db, ctx, replies } = await setup("羽冰");
