@@ -2,8 +2,13 @@ import moment from "moment";
 import { CustomDatabase } from "../../utils/Database";
 import axios from "axios";
 import { mapLocaleToLang, refreshAccountToken } from "../../utils/skportApi";
-import { getEndfieldU8Token, fetchRawGachaFromUrl, POOL_TYPES } from "./gachaApi";
-import { removeLeaderboardEntry, updateLeaderboard } from "./gachaLeaderboard";
+import {
+  getEndfieldU8Token,
+  fetchRawGachaFromUrl,
+  POOL_TYPES,
+  RawFetchedGacha,
+} from "./gachaApi";
+import { lbKey, updateLeaderboard } from "./gachaLeaderboard";
 import { GachaApiError, GachaLogData, GachaRecord, isGachaPull } from "./gachaTypes";
 
 interface SimPoolRecordChar {
@@ -79,9 +84,7 @@ export async function fetchAndMergeGachaLogFromAccount(
   }
 
   // Reuse stored serverId, or auto-detect
-  const dbKey = `GACHA_LOG_${targetUid}`;
-  const existingData = await db.get<GachaLogData>(dbKey);
-  let serverId = existingData?.info?.serverId;
+  let serverId = readStoredServerId(db, targetUid);
 
   const apiDomain = `https://ef-webview.${provider}.com`;
   const lang = locale
@@ -172,18 +175,102 @@ function detectPityGapSeqId(
   return undefined;
 }
 
-async function persistSimPoolRecordsFromLog(
-  db: CustomDatabase,
-  uid: string,
+/** Strictly increasing write stamp for a log row (never equal to or below the previous one). */
+export function nextUpdatedAt(
+  previous: number | undefined,
+  now: number = Date.now(),
+): number {
+  const prev = Number(previous);
+  return Math.max(now, (Number.isFinite(prev) ? prev : 0) + 1);
+}
+
+/** Merges two record lists by seqId (incoming wins), newest first. */
+export function mergeGachaRecords(
+  existing: GachaRecord[] | undefined,
+  incoming: GachaRecord[] | undefined,
+): GachaRecord[] {
+  const map = new Map<string, GachaRecord>();
+  (existing || []).forEach((r) => map.set(String(r.seqId), r));
+  (incoming || []).forEach((r) => map.set(String(r.seqId), r));
+  return Array.from(map.values()).sort(
+    (a, b) => Number(b.seqId) - Number(a.seqId),
+  );
+}
+
+export interface PityResetMarkers {
+  charPityResetSeqId?: string;
+  weaponPityResetSeqId?: string;
+}
+
+function resolvePityMarker(
+  previous: string | undefined,
+  detected: string | undefined,
+  merged: GachaRecord[],
+  existing: GachaRecord[] | undefined,
+): string | undefined {
+  const candidates = [previous, detected]
+    .map((v) => (v == null ? NaN : Number(v)))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (candidates.length === 0) return undefined;
+  const marker = Math.max(...candidates);
+  const ids = merged.map((r) => Number(r.seqId)).filter(Number.isFinite);
+  // The record the marker points at is gone (cleared range): nothing to reset at.
+  if (!ids.some((id) => id >= marker)) return undefined;
+  // Nothing precedes it: pity is already zero there, the marker has no effect.
+  if (!ids.some((id) => id < marker)) return undefined;
+  if (existing) {
+    // The gap is the stretch between the last record before the marker and the
+    // marker. Records that now fall inside it mean the gap has been bridged.
+    let before = -Infinity;
+    for (const r of existing) {
+      const id = Number(r.seqId);
+      if (id < marker && id > before) before = id;
+    }
+    if (before > -Infinity && ids.some((id) => id > before && id < marker)) {
+      return undefined;
+    }
+  }
+  return String(marker);
+}
+
+/**
+ * Pity reset markers after a merge. A marker means "records older than this
+ * seqId are separated from the newer ones by pulls we can never see", so it
+ * stays until the merge proves otherwise: it is dropped when the record it
+ * points at is gone, when nothing precedes it, or when records now fill the
+ * gap it described (`opts.existing` = the lists before the merge). A gap newly
+ * detected by this import (`opts.detected`) is combined with the old marker;
+ * the later boundary wins because pity restarts there.
+ */
+export function mergePityResetMarkers(
+  existingInfo: PityResetMarkers | undefined | null,
+  mergedRecords: { characterList: GachaRecord[]; weaponList: GachaRecord[] },
+  opts: {
+    detected?: PityResetMarkers;
+    existing?: { characterList?: GachaRecord[]; weaponList?: GachaRecord[] };
+  } = {},
+): PityResetMarkers {
+  return {
+    charPityResetSeqId: resolvePityMarker(
+      existingInfo?.charPityResetSeqId,
+      opts.detected?.charPityResetSeqId,
+      mergedRecords.characterList,
+      opts.existing?.characterList,
+    ),
+    weaponPityResetSeqId: resolvePityMarker(
+      existingInfo?.weaponPityResetSeqId,
+      opts.detected?.weaponPityResetSeqId,
+      mergedRecords.weaponList,
+      opts.existing?.weaponList,
+    ),
+  };
+}
+
+/** The per-pool "which characters were featured" summary the simulator reads. Pure. */
+export function computeSimPoolRecords(
   data: GachaLogData,
-) {
-  const key = `SIM_POOL_RECORDS.${uid}`;
-  const globalKey = "SIM_POOL_RECORDS.GLOBAL";
-  const existing = (await db.get<Record<string, SimPoolRecord>>(key)) || {};
-  const globalExisting =
-    (await db.get<Record<string, SimPoolRecord>>(globalKey)) || {};
-  const merged: Record<string, SimPoolRecord> = { ...existing };
-  const globalMerged: Record<string, SimPoolRecord> = { ...globalExisting };
+): Record<string, SimPoolRecord> {
+  const result: Record<string, SimPoolRecord> = {};
 
   const byPool = new Map<string, GachaRecord[]>();
   for (const rec of data.characterList || []) {
@@ -249,7 +336,7 @@ async function persistSimPoolRecordsFromLog(
       .slice(0, 2)
       .map(([charId, meta]) => ({ charId, charName: meta.name }));
 
-    merged[poolId] = {
+    result[poolId] = {
       poolId,
       poolName,
       poolType,
@@ -257,23 +344,161 @@ async function persistSimPoolRecordsFromLog(
       featuredSixStar: topSix[0],
       featuredFiveStars: topFive,
     };
+  }
+  return result;
+}
 
+type StoreView = {
+  get<T = any>(key: string): T | null;
+  set(key: string, value: unknown): void;
+  delete(key: string): void;
+};
+
+/** Merges computed pool records into the per-UID row and the shared GLOBAL row, inside the caller's transaction. */
+function applySimPoolRecords(
+  store: StoreView,
+  uid: string,
+  computed: Record<string, SimPoolRecord>,
+) {
+  if (Object.keys(computed).length === 0) return;
+  const key = `SIM_POOL_RECORDS.${uid}`;
+  const globalKey = "SIM_POOL_RECORDS.GLOBAL";
+  const merged = { ...(store.get<Record<string, SimPoolRecord>>(key) || {}) };
+  const globalMerged = {
+    ...(store.get<Record<string, SimPoolRecord>>(globalKey) || {}),
+  };
+
+  for (const [poolId, record] of Object.entries(computed)) {
+    merged[poolId] = record;
     const oldGlobal = globalMerged[poolId];
-    if (!oldGlobal || (oldGlobal.lastSeenTs || 0) <= lastSeenTs) {
+    if (!oldGlobal || (oldGlobal.lastSeenTs || 0) <= (record.lastSeenTs || 0)) {
       globalMerged[poolId] = {
-        poolId,
-        poolName,
-        poolType,
-        lastSeenTs,
-        featuredSixStar: topSix[0] || oldGlobal?.featuredSixStar,
+        ...record,
+        featuredSixStar: record.featuredSixStar || oldGlobal?.featuredSixStar,
         featuredFiveStars:
-          topFive.length > 0 ? topFive : oldGlobal?.featuredFiveStars,
+          record.featuredFiveStars && record.featuredFiveStars.length > 0
+            ? record.featuredFiveStars
+            : oldGlobal?.featuredFiveStars,
       };
     }
   }
+  store.set(key, merged);
+  store.set(globalKey, globalMerged);
+}
 
-  await db.set(key, merged);
-  await db.set(globalKey, globalMerged);
+function emptyLog(uid: string, lang: string): GachaLogData {
+  return {
+    characterList: [],
+    weaponList: [],
+    info: { uid, lang, export_timestamp: 0 },
+  };
+}
+
+function normalizeStored(
+  stored: GachaLogData | null,
+  uid: string,
+  lang: string,
+): GachaLogData {
+  if (!stored || typeof stored !== "object") return emptyLog(uid, lang);
+  return {
+    ...stored,
+    characterList: Array.isArray(stored.characterList) ? stored.characterList : [],
+    weaponList: Array.isArray(stored.weaponList) ? stored.weaponList : [],
+    info: stored.info || { uid, lang, export_timestamp: 0 },
+  };
+}
+
+export interface CommitFetchedExtras {
+  avatarUrl?: string;
+  gameNickname?: string;
+}
+
+/**
+ * Merges freshly fetched records into the stored log in ONE transaction: the
+ * stored log is re-read inside it, so a load that finished on another cluster
+ * while this one was waiting for the network is merged, not overwritten.
+ * Synchronous on purpose (no await inside a transaction).
+ */
+export function commitFetchedGachaLog(
+  db: CustomDatabase,
+  uid: string,
+  rawFetched: Pick<
+    RawFetchedGacha,
+    "lang" | "serverId" | "characterList" | "weaponList"
+  >,
+  extras: CommitFetchedExtras,
+): { data: GachaLogData; hasDataGap: boolean } {
+  const dbKey = `GACHA_LOG_${uid}`;
+  return db.transaction((store) => {
+    const existing = normalizeStored(
+      store.get<GachaLogData>(dbKey),
+      uid,
+      rawFetched.lang,
+    );
+
+    // Gap detection compares what is stored NOW with what was fetched.
+    const detected: PityResetMarkers = {
+      charPityResetSeqId: detectPityGapSeqId(
+        existing.characterList,
+        rawFetched.characterList,
+      ),
+      weaponPityResetSeqId: detectPityGapSeqId(
+        existing.weaponList,
+        rawFetched.weaponList,
+      ),
+    };
+    const hasDataGap = !!(
+      detected.charPityResetSeqId || detected.weaponPityResetSeqId
+    );
+
+    const characterList = mergeGachaRecords(
+      existing.characterList,
+      rawFetched.characterList,
+    );
+    const weaponList = mergeGachaRecords(
+      existing.weaponList,
+      rawFetched.weaponList,
+    );
+    const markers = mergePityResetMarkers(
+      existing.info,
+      { characterList, weaponList },
+      { detected, existing },
+    );
+
+    const data: GachaLogData = {
+      characterList,
+      weaponList,
+      info: {
+        uid,
+        lang: rawFetched.lang,
+        serverId: rawFetched.serverId,
+        nickname:
+          extras.gameNickname && extras.gameNickname !== uid
+            ? extras.gameNickname
+            : existing.info.nickname && existing.info.nickname !== uid
+              ? existing.info.nickname
+              : undefined,
+        avatarUrl: extras.avatarUrl || existing.info.avatarUrl,
+        export_timestamp: Date.now(),
+        charPityResetSeqId: markers.charPityResetSeqId,
+        weaponPityResetSeqId: markers.weaponPityResetSeqId,
+        updatedAt: nextUpdatedAt(existing.info.updatedAt),
+      },
+    };
+
+    store.set(dbKey, data);
+    applySimPoolRecords(store, uid, computeSimPoolRecords(data));
+    return { data, hasDataGap };
+  });
+}
+
+/** serverId of a stored log without parsing the (up to 2.6 MB) row. */
+function readStoredServerId(db: CustomDatabase, uid: string): string | undefined {
+  const key = `GACHA_LOG_${uid}`;
+  const row = db
+    .findFieldByPrefix(key, "$.info.serverId")
+    .find((r) => r.id === key);
+  return row?.field != null ? String(row.field) : undefined;
 }
 
 /**
@@ -290,81 +515,19 @@ export async function fetchAndMergeGachaLog(
   accountIndex?: number,
   gameNickname?: string,
 ) {
+  // Network first, outside any transaction.
   const rawFetched = await fetchRawGachaFromUrl(urlStr, onProgress, locale);
-  const lang = rawFetched.lang;
-  const serverId = rawFetched.serverId;
-  let uid = targetUid || rawFetched.inferredUid;
+  const uid = targetUid || rawFetched.inferredUid;
 
-  const dbKey = `GACHA_LOG_${uid}`;
-  const existingData = (await db.get<GachaLogData>(dbKey)) || {
-    characterList: [],
-    weaponList: [],
-    info: { uid, lang, export_timestamp: 0 },
-  };
-
-  const existingSeqIds = new Set([
-    ...existingData.characterList.map((r) => String(r.seqId)),
-    ...existingData.weaponList.map((r) => String(r.seqId)),
-  ]);
-
-  const characterList = rawFetched.characterList;
-  const weaponList = rawFetched.weaponList;
-
-  // 3. Detect data gap BEFORE merging (compare existing vs newly fetched)
-  const charPityResetSeqId = detectPityGapSeqId(
-    existingData.characterList,
-    characterList,
-  );
-  const weaponPityResetSeqId = detectPityGapSeqId(
-    existingData.weaponList,
-    weaponList,
-  );
-  const hasDataGap = !!(charPityResetSeqId || weaponPityResetSeqId);
-
-  // 4. Merge and persist
-  // We use a Map keyed by seqId to merge and update records
-  const charMap = new Map<string, GachaRecord>();
-  const weaponMap = new Map<string, GachaRecord>();
-
-  // Load existing records into maps first
-  existingData.characterList.forEach((r) => charMap.set(String(r.seqId), r));
-  existingData.weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
-
-  // Overwrite with newly fetched (and potentially localized) records
-  characterList.forEach((r) => charMap.set(String(r.seqId), r));
-  weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
-
-  const newCharList = Array.from(charMap.values()).sort(
-    (a, b) => Number(b.seqId) - Number(a.seqId),
-  );
-  const newWeaponList = Array.from(weaponMap.values()).sort(
-    (a, b) => Number(b.seqId) - Number(a.seqId),
+  const { data: updatedData, hasDataGap } = commitFetchedGachaLog(
+    db,
+    uid,
+    rawFetched,
+    { avatarUrl, gameNickname },
   );
 
-  const updatedData: GachaLogData = {
-    characterList: newCharList,
-    weaponList: newWeaponList,
-    info: {
-      uid,
-      lang,
-      serverId,
-      nickname:
-        gameNickname && gameNickname !== uid
-          ? gameNickname
-          : existingData.info.nickname && existingData.info.nickname !== uid
-            ? existingData.info.nickname
-            : undefined,
-      avatarUrl: avatarUrl || existingData.info.avatarUrl,
-      export_timestamp: Date.now(),
-      charPityResetSeqId,
-      weaponPityResetSeqId,
-    },
-  };
-
-  await db.set(dbKey, updatedData);
-  await persistSimPoolRecordsFromLog(db, uid, updatedData);
-
-  // Update leaderboard
+  // The leaderboard row follows the log write (it needs async statistics, so it
+  // is a second, guarded transaction rather than part of the first).
   try {
     await updateLeaderboard(
       db,
@@ -381,11 +544,96 @@ export async function fetchAndMergeGachaLog(
   return {
     code: 0,
     message: "Success",
-    totalChar: newCharList.filter(isGachaPull).length,
-    totalWeapon: newWeaponList.filter(isGachaPull).length,
+    totalChar: updatedData.characterList.filter(isGachaPull).length,
+    totalWeapon: updatedData.weaponList.filter(isGachaPull).length,
     hasDataGap,
     data: updatedData,
   };
+}
+
+/**
+ * Moves a guest log into a real UID's log in one transaction (read both, merge,
+ * write target, delete source log and source leaderboard row).
+ */
+export function commitGachaLogMigration(
+  db: CustomDatabase,
+  sourceUid: string,
+  targetUid: string,
+): GachaLogData | null {
+  const sourceKey = `GACHA_LOG_${sourceUid}`;
+  const targetKey = `GACHA_LOG_${targetUid}`;
+  return db.transaction((store) => {
+    const stored = store.get<GachaLogData>(sourceKey);
+    if (!stored) return null;
+    const sourceData = normalizeStored(stored, sourceUid, "en-us");
+    const targetData = normalizeStored(
+      store.get<GachaLogData>(targetKey),
+      targetUid,
+      sourceData.info.lang,
+    );
+
+    const characterList = mergeGachaRecords(
+      targetData.characterList,
+      sourceData.characterList,
+    );
+    const weaponList = mergeGachaRecords(
+      targetData.weaponList,
+      sourceData.weaponList,
+    );
+    // Both logs may carry a gap marker; the later boundary is the one that matters.
+    const markers = mergePityResetMarkers(
+      {
+        charPityResetSeqId: laterSeqId(
+          targetData.info.charPityResetSeqId,
+          sourceData.info.charPityResetSeqId,
+        ),
+        weaponPityResetSeqId: laterSeqId(
+          targetData.info.weaponPityResetSeqId,
+          sourceData.info.weaponPityResetSeqId,
+        ),
+      },
+      { characterList, weaponList },
+    );
+
+    const updatedData: GachaLogData = {
+      characterList,
+      weaponList,
+      info: {
+        ...targetData.info,
+        nickname:
+          targetData.info.nickname && targetData.info.nickname !== targetUid
+            ? targetData.info.nickname
+            : sourceData.info.nickname && sourceData.info.nickname !== targetUid
+              ? sourceData.info.nickname
+              : undefined,
+        avatarUrl: targetData.info.avatarUrl || sourceData.info.avatarUrl,
+        export_timestamp: Math.max(
+          targetData.info.export_timestamp || 0,
+          sourceData.info.export_timestamp || 0,
+        ),
+        charPityResetSeqId: markers.charPityResetSeqId,
+        weaponPityResetSeqId: markers.weaponPityResetSeqId,
+        updatedAt: nextUpdatedAt(targetData.info.updatedAt),
+      },
+    };
+
+    store.set(targetKey, updatedData);
+    applySimPoolRecords(store, targetUid, computeSimPoolRecords(updatedData));
+    if (sourceKey !== targetKey) {
+      store.delete(sourceKey);
+      store.delete(lbKey(sourceUid));
+    }
+    return updatedData;
+  });
+}
+
+function laterSeqId(a?: string, b?: string): string | undefined {
+  const na = a == null ? NaN : Number(a);
+  const nb = b == null ? NaN : Number(b);
+  if (!Number.isFinite(na) && !Number.isFinite(nb)) return undefined;
+  if (!Number.isFinite(na)) return b;
+  if (!Number.isFinite(nb)) return a;
+  return na >= nb ? a : b;
 }
 
 /**
@@ -400,61 +648,10 @@ export async function migrateGachaLog(
   accountIndex?: number,
   gameNickname?: string,
 ) {
-  const sourceKey = `GACHA_LOG_${sourceUid}`;
-  const targetKey = `GACHA_LOG_${targetUid}`;
+  const updatedData = commitGachaLogMigration(db, sourceUid, targetUid);
+  if (!updatedData) return null;
 
-  const sourceData = await db.get<GachaLogData>(sourceKey);
-  if (!sourceData) return null;
-
-  const targetData = (await db.get<GachaLogData>(targetKey)) || {
-    characterList: [],
-    weaponList: [],
-    info: { uid: targetUid, lang: sourceData.info.lang, export_timestamp: 0 },
-  };
-
-  // Merge logic (same as in fetchAndMergeGachaLog)
-  const charMap = new Map<string, GachaRecord>();
-  const weaponMap = new Map<string, GachaRecord>();
-
-  targetData.characterList.forEach((r) => charMap.set(String(r.seqId), r));
-  targetData.weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
-
-  sourceData.characterList.forEach((r) => charMap.set(String(r.seqId), r));
-  sourceData.weaponList.forEach((r) => weaponMap.set(String(r.seqId), r));
-
-  const newCharList = Array.from(charMap.values()).sort(
-    (a, b) => Number(b.seqId) - Number(a.seqId),
-  );
-  const newWeaponList = Array.from(weaponMap.values()).sort(
-    (a, b) => Number(b.seqId) - Number(a.seqId),
-  );
-
-  const updatedData: GachaLogData = {
-    characterList: newCharList,
-    weaponList: newWeaponList,
-    info: {
-      ...targetData.info,
-      nickname:
-        targetData.info.nickname && targetData.info.nickname !== targetUid
-          ? targetData.info.nickname
-          : sourceData.info.nickname && sourceData.info.nickname !== targetUid
-            ? sourceData.info.nickname
-            : undefined,
-      avatarUrl: targetData.info.avatarUrl || sourceData.info.avatarUrl,
-      export_timestamp: Math.max(
-        targetData.info.export_timestamp || 0,
-        sourceData.info.export_timestamp || 0,
-      ),
-    },
-  };
-
-  await db.set(targetKey, updatedData);
-  await persistSimPoolRecordsFromLog(db, targetUid, updatedData);
-  if (sourceKey !== targetKey) {
-    await db.delete(sourceKey);
-  }
-
-  // Update leaderboard for target
+  // Update leaderboard for target (the source row was removed with its log).
   try {
     await updateLeaderboard(
       db,
@@ -466,13 +663,6 @@ export async function migrateGachaLog(
     );
   } catch (e) {
     console.error(`[Leaderboard] Failed to update for ${targetUid}:`, e);
-  }
-
-  // Remove source from leaderboard
-  try {
-    if (sourceUid !== targetUid) await removeLeaderboardEntry(db, sourceUid);
-  } catch (e) {
-    console.error(`[Leaderboard] Failed to remove guest log ${sourceUid}:`, e);
   }
 
   return updatedData;
@@ -490,10 +680,6 @@ export async function clearGachaLog(
   endTime?: string,
 ) {
   const dbKey = `GACHA_LOG_${uid}`;
-  const data = await db.get<GachaLogData>(dbKey);
-
-  if (!data) return false;
-
   const start = startTime
     ? moment(/^\d+$/.test(startTime) ? Number(startTime) : startTime).valueOf()
     : 0;
@@ -512,17 +698,39 @@ export async function clearGachaLog(
     return ts < start || ts > end;
   };
 
-  data.characterList = data.characterList.filter(filterFn);
-  data.weaponList = data.weaponList.filter(filterFn);
+  // Read, filter and write in one transaction so a concurrent import is not lost.
+  const outcome = db.transaction((store) => {
+    const stored = store.get<GachaLogData>(dbKey);
+    if (!stored) return null;
+    const data = normalizeStored(stored, uid, "en-us");
+    const characterList = data.characterList.filter(filterFn);
+    const weaponList = data.weaponList.filter(filterFn);
 
-  if (data.characterList.length === 0 && data.weaponList.length === 0) {
-    await db.delete(dbKey);
-    // Remove from leaderboard too
-    await removeLeaderboardEntry(db, uid);
-  } else {
-    await db.set(dbKey, data);
-    await updateLeaderboard(db, uid, data);
-  }
+    if (characterList.length === 0 && weaponList.length === 0) {
+      store.delete(dbKey);
+      store.delete(lbKey(uid)); // log and board row go together
+      return { data: null as GachaLogData | null };
+    }
+    const markers = mergePityResetMarkers(
+      data.info,
+      { characterList, weaponList },
+    );
+    const updated: GachaLogData = {
+      ...data,
+      characterList,
+      weaponList,
+      info: {
+        ...data.info,
+        charPityResetSeqId: markers.charPityResetSeqId,
+        weaponPityResetSeqId: markers.weaponPityResetSeqId,
+        updatedAt: nextUpdatedAt(data.info.updatedAt),
+      },
+    };
+    store.set(dbKey, updated);
+    return { data: updated as GachaLogData | null };
+  });
 
+  if (!outcome) return false;
+  if (outcome.data) await updateLeaderboard(db, uid, outcome.data);
   return true;
-}
+}
