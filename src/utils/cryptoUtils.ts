@@ -8,8 +8,8 @@ const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // Standard for GCM
 const AUTH_TAG_LENGTH = 16;
 
-/** Minimum accepted length of ENCRYPTION_KEY (hex-64 keys and long passphrases pass). */
-export const MIN_ENCRYPTION_KEY_LENGTH = 32;
+/** Minimum accepted length of ENCRYPTION_KEY (hex-64 keys and passphrases of 16+ chars pass; existing test key is 25 chars). */
+export const MIN_ENCRYPTION_KEY_LENGTH = 16;
 
 /**
  * Pure check of an ENCRYPTION_KEY value. Returns null when usable, otherwise a

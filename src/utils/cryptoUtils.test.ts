@@ -80,7 +80,8 @@ assert.ok(validateEncryptionKey(undefined));
 assert.ok(validateEncryptionKey(""));
 assert.ok(validateEncryptionKey("short"));
 assert.equal(validateEncryptionKey("a".repeat(64)), null);
-assert.equal(validateEncryptionKey("x".repeat(32)), null);
+assert.ok(validateEncryptionKey("x".repeat(15)));
+assert.equal(validateEncryptionKey("x".repeat(16)), null);
 
 // module load: production without a usable key refuses to start
 {
