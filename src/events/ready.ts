@@ -52,6 +52,7 @@ const event: Event = {
     }
 
     setInterval(() => updatePresence(client), 10000);
+    await client.startup.run(client.cluster.id === 0);
   },
 };
 
