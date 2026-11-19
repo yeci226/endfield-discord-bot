@@ -36,6 +36,7 @@ import {
   withAutoRefresh,
 } from "../../utils/accountUtils";
 import { ProfileTemplateService } from "../../services/ProfileTemplateService";
+import { generateToken } from "../../web/webSecurity";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -215,10 +216,8 @@ const command: Command = {
           return;
         }
 
-        // Generate a random token for the session
-        const token =
-          Math.random().toString(36).substring(2, 15) +
-          Math.random().toString(36).substring(2, 15);
+        // Unguessable token (192 bits of CSPRNG output)
+        const token = generateToken();
 
         // Save token to DB with expiry (e.g. 30 mins)
         await db.set(`profile_edit_token:${token}`, {

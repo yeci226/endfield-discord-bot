@@ -1,6 +1,7 @@
 import { Events } from "discord.js";
 import { Event } from "../interfaces/Event";
 import { getAccounts } from "../utils/accountUtils";
+import { maskSecret } from "../utils/cryptoUtils";
 
 const OWNER_ID = "283946584461410305";
 
@@ -36,9 +37,10 @@ const event: Event = {
       const info = acc.info || {};
       lines.push(`**[${i + 1}] ${info.nickname ?? "Unknown"}**`);
       lines.push("```");
-      lines.push(`cred:   ${acc.cred ?? "N/A"}`);
-      lines.push(`salt:   ${acc.salt ?? "N/A"}`);
-      lines.push(`cookie: ${acc.cookie ?? "N/A"}`);
+      // Never print stored credentials: first/last 4 characters only.
+      lines.push(`cred:   ${acc.cred ? maskSecret(acc.cred) : "N/A"}`);
+      lines.push(`salt:   ${acc.salt ? maskSecret(acc.salt) : "N/A"}`);
+      lines.push(`cookie: ${acc.cookie ? maskSecret(acc.cookie) : "N/A"}`);
       lines.push("```");
     }
 

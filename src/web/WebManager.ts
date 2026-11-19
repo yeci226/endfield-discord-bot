@@ -15,8 +15,28 @@ import { drawDashboard } from "../utils/canvasUtils";
 import { createTranslator } from "../utils/i18n";
 import fs from "fs";
 import path from "path";
-import crypto from "crypto";
-import axios from "axios";
+import type { NextFunction, Request, Response } from "express";
+import {
+  evictCache,
+  fetchProxiedImage,
+  findCached,
+  isServableCacheFile,
+  ProxyError,
+  writeCached,
+} from "./imageProxy";
+import { VerificationClient } from "./VerificationClient";
+import { validateTemplateImages } from "./templateGuard";
+import {
+  BoundedCache,
+  createRateLimiter,
+  isPlausibleToken,
+  maskTokensInUrl,
+  parseAllowedOrigins,
+  RateLimiter,
+  resolveClientIp,
+} from "./webSecurity";
+
+const HOUR_MS = 60 * 60 * 1000;
 
 export class WebManager {
   private app = express();
@@ -26,18 +46,91 @@ export class WebManager {
     __dirname,
     fs.existsSync(path.join(__dirname, "../../src")) ? "../../src" : "../..",
   );
-  private dataCache = new Map<string, { data: any; expires: number }>();
+  /** Editor data per edit token: max 200 entries, dropped when the token expires. */
+  private dataCache = new BoundedCache<any>(200);
+  private cacheDir = path.join(this.rootDir, "assets/cache");
+
+  private callbackLimiter = createRateLimiter({ limit: 30, windowMs: 60_000 });
+  private previewLimiter = createRateLimiter({ limit: 30, windowMs: 60_000 });
+  private proxyLimiter = createRateLimiter({ limit: 120, windowMs: 60_000 });
 
   constructor(client: ExtendedClient) {
     this.client = client;
     this.setup();
+
+    // Hourly housekeeping (cluster 0 only, via the startup hooks)
+    client.startup.every("web-purge-edit-tokens", HOUR_MS, () => {
+      this.purgeExpiredEditTokens();
+    });
+    client.startup.every("web-evict-proxy-cache", HOUR_MS, () => {
+      const n = evictCache(this.cacheDir);
+      if (n > 0) this.logger.info(`Proxy cache: evicted ${n} file(s)`);
+    });
+  }
+
+  /** Deletes expired profile_edit_token:* rows. */
+  private purgeExpiredEditTokens() {
+    const now = Date.now();
+    const rows = this.client.db.findFieldByPrefix(
+      "profile_edit_token:",
+      "$.expiresAt",
+    );
+    let n = 0;
+    for (const row of rows) {
+      // LIKE treats "_" as a wildcard and ignores case: re-check the prefix
+      if (!row.id.startsWith("profile_edit_token:")) continue;
+      const exp = Number(row.field);
+      if (!Number.isFinite(exp) || exp < now) {
+        void this.client.db.delete(row.id);
+        n++;
+      }
+    }
+    if (n > 0) this.logger.info(`Purged ${n} expired editor token(s)`);
+  }
+
+  /** Looks up a live edit session; expired rows are deleted on the way. */
+  private async loadSession(
+    token: unknown,
+  ): Promise<{ userId: string; expiresAt: number } | null> {
+    if (!isPlausibleToken(token)) return null;
+    const key = `profile_edit_token:${token}`;
+    const session = await this.client.db.get(key);
+    if (!session || typeof session.expiresAt !== "number") return null;
+    if (session.expiresAt < Date.now()) {
+      void this.client.db.delete(key);
+      return null;
+    }
+    return session;
+  }
+
+  private limit(limiter: RateLimiter) {
+    return (req: Request, res: Response, next: NextFunction) => {
+      const ip = resolveClientIp(
+        req.socket.remoteAddress,
+        req.headers["x-forwarded-for"],
+      );
+      const r = limiter.check(ip);
+      if (r.allowed) return next();
+      res.setHeader("Retry-After", String(Math.ceil(r.retryAfterMs / 1000)));
+      res.status(429).json({ error: "Too many requests" });
+    };
   }
 
   private setup() {
-    this.app.use(cors());
-    this.app.use(bodyParser.json({ limit: "10mb" }));
+    this.app.disable("x-powered-by");
+    const allowedOrigins = parseAllowedOrigins(process.env.WEB_ALLOWED_ORIGINS);
+    // Same-origin only unless WEB_ALLOWED_ORIGINS lists other origins.
+    this.app.use(
+      cors({
+        origin: (origin, cb) =>
+          cb(null, !!origin && allowedOrigins.includes(origin)),
+      }),
+    );
+    const json2mb = bodyParser.json({ limit: "2mb" });
+    const json32kb = bodyParser.json({ limit: "32kb" });
     this.app.use((req, res, next) => {
-      this.logger.info(`${req.method} ${req.url}`);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      this.logger.info(`${req.method} ${maskTokensInUrl(req.originalUrl)}`);
       next();
     });
     // Simplified Static Middleware
@@ -50,8 +143,29 @@ export class WebManager {
       immutable: true,
     };
 
-    this.app.use("/endfield/assets", express.static(assetsPath, staticOptions));
-    this.app.use("/assets", express.static(assetsPath, staticOptions));
+    // assets/cache only ever serves images (never .html/.svg/.js)
+    const guardCache = (req: Request, res: Response, next: NextFunction) => {
+      let p: string;
+      try {
+        p = path.posix.normalize(decodeURIComponent(req.path)).toLowerCase();
+      } catch {
+        return res.status(400).end();
+      }
+      if (/^\/+cache(\/|$)/.test(p) && !isServableCacheFile(p)) {
+        return res.status(404).end();
+      }
+      next();
+    };
+    this.app.use(
+      "/endfield/assets",
+      guardCache,
+      express.static(assetsPath, staticOptions),
+    );
+    this.app.use(
+      "/assets",
+      guardCache,
+      express.static(assetsPath, staticOptions),
+    );
     this.app.use("/endfield", express.static(publicPath, { maxAge: "1h" }));
     this.app.use("/", express.static(publicPath, { maxAge: "1h" }));
 
@@ -62,7 +176,6 @@ export class WebManager {
           <body style="background:#111; color:#eee; font-family:sans-serif; display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh;">
             <h1 style="color:#00ff88;">Endfield Web Manager is UP</h1>
             <p>Cluster: ${this.client.cluster?.id ?? "N/A"}</p>
-            <p>Path: ${req.originalUrl}</p>
             <p>Time: ${new Date().toLocaleString()}</p>
             <hr style="width:200px; border-color:#333;">
             <a href="/profile/edit" style="color:#00bcd4;">Go to Editor (Root Path)</a><br>
@@ -75,49 +188,39 @@ export class WebManager {
     this.app.get("/endfield", healthHandler);
 
     // API: Proxy for images (CORS bypass)
-    const proxyHandler = async (
-      req: express.Request,
-      res: express.Response,
-    ) => {
-      const url = req.query.url as string;
-      if (!url) return res.status(400).send("No URL");
+    const proxyHandler = async (req: Request, res: Response) => {
+      const url = req.query.url;
+      if (typeof url !== "string" || !url) {
+        return res.status(400).send("Bad request");
+      }
 
       try {
-        if (url.startsWith("http")) {
-          // Local Disk Cache Logic
-          const hash = crypto.createHash("md5").update(url).digest("hex");
-          const cacheDir = path.join(this.rootDir, "assets/cache");
-          if (!fs.existsSync(cacheDir))
-            fs.mkdirSync(cacheDir, { recursive: true });
-
-          const ext = path.extname(new URL(url).pathname) || ".png";
-          const cachePath = path.join(cacheDir, `${hash}${ext}`);
-
-          if (fs.existsSync(cachePath)) {
-            return res.sendFile(cachePath);
-          }
-
-          const response = await axios.get(url, {
-            responseType: "arraybuffer",
-          });
-          const buffer = Buffer.from(response.data);
-          const contentType = response.headers["content-type"];
-
-          await fs.promises.writeFile(cachePath, buffer);
-
-          if (contentType) res.setHeader("Content-Type", String(contentType));
+        const cached = findCached(this.cacheDir, url);
+        if (cached) {
           res.setHeader("Cache-Control", "public, max-age=604800, immutable");
-          res.send(buffer);
-        } else {
-          res.status(404).send("Not found");
+          return res.sendFile(cached);
         }
+
+        const img = await fetchProxiedImage(url);
+        await writeCached(this.cacheDir, url, img);
+
+        res.setHeader("Content-Type", img.contentType);
+        res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+        res.send(img.buffer);
       } catch (e) {
-        this.logger.error(`Proxy error for ${url}: ${e}`);
-        res.status(500).send("Proxy error");
+        if (e instanceof ProxyError) {
+          this.logger.warn(`Proxy refused (${e.reason}): ${url.slice(0, 200)}`);
+          return res
+            .status(e.status === 400 ? 400 : 502)
+            .send(e.status === 400 ? "Bad request" : "Proxy error");
+        }
+        this.logger.error(`Proxy error: ${e}`);
+        res.status(502).send("Proxy error");
       }
     };
-    this.app.get("/api/proxy", proxyHandler);
-    this.app.get("/endfield/api/proxy", proxyHandler);
+    const proxyLimit = this.limit(this.proxyLimiter);
+    this.app.get("/api/proxy", proxyLimit, proxyHandler);
+    this.app.get("/endfield/api/proxy", proxyLimit, proxyHandler);
 
     // List illustrators
     const illustratorsHandler = async (
@@ -147,15 +250,15 @@ export class WebManager {
       res: express.Response,
     ) => {
       const token = req.params.token as string;
-      const session = await this.client.db.get(`profile_edit_token:${token}`);
-      if (!session || session.expiresAt < Date.now()) {
+      const session = await this.loadSession(token);
+      if (!session) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
 
       // Memory Cache Check
       const cached = this.dataCache.get(token);
-      if (cached && cached.expires > Date.now()) {
-        return res.json(cached.data);
+      if (cached) {
+        return res.json(cached);
       }
 
       const userId = session.userId;
@@ -200,10 +303,7 @@ export class WebManager {
       };
 
       // Set Cache (2 minutes)
-      this.dataCache.set(token, {
-        data: responseData,
-        expires: Date.now() + 120000,
-      });
+      this.dataCache.set(token, responseData, 120000, session.expiresAt);
 
       res.json(responseData);
     };
@@ -216,16 +316,19 @@ export class WebManager {
       res: express.Response,
     ) => {
       const token = req.params.token;
-      const session = await this.client.db.get(`profile_edit_token:${token}`);
-      if (!session || session.expiresAt < Date.now()) {
+      const session = await this.loadSession(token);
+      if (!session) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
-      const { template } = req.body;
+      const { template } = req.body ?? {};
       if (template === null) {
         await this.client.db.delete(`profile.${session.userId}.template`);
         return res.json({ success: true });
       }
       if (!template) return res.status(400).json({ error: "Missing template" });
+      if (!validateTemplateImages(template).ok) {
+        return res.status(400).json({ error: "Invalid image source" });
+      }
       await ProfileTemplateService.saveUserTemplate(
         this.client.db,
         session.userId,
@@ -233,8 +336,8 @@ export class WebManager {
       );
       res.json({ success: true });
     };
-    this.app.post("/api/profile/:token", saveProfileHandler);
-    this.app.post("/endfield/api/profile/:token", saveProfileHandler);
+    this.app.post("/api/profile/:token", json2mb, saveProfileHandler);
+    this.app.post("/endfield/api/profile/:token", json2mb, saveProfileHandler);
 
     // API: Render preview image using actual drawDashboard()
     const previewHandler = async (
@@ -242,8 +345,8 @@ export class WebManager {
       res: express.Response,
     ) => {
       const token = req.params.token as string;
-      const session = await this.client.db.get(`profile_edit_token:${token}`);
-      if (!session || session.expiresAt < Date.now()) {
+      const session = await this.loadSession(token);
+      if (!session) {
         return res.status(401).json({ error: "Invalid or expired token" });
       }
 
@@ -254,18 +357,22 @@ export class WebManager {
           .json({ error: "No data cached, reload the editor page first" });
       }
 
-      const { template: bodyTemplate } = req.body;
+      const { template: bodyTemplate } = req.body ?? {};
       if (!bodyTemplate) {
         return res.status(400).json({ error: "Missing template" });
       }
 
-      const detail = cached.data.detail;
+      if (!validateTemplateImages(bodyTemplate).ok) {
+        return res.status(400).json({ error: "Invalid image source" });
+      }
+
+      const detail = cached.detail;
       if (!detail) {
         return res.status(404).json({ error: "No card detail available" });
       }
 
       try {
-        const locale = cached.data.user?.locale || "tw";
+        const locale = cached.user?.locale || "tw";
         const tr = createTranslator(locale);
         const buffer = await drawDashboard(detail, tr, bodyTemplate);
         res.setHeader("Content-Type", "image/webp");
@@ -273,11 +380,17 @@ export class WebManager {
         res.send(buffer);
       } catch (err: any) {
         this.logger.error(`Preview render failed: ${err.message}`);
-        res.status(500).json({ error: "Render failed", detail: err.message });
+        res.status(500).json({ error: "Render failed" });
       }
     };
-    this.app.post("/api/preview/:token", previewHandler);
-    this.app.post("/endfield/api/preview/:token", previewHandler);
+    const previewLimit = this.limit(this.previewLimiter);
+    this.app.post("/api/preview/:token", previewLimit, json2mb, previewHandler);
+    this.app.post(
+      "/endfield/api/preview/:token",
+      previewLimit,
+      json2mb,
+      previewHandler,
+    );
 
     // Serve HTML
     const editorHandler = (req: express.Request, res: express.Response) => {
@@ -293,36 +406,52 @@ export class WebManager {
     this.app.get("/endfield/verify", verifyHandler);
 
     // Handle verification callback
-    const callbackHandler = async (
-      req: express.Request,
-      res: express.Response,
-    ) => {
-      const { sessionId, result } = req.body;
-      const { VerificationClient } = require("./VerificationClient");
-      if (sessionId && result) {
-        VerificationClient.emitResult(sessionId, result);
-        this.logger.success(
-          `Verification result received locally for ${sessionId}`,
-        );
+    const callbackHandler = async (req: Request, res: Response) => {
+      const { sessionId, result } = req.body ?? {};
+      if (
+        typeof sessionId !== "string" ||
+        sessionId.length > 64 ||
+        !result ||
+        typeof result !== "object"
+      ) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Invalid request" });
+      }
+      // Only sessions created by /login are accepted; the waiting cluster
+      // picks the result up from the database.
+      if (VerificationClient.submitResult(sessionId, result)) {
+        this.logger.success("Verification result received");
         res.json({ success: true });
       } else {
         res
           .status(400)
-          .json({ success: false, message: "Missing sessionId or result" });
+          .json({ success: false, message: "Invalid or expired session" });
       }
     };
-    this.app.post("/callback", callbackHandler);
-    this.app.post("/endfield/callback", callbackHandler);
+    const callbackLimit = this.limit(this.callbackLimiter);
+    this.app.post("/callback", callbackLimit, json32kb, callbackHandler);
+    this.app.post(
+      "/endfield/callback",
+      callbackLimit,
+      json32kb,
+      callbackHandler,
+    );
 
-    // Catch-all for debugging 404
     this.app.use((req, res) => {
-      this.logger.warn(`404 Not Found: ${req.method} ${req.originalUrl}`);
-      res.status(404).json({
-        error: "Not Found",
-        path: req.originalUrl,
-        method: req.method,
-        clusterId: this.client.cluster?.id,
-        note: "Endfield WebManager Debug 404",
+      res.status(404).json({ error: "Not Found" });
+    });
+
+    // Generic errors only: never leak internals (body-parser 4xx keep their status)
+    this.app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+      if (res.headersSent) return next(err);
+      const status =
+        typeof err?.status === "number" && err.status >= 400 && err.status < 500
+          ? err.status
+          : 500;
+      if (status === 500) this.logger.error(`Unhandled web error: ${err}`);
+      res.status(status).json({
+        error: status === 413 ? "Payload too large" : "Request failed",
       });
     });
   }
