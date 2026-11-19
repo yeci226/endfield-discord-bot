@@ -453,6 +453,22 @@ const langs: Record<string, any> = {
   indieHard_DataExpired: "❌ Data expired. Please run the command again.",
   indieHard_SelectPeriod: "Select Period",
   indieHard_UnknownError: "❌ An unknown error occurred.",
+
+  // --- L2 (web & credentials) ---
+
+  // --- L3 (daily & account) ---
+
+  // --- L4 (news, reminders, core) ---
+
+  // --- L5 (new commands A) ---
+
+  // --- G1 (gacha security) ---
+
+  // --- G2 (gacha leaderboard & storage) ---
+
+  // --- G3 (gacha stats) ---
+
+  // --- G4 (gacha rendering) ---
 };
 
 export default langs;

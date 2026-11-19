@@ -433,6 +433,22 @@ const langs: Record<string, any> = {
   indieHard_DataExpired: "❌ 資料已過期，請重新使用指令。",
   indieHard_SelectPeriod: "選擇期數",
   indieHard_UnknownError: "❌ 發生未知錯誤。",
+
+  // --- L2 (web & credentials) ---
+
+  // --- L3 (daily & account) ---
+
+  // --- L4 (news, reminders, core) ---
+
+  // --- L5 (new commands A) ---
+
+  // --- G1 (gacha security) ---
+
+  // --- G2 (gacha leaderboard & storage) ---
+
+  // --- G3 (gacha stats) ---
+
+  // --- G4 (gacha rendering) ---
 };
 
 export default langs;
