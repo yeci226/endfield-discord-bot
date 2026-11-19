@@ -463,6 +463,8 @@ const langs: Record<string, any> = {
     "❌ No Endfield role is bound to this account. Arknights-only accounts cannot use this command.",
   indieHard_AccountNotFound:
     "❌ The selected account was not found. Please choose again.",
+  daily_NoEndfieldRole:
+    "❌ This account has no Endfield character bound, so there is nothing to sign in for Endfield.",
 
   // --- L4 (news, reminders, core) ---
 

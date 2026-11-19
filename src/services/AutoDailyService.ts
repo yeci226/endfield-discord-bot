@@ -529,30 +529,12 @@ export class AutoDailyService {
           }
 
           if (roles.length === 0) {
-            // No supported game binding at all: nothing to sign, skip silently.
-            const hasAnySupportedBinding =
-              normalizeBindingRoles(account.roles, gameIdsForScope("both"))
-                .length > 0 ||
-              (Array.isArray(account.roles) &&
-                account.roles.some((r: any) =>
-                  [1, 3].includes(Number(r?.gameId)),
-                ));
-            if (!hasAnySupportedBinding) {
-              this.logger.info(
-                `Skipping account ${account.info?.nickname} (${account.info?.id}) — no game bindings.`,
-              );
-              continue;
-            }
-            results.push({
-              ...this.makeErrorResult(
-                account.info?.nickname || "Unknown",
-                tr("Error") || "No roles found",
-              ),
-              kind: "error",
-              accountIdx: i,
-            });
-            summary.error++;
-            lastError = "no roles found";
+            // No game role for any game in scope (e.g. an Endfield binding without a role:
+            // 176 such bindings in production). Nothing can be signed, so this is neither an
+            // error nor worth a retry or a DM.
+            this.logger.debug(
+              `Skipping account ${account.info?.nickname} (${account.info?.id}) of user ${userId}: no game role in scope ${gameScope}.`,
+            );
             continue;
           }
 

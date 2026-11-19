@@ -64,6 +64,7 @@ const config = (over: any = {}) => ({
 });
 
 const today = taipeiDate(Date.now());
+const EF_ROLE = { roleId: "6600112233", serverId: "2", nickname: "Endmin", level: 30, serverName: "Asia" };
 const storedAccounts = (db: CustomDatabase, userId: string) =>
   db.get<any[]>(`${userId}.accounts`);
 
@@ -185,7 +186,7 @@ async function main() {
           {
             info: { id: "1", nickname: "Main" },
             roles: [
-              { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null },
+              { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [EF_ROLE], defaultRole: null },
             ],
           },
         ]);
@@ -207,11 +208,11 @@ async function main() {
         assert.equal(state.lastError, "HTTP 500 boom");
         assert.equal(await db.get("99.lastAutoDaily"), null, "not marked done");
 
-        // The synthesized Endfield role is what gets signed.
+        // The stored Endfield role is what gets signed (not the binding's uid / channelMasterId).
         assert.equal(calls.length, 1);
         assert.equal(calls[0].gameId, 3);
-        assert.equal(calls[0].role.roleId, "837903459");
-        assert.equal(calls[0].role.serverId, "6");
+        assert.equal(calls[0].role.roleId, "6600112233");
+        assert.equal(calls[0].role.serverId, "2");
 
         // retry (next hour) fails again: stays quiet, attempts grow
         await service.processUser("99", config(), 102);
@@ -259,7 +260,7 @@ async function main() {
       try {
         const bindings = [
           { gameId: 1, uid: "515336528", nickName: "AK", channelMasterId: "6", roles: [], defaultRole: null },
-          { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null },
+          { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [EF_ROLE], defaultRole: null },
         ];
         await db.set("10.accounts", [{ info: { id: "a" }, roles: bindings }]);
         await db.set("11.accounts", [{ info: { id: "b" }, roles: bindings }]);
@@ -275,7 +276,7 @@ async function main() {
           calls.map((c) => [c.gameId, c.role.roleId]),
           [
             [1, "515336528"],
-            [3, "837903459"],
+            [3, "6600112233"],
           ],
           "user 11 is done and skipped; user 10 signs Arknights and Endfield",
         );
@@ -285,11 +286,40 @@ async function main() {
       }
     }
 
+    // --- an Endfield binding without a role is "no role", not an error ---------------
+    {
+      const { db, cleanup } = tempDb();
+      try {
+        const efNoRole = { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null };
+        const ak = { gameId: 1, uid: "515336528", nickName: "AK", channelMasterId: "6", roles: [], defaultRole: null };
+        // 1) only an Endfield binding without a role: silent, done, no DM, no API call
+        await db.set("20.accounts", [{ info: { id: "a", nickname: "OnlyEF" }, roles: [efNoRole] }]);
+        // 2) scope both, Arknights has a role, Endfield does not: Arknights is signed, done
+        await db.set("21.accounts", [{ info: { id: "b", nickname: "Both" }, roles: [ak, efNoRole] }]);
+        calls = [];
+        attendance = () => ({ signedNow: true, hasToday: true, nickname: "n" });
+        const { service, sent } = makeService(db);
+        await service.processUser("20", config({ game_scope: "endfield" }), 101);
+        assert.equal(calls.length, 0, "nothing is signed from the binding's uid");
+        assert.equal(sent.length, 0, "no error card, no DM");
+        const s20: any = await db.get("autoDailyState.20");
+        assert.equal(s20.status, "done");
+        assert.equal(s20.attempts, 1);
+        assert.equal(s20.lastError, undefined);
+        await service.processUser("21", config({ game_scope: "both" }), 101);
+        assert.deepEqual(calls.map((c) => [c.gameId, c.role.roleId]), [[1, "515336528"]]);
+        assert.equal(((await db.get("autoDailyState.21")) as any).status, "done");
+        assert.equal(sent.filter((p) => p.content && /❌|⚠️/.test(p.content)).length, 0);
+      } finally {
+        cleanup();
+      }
+    }
+
     // --- manual hour range: configured hour only, finished users skipped ---------
     {
       const { db, cleanup } = tempDb();
       try {
-        await db.set("10.accounts", [{ info: { id: "a" }, roles: [{ gameId: 3, uid: "1", roles: [] }] }]);
+        await db.set("10.accounts", [{ info: { id: "a" }, roles: [{ gameId: 3, uid: "1", roles: [EF_ROLE] }] }]);
         await db.set("autoDaily.10", config({ time: 5, notify: false }));
         calls = [];
         const { service } = makeService(db);

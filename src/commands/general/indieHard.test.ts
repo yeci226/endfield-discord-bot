@@ -12,7 +12,8 @@ const originals = {
 
 const tw = createTranslator("tw");
 const AK = { gameId: 1, uid: "515336528", nickName: "AK", channelMasterId: "6", roles: [], defaultRole: null };
-const EF = { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null };
+const EF_NOROLE = { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null };
+const EF = { ...EF_NOROLE, roles: [{ roleId: "6600112233", serverId: "2", nickname: "Endmin", level: 30, serverName: "Asia" }] };
 
 async function main() {
   const events: string[] = [];
@@ -87,6 +88,16 @@ async function main() {
       assert.ok(!events.includes("makeRequest"));
     }
 
+    // Endfield binding without a role: no role is invented from the binding, same message.
+    accounts = [{ info: { id: "efnr" }, roles: [EF_NOROLE] }];
+    {
+      events.length = 0;
+      const { interaction, replies } = chat({});
+      await command.execute({}, interaction, tw, {});
+      assert.ok(text(replies[0]).includes(tw("indieHard_NoEndfieldRole")));
+      assert.ok(!events.includes("makeRequest"));
+    }
+
     // Unknown account index.
     accounts = [{ info: { id: "ak" }, roles: [AK] }, { info: { id: "both" }, roles: [AK, EF] }];
     {
@@ -107,8 +118,8 @@ async function main() {
       assert.ok(firstNetwork > 0);
       assert.equal(refreshed[refreshed.length - 1], accounts[1]);
       const req = requests[requests.length - 1];
-      assert.equal(req.params.roleId, "837903459");
-      assert.equal(req.params.serverId, "6");
+      assert.equal(req.params.roleId, "6600112233");
+      assert.equal(req.params.serverId, "2");
       assert.equal(req.params.userId, "837903459", "same userId parameter as before: the binding uid");
       assert.equal(typeof req.onStale, "function");
     }

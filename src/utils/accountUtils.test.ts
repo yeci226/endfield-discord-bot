@@ -108,6 +108,14 @@ async function main() {
       const c = (await getAccounts(db, "u2"))[0];
       assert.equal(await ensureAccountBinding(c, "u2", db, "tw"), false);
       assert.equal(userInfoCalls, 0);
+
+      // an Endfield binding without any role also short-circuits (no refresh on every use)
+      await db.set("u2b.accounts", [
+        { info: { id: "n1" }, cookie: "ACCOUNT_TOKEN=t", cred: "c", salt: "s", lastRefresh: Date.now(), roles: [{ gameId: 3, uid: "1", roles: [], defaultRole: null }] },
+      ]);
+      const d = (await getAccounts(db, "u2b"))[0];
+      assert.equal(await ensureAccountBinding(d, "u2b", db, "tw"), false);
+      assert.equal(userInfoCalls, 0);
     } finally {
       Object.assign(skportApi, originals);
     }

@@ -14,7 +14,6 @@ import { Logger } from "./Logger";
 import {
   ARKNIGHTS_GAME_ID,
   ENDFIELD_GAME_ID,
-  getPrimaryBindingRoleForGame,
 } from "./bindingRoles";
 
 const logger = new Logger("AccountUtils");
@@ -44,6 +43,17 @@ export function normalizeBindingEntries(
     out.push(item);
   }
   return out;
+}
+
+/**
+ * True when the stored bindings include an Arknights or Endfield binding. A recent refresh
+ * that found such a binding is not repeated even if the binding has no role (176 Endfield
+ * bindings in production have none), otherwise those accounts would refresh on every use.
+ */
+function hasSupportedBinding(bindings: any[] | null | undefined): boolean {
+  return normalizeBindingEntries(bindings).some((b) =>
+    [ARKNIGHTS_GAME_ID, ENDFIELD_GAME_ID].includes(Number(b?.gameId)),
+  );
 }
 
 /**
@@ -138,8 +148,7 @@ export async function ensureAccountBinding(
     !forceRefresh &&
     !account.invalid &&
     isRecent &&
-    (getPrimaryBindingRoleForGame(account.roles, ENDFIELD_GAME_ID) ||
-      getPrimaryBindingRoleForGame(account.roles, ARKNIGHTS_GAME_ID))
+    hasSupportedBinding(account.roles)
   ) {
     return false;
   }

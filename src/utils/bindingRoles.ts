@@ -4,8 +4,11 @@
  * Rules that keep existing users on the same role:
  *  - A binding that already has non-empty `roles` (or a `defaultRole`) returns exactly those
  *    roles; `raw` is the stored object, `roleId`/`serverId` are not rewritten.
- *  - A role is synthesized from the binding itself only when it has neither. For gameId 1
- *    the synthesized object is identical to what daily.ts / AutoDailyService.ts built before.
+ *  - A role is synthesized from the binding itself only when it has neither, and ONLY for
+ *    gameId 1 (Arknights), where the synthesized object is identical to what daily.ts /
+ *    AutoDailyService.ts built before. Never for Endfield: an Endfield binding's `uid` /
+ *    `channelMasterId` are not the role's roleId / serverId (measured on production
+ *    2026-11-19, see the note below), so an Endfield binding without roles has no role.
  *  - Callers always name the games they want; there is no "any game" synthesis.
  *
  * See docs/superpowers/notes/binding-roles-revert.md for why the earlier attempts were reverted.
@@ -54,16 +57,13 @@ function str(value: unknown): string {
   return value === undefined || value === null ? "" : String(value);
 }
 
-function synthesize(binding: any, gameId: number): any | null {
+/** Arknights only (see the header). */
+function synthesize(binding: any): any | null {
   if (!binding?.uid && !binding?.nickName) return null;
   return {
     roleId: String(binding?.uid || ""),
     serverId: String(binding?.channelMasterId || ""),
-    nickname: String(
-      binding?.nickName ||
-        binding?.uid ||
-        (gameId === ENDFIELD_GAME_ID ? "Endfield" : "Arknights"),
-    ),
+    nickname: String(binding?.nickName || binding?.uid || "Arknights"),
     level: 0,
     serverName: String(binding?.channelName || binding?.gameName || "-"),
   };
@@ -88,8 +88,8 @@ export function normalizeBindingRoles(
     if (rawRoles.length === 0 && binding.defaultRole) {
       rawRoles = [binding.defaultRole];
     }
-    if (rawRoles.length === 0) {
-      const made = synthesize(binding, gameId);
+    if (rawRoles.length === 0 && gameId === ARKNIGHTS_GAME_ID) {
+      const made = synthesize(binding);
       if (made) {
         rawRoles = [made];
         synthesized = true;
@@ -183,4 +183,88 @@ export function resolveEndfieldTarget(
   const role = getPrimaryBindingRoleForGame(account?.roles, ENDFIELD_GAME_ID);
   if (!role) return { ok: false, reason: "no_endfield_role" };
   return { ok: true, account, accountIndex, role };
+}
+
+// ---- Role list / picker for the commands that pick one Endfield role (stamina, crisis) ----
+
+export interface EndfieldRoleEntry {
+  accountIndex: number;
+  accountLabel: string;
+  roleId: string;
+  serverId: string;
+  nickname: string;
+  /** Server display name, when the role provides one. */
+  serverName: string;
+  level: number;
+  /** SKPORT user id used as the `userId` parameter of card endpoints (unchanged from before). */
+  skUserId: string;
+}
+
+/**
+ * Every Endfield (gameId 3) role over all accounts, in account order. Bindings without a role
+ * contribute nothing (see the header: Endfield roles are never synthesized).
+ */
+export function listEndfieldRoles(
+  accounts: any[] | null | undefined,
+): EndfieldRoleEntry[] {
+  const out: EndfieldRoleEntry[] = [];
+  const seen = new Set<string>();
+  (accounts || []).forEach((account, accountIndex) => {
+    const accountLabel = str(
+      account?.info?.nickname || account?.info?.id || "SKPORT",
+    );
+    for (const role of normalizeBindingRoles(account?.roles, [ENDFIELD_GAME_ID])) {
+      const key = `${accountIndex}:${role.roleId}:${role.serverId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        accountIndex,
+        accountLabel,
+        roleId: role.roleId,
+        serverId: role.serverId,
+        nickname: role.nickname,
+        serverName: str(role.raw?.serverName),
+        level: Number(role.raw?.level) || 0,
+        skUserId: str(account?.info?.id || role.bindingUid),
+      });
+    }
+  });
+  return out;
+}
+
+/** Stable select-menu value for a role. */
+export const roleKey = (
+  r: Pick<EndfieldRoleEntry, "accountIndex" | "roleId" | "serverId">,
+): string => `${r.accountIndex}:${r.roleId}:${r.serverId}`;
+
+export function findRoleByKey(
+  roles: EndfieldRoleEntry[],
+  key: string | undefined | null,
+): EndfieldRoleEntry | undefined {
+  return roles.find((r) => roleKey(r) === key);
+}
+
+const NUMBER_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+
+export interface RoleSelectOption {
+  label: string;
+  value: string;
+  description: string;
+  emoji: string;
+  default: boolean;
+}
+
+/** Plain option data for a role picker (Discord allows at most 25 options). */
+export function roleSelectOptions(
+  roles: EndfieldRoleEntry[],
+  selectedKey: string,
+): RoleSelectOption[] {
+  return roles.slice(0, 25).map((r) => ({
+    label: r.nickname.slice(0, 100) || r.roleId,
+    value: roleKey(r),
+    description:
+      [r.serverName, r.accountLabel].filter(Boolean).join(" · ").slice(0, 100) || "-",
+    emoji: NUMBER_EMOJI[r.accountIndex] ?? "👤",
+    default: roleKey(r) === selectedKey,
+  }));
 }

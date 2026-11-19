@@ -19,7 +19,7 @@ import { ExtendedClient } from "../../structures/Client";
 import { CustomDatabase } from "../../utils/Database";
 import { ensureAccountBinding, getAccounts, withAutoRefresh } from "../../utils/accountUtils";
 import { getCardDetail, makeRequest } from "../../utils/skportApi";
-import { EndfieldRoleEntry, findRoleByKey, listEndfieldRoles, roleKey, roleSelectOptions } from "../../utils/endfieldRole";
+import { EndfieldRoleEntry, findRoleByKey, listEndfieldRoles, roleKey, roleSelectOptions } from "../../utils/bindingRoles";
 import { toI18nLang } from "../../utils/i18n";
 import {
   buildCrisisContractCard,

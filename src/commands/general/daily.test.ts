@@ -14,7 +14,8 @@ const originals = {
 
 const tw = createTranslator("tw");
 const AK = { gameId: 1, uid: "515336528", nickName: "AK", channelMasterId: "6", roles: [], defaultRole: null };
-const EF = { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null };
+const EF_NOROLE = { gameId: 3, uid: "837903459", nickName: "", channelMasterId: "6", roles: [], defaultRole: null };
+const EF = { ...EF_NOROLE, roles: [{ roleId: "6600112233", serverId: "2", nickname: "Endmin", level: 30, serverName: "Asia" }] };
 
 async function main() {
   const events: string[] = [];
@@ -72,7 +73,8 @@ async function main() {
       const replies = await run("claim", { game: "endfield" });
       assert.equal(signed.length, 1);
       assert.equal(signed[0].gameId, 3);
-      assert.equal(signed[0].role.roleId, "837903459", "synthesized Endfield role is signed");
+      assert.equal(signed[0].role.roleId, "6600112233", "the stored Endfield role is signed, never the binding uid");
+      assert.equal(signed[0].role.serverId, "2");
       assert.ok(replies[0].content.startsWith("<@U>"));
       assert.ok(replies[0].content.includes("HTTP 500 boom"));
       assert.ok(!replies[0].files?.length, "no card for a failed request");
@@ -86,12 +88,41 @@ async function main() {
       assert.ok(!replies[0].files?.length);
     }
 
-    // Arknights-only account asked for Endfield: the no-role message, nothing is called.
+    // Arknights-only account asked for Endfield: the clear "no Endfield character" message,
+    // nothing is called.
     accounts = [{ info: { id: "a" }, roles: [AK] }];
     {
       const replies = await run("claim", { game: "endfield" });
       assert.equal(signed.length, 0);
-      assert.equal(replies[0].content, tw("daily_RoleNotFound"));
+      assert.equal(replies[0].content, tw("daily_NoEndfieldRole"));
+    }
+
+    // Endfield binding with no role (production: roles [] and no defaultRole): same message,
+    // and no role is invented from the binding uid.
+    accounts = [{ info: { id: "a" }, roles: [EF_NOROLE] }];
+    {
+      const replies = await run("check", { game: "endfield" });
+      assert.equal(signed.length, 0);
+      assert.equal(replies[0].content, tw("daily_NoEndfieldRole"));
+    }
+
+    // Asked for both on an account whose Endfield binding has no role: Arknights still runs,
+    // the missing Endfield role is not an error line.
+    accounts = [{ info: { id: "a" }, roles: [AK, EF_NOROLE] }];
+    attendance = () => ({ signedNow: true, hasToday: true, nickname: "AK", totalDays: 3 });
+    {
+      const replies = await run("claim", { game: "both" });
+      assert.deepEqual(signed.map((s) => s.gameId), [1]);
+      assert.equal(replies[0].files.length, 1);
+      assert.ok(!replies[0].content.includes(tw("daily_NoEndfieldRole")));
+    }
+    // Explicit Endfield on two accounts, only one has a role: the card plus a line for the other.
+    accounts = [{ info: { id: "a", nickname: "NoRole" }, roles: [EF_NOROLE] }, { info: { id: "b" }, roles: [EF] }];
+    {
+      const replies = await run("claim", { game: "endfield" });
+      assert.deepEqual(signed.map((s) => s.gameId), [3]);
+      assert.ok(replies[0].content.includes(String(tw("daily_NoEndfieldRole")).replace(/^❌s*/, "")));
+      assert.ok(replies[0].content.includes("NoRole"));
     }
 
     // Mixed account, both games: one success card plus one error line.
