@@ -12,6 +12,7 @@ import dotenv from "dotenv";
 import { WebhookClient } from "discord.js";
 import { Logger } from "./utils/Logger";
 import { installProcessErrorHandlers } from "./utils/processErrors";
+import { startGachaStorageJobs } from "./features/gacha/gachaLeaderboard";
 
 dotenv.config();
 
@@ -47,6 +48,8 @@ dotenv.config();
     client.newsService.register();
     client.autoDailyService.start();
     client.monitorService.register();
+    // Leaderboard blob migration (once) and legacy-entry refresh (periodic).
+    startGachaStorageJobs(client.startup, client.db);
     // client.wikiService.start();
   }
 })().catch((error) => {
