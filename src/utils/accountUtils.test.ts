@@ -9,7 +9,8 @@ import { patchAccount, deleteAccountData, accountFingerprint } from "./accountDa
 import { decryptAccount } from "./cryptoUtils";
 
 const skportApi = require("./skportApi");
-const { ensureAccountBinding, getAccounts } = require("./accountUtils");
+const { ensureAccountBinding, getAccounts, wasRefreshInconclusive } = require("./accountUtils");
+const axios = require("axios").default;
 
 let counter = 0;
 async function withDb(fn: (db: CustomDatabase) => Promise<void>) {
@@ -131,7 +132,7 @@ async function main() {
       refreshSkToken: skportApi.refreshSkToken,
       refreshAccountToken: skportApi.refreshAccountToken,
     };
-    skportApi.getUserInfo = async () => ({ code: 1 });
+    skportApi.getUserInfo = async () => ({ code: 10000, status: 401 });
     skportApi.refreshSkToken = async () => null;
     skportApi.refreshAccountToken = async () => null;
     try {
@@ -146,6 +147,190 @@ async function main() {
       Object.assign(skportApi, originals);
     }
   });
+
+  // --- request failure classification (fake axios errors) ---------------------------
+  {
+    const { classifyRequestError, isTransientFailure, isAuthRejectionCode } = skportApi;
+    const noResp = (code: string, message = "boom") => Object.assign(new Error(message), { code, isAxiosError: true });
+    const http = (status: number, data: any = {}) => Object.assign(new Error("x"), { isAxiosError: true, response: { status, data } });
+    const table: Array<[string, any, string, boolean]> = [
+      ["axios timeout", noResp("ECONNABORTED", "timeout of 15000ms exceeded"), "timeout", true],
+      ["ETIMEDOUT", noResp("ETIMEDOUT"), "timeout", true],
+      ["timeout message only", new Error("timeout of 15000ms exceeded"), "timeout", true],
+      ["connection reset", noResp("ECONNRESET"), "network", true],
+      ["dns failure", noResp("ENOTFOUND"), "network", true],
+      ["HTTP 500", http(500), "server", true],
+      ["HTTP 502", http(502), "server", true],
+      ["HTTP 429", http(429), "rate_limited", true],
+      ["HTTP 401", http(401, { code: 10000 }), "auth", false],
+      ["HTTP 401 with clock-skew code 10003 is not a login rejection", http(401, { code: 10003 }), "other", false],
+      ["HTTP 403", http(403), "auth", false],
+      ["HTTP 404", http(404), "other", false],
+    ];
+    for (const [name, err, kind, transient] of table) {
+      const f = classifyRequestError(err);
+      assert.equal(f.kind, kind, name);
+      assert.equal(isTransientFailure(f), transient, name);
+    }
+    assert.ok(isAuthRejectionCode(10000, 401));
+    assert.ok(isAuthRejectionCode(10002));
+    assert.ok(isAuthRejectionCode(-1, 403));
+    assert.ok(!isAuthRejectionCode(10003, 401));
+    assert.ok(!isAuthRejectionCode(500, 500));
+    assert.ok(!isAuthRejectionCode(undefined, undefined));
+    assert.equal(classifyRequestError(http(400), { tokenEndpoint: true }).kind, "auth");
+    assert.equal(classifyRequestError(http(400)).kind, "other");
+  }
+
+  // --- makeRequest: 15 s timeout, failure kind reported, return value unchanged ------
+  {
+    const saved = axios.defaults.adapter;
+    let seenTimeout: any;
+    let behaviour: () => any = () => ({});
+    axios.defaults.adapter = async (config: any) => {
+      seenTimeout = config.timeout;
+      const r = behaviour();
+      if (r instanceof Error) throw r;
+      return { data: r, status: 200, statusText: "OK", headers: {}, config };
+    };
+    try {
+      const kinds: string[] = [];
+      const onError = (f: any) => kinds.push(f.kind);
+      behaviour = () => Object.assign(new Error("timeout of 15000ms exceeded"), { code: "ECONNABORTED", isAxiosError: true });
+      assert.equal(await skportApi.makeRequest("GET", "https://zonai.skport.com/web/v2/user", { onError }), null);
+      assert.equal(seenTimeout, 15000, "every request is time-bounded");
+      assert.deepEqual(kinds, ["timeout"]);
+      // the 5xx body is still returned as before; the kind is reported on the side
+      behaviour = () => Object.assign(new Error("x"), { isAxiosError: true, response: { status: 503, data: { code: 5 } } });
+      assert.deepEqual(await skportApi.makeRequest("GET", "https://zonai.skport.com/web/v2/user", { onError }), { code: 5 });
+      assert.deepEqual(kinds, ["timeout", "server"]);
+      behaviour = () => ({ code: 0 });
+      assert.deepEqual(await skportApi.makeRequest("GET", "https://zonai.skport.com/web/v2/user", { onError }), { code: 0 });
+      assert.deepEqual(kinds, ["timeout", "server"], "success reports nothing");
+    } finally {
+      axios.defaults.adapter = saved;
+    }
+  }
+
+  // --- refreshAccountBinding: only an explicit rejection marks the account invalid -------
+  {
+    const fail = (kind: string, status?: number) => ({ kind, ...(status ? { status } : {}) });
+    const scenarios: Array<{
+      name: string;
+      account?: any;
+      userInfo: (onError: any) => any;
+      refreshSk: (onError: any) => any;
+      refreshCookie: (onError: any) => any;
+      invalid: boolean;
+    }> = [
+      {
+        name: "timeouts everywhere: unknown, not invalid",
+        userInfo: (e) => (e(fail("timeout")), null),
+        refreshSk: (e) => (e(fail("timeout")), null),
+        refreshCookie: (e) => (e(fail("timeout")), null),
+        invalid: false,
+      },
+      {
+        name: "HTTP 5xx: not invalid",
+        userInfo: (e) => (e(fail("server", 503)), null),
+        refreshSk: (e) => (e(fail("server", 502)), null),
+        refreshCookie: (e) => (e(fail("server", 500)), null),
+        invalid: false,
+      },
+      {
+        name: "HTTP 429: not invalid",
+        userInfo: (e) => (e(fail("rate_limited", 429)), null),
+        refreshSk: (e) => (e(fail("rate_limited", 429)), null),
+        refreshCookie: (e) => (e(fail("rate_limited", 429)), null),
+        invalid: false,
+      },
+      {
+        name: "auth rejection in two steps but the cookie step timed out: not invalid",
+        userInfo: () => ({ code: 10000, status: 401 }),
+        refreshSk: (e) => (e(fail("auth", 401)), null),
+        refreshCookie: (e) => (e(fail("network")), null),
+        invalid: false,
+      },
+      {
+        name: "all steps explicitly rejected: invalid",
+        userInfo: () => ({ code: 10000, status: 401 }),
+        refreshSk: (e) => (e(fail("auth", 401)), null),
+        refreshCookie: (e) => (e(fail("auth", 403)), null),
+        invalid: true,
+      },
+      {
+        name: "API 'not logged in' code 10002 in the body is a rejection",
+        userInfo: () => ({ code: 10002 }),
+        refreshSk: () => null,
+        refreshCookie: () => null,
+        invalid: true,
+      },
+      {
+        name: "an unknown non-zero code with no signal is not enough",
+        userInfo: () => ({ code: 1 }),
+        refreshSk: () => null,
+        refreshCookie: () => null,
+        invalid: false,
+      },
+      {
+        name: "no credentials at all is unusable",
+        account: { cookie: "", cred: "", salt: "" },
+        userInfo: () => null,
+        refreshSk: () => null,
+        refreshCookie: () => null,
+        invalid: true,
+      },
+    ];
+    for (const sc of scenarios) {
+      await withDb(async (db) => {
+        await db.set("u5.accounts", [
+          { info: { id: "a1" }, cookie: "plain-cookie", cred: "plain-cred", salt: "s", roles: [], ...sc.account },
+        ]);
+        const originals = {
+          getUserInfo: skportApi.getUserInfo,
+          refreshSkToken: skportApi.refreshSkToken,
+          refreshAccountToken: skportApi.refreshAccountToken,
+        };
+        skportApi.getUserInfo = async (_c: any, _l: any, _s: any, onError: any) => sc.userInfo(onError);
+        skportApi.refreshSkToken = async (_c: any, _p: any, _s: any, onError: any) => sc.refreshSk(onError);
+        skportApi.refreshAccountToken = async (_c: any, onError: any) => sc.refreshCookie(onError);
+        try {
+          const acc = (await getAccounts(db, "u5"))[0];
+          await ensureAccountBinding(acc, "u5", db, "tw");
+          const stored = (await readList(db, "u5"))![0];
+          assert.equal(!!acc.invalid, sc.invalid, sc.name + " (memory)");
+          assert.equal(!!stored.invalid, sc.invalid, sc.name + " (stored)");
+          assert.equal(wasRefreshInconclusive(acc), !sc.invalid, sc.name + " (inconclusive flag)");
+        } finally {
+          Object.assign(skportApi, originals);
+        }
+      });
+    }
+
+    // An account that was already flagged stays flagged on a transient failure, but the
+    // refresh reports that it could not tell (callers must not treat that as a confirmation).
+    await withDb(async (db) => {
+      await db.set("u6.accounts", [
+        { info: { id: "a1" }, cookie: "plain-cookie", cred: "plain-cred", salt: "s", roles: [], invalid: true },
+      ]);
+      const originals = {
+        getUserInfo: skportApi.getUserInfo,
+        refreshSkToken: skportApi.refreshSkToken,
+        refreshAccountToken: skportApi.refreshAccountToken,
+      };
+      skportApi.getUserInfo = async (_c: any, _l: any, _s: any, onError: any) => (onError(fail("timeout")), null);
+      skportApi.refreshSkToken = async () => null;
+      skportApi.refreshAccountToken = async () => null;
+      try {
+        const acc = (await getAccounts(db, "u6"))[0];
+        await ensureAccountBinding(acc, "u6", db, "tw");
+        assert.equal(acc.invalid, true, "the stored flag is not cleared by a failed refresh");
+        assert.equal(wasRefreshInconclusive(acc), true);
+      } finally {
+        Object.assign(skportApi, originals);
+      }
+    });
+  }
 
   // --- deleting the last account removes the auto-daily bookkeeping ----------------
   await withDb(async (db) => {

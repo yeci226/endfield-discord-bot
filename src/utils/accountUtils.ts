@@ -7,6 +7,9 @@ import {
   verifyToken,
   refreshSkToken,
   refreshAccountToken,
+  isAuthRejectionCode,
+  isTransientFailure,
+  RequestFailure,
 } from "./skportApi";
 import { extractAccountToken } from "../commands/account/login";
 import { decryptAccount, encryptAccount } from "./cryptoUtils";
@@ -17,6 +20,17 @@ import {
 } from "./bindingRoles";
 
 const logger = new Logger("AccountUtils");
+
+/**
+ * Accounts whose last refresh could not tell whether the login is dead (network error,
+ * timeout, 5xx/429, or no explicit rejection). Not persisted; only meaningful right after
+ * ensureAccountBinding returned.
+ */
+const inconclusiveAccounts = new WeakSet<object>();
+
+export function wasRefreshInconclusive(account: any): boolean {
+  return !!account && typeof account === "object" && inconclusiveAccounts.has(account);
+}
 
 function flattenBindingList(bindings: any[] | null | undefined): any[] {
   if (!Array.isArray(bindings)) return [];
@@ -184,6 +198,7 @@ async function refreshAccountBinding(
   startedAt: number,
 ): Promise<boolean> {
   const id = accountId(account);
+  inconclusiveAccounts.delete(account);
 
   // Somebody else refreshed this account while we waited for the lock: use their result.
   const stored = id ? readStoredAccount(db, userId, id) : null;
@@ -213,19 +228,36 @@ async function refreshAccountBinding(
   const isRecent = now - oldLastRefresh < 2 * 60 * 60 * 1000;
   const wasInvalid = !!account.invalid;
 
+  // What the failed steps told us. Only an explicit rejection (HTTP 401/403, "not logged in"
+  // codes) may mark the account invalid; a timeout, network error, 5xx or 429 proves nothing.
+  inconclusiveAccounts.delete(account);
+  const probe = { transient: false, auth: false };
+  const onError = (failure: RequestFailure) => {
+    if (isTransientFailure(failure)) probe.transient = true;
+    else if (failure.kind === "auth") probe.auth = true;
+  };
+  const noteBody = (res: any) => {
+    if (res && res.code !== 0 && isAuthRejectionCode(res.code, res.status)) {
+      probe.auth = true;
+    }
+  };
+  // Nothing to log in with: unusable without asking anyone.
+  if (!account.cred && !account.cookie) probe.auth = true;
+
   // Step 1: 嘗試用現有 cred/salt 呼叫 getUserInfo
   let valid = false;
   if (!forceRefresh && account.cred && account.salt) {
     try {
       logger.info(`[Step 1] 檢查現有憑證是否有效 for ${account.info?.id}...`);
-      const res = await getUserInfo(account.cred, lang, account.salt);
+      const res = await getUserInfo(account.cred, lang, account.salt, onError);
+      noteBody(res);
       if (res && res.code === 0) {
         valid = true;
         logger.success(
           `[Step 1] 憑證有效，主動刷新 salt 以確保後續 API 可用...`,
         );
         // Binding endpoint 對 salt 過期容忍度嚴格，即使 getUserInfo 成功也需刷新
-        const refreshed = await refreshSkToken(account.cred, "3", newSalt);
+        const refreshed = await refreshSkToken(account.cred, "3", newSalt, onError);
         if (refreshed) {
           newSalt = refreshed;
           logger.success(`[Step 1] salt 已更新`);
@@ -239,11 +271,12 @@ async function refreshAccountBinding(
   // Step 2: 嘗試刷新 salt
   if (!valid && account.cred) {
     logger.info(`[Step 2] 嘗試 refreshSkToken for ${account.info?.id}...`);
-    const newToken = await refreshSkToken(account.cred, "3", newSalt);
+    const newToken = await refreshSkToken(account.cred, "3", newSalt, onError);
     if (newToken) {
       newSalt = newToken;
       try {
-        const res = await getUserInfo(account.cred, lang, newSalt);
+        const res = await getUserInfo(account.cred, lang, newSalt, onError);
+        noteBody(res);
         if (res && res.code === 0) {
           valid = true;
           logger.success(`[Step 2] salt 刷新後憑證有效`);
@@ -259,10 +292,10 @@ async function refreshAccountBinding(
   // Step 3: 嘗試刷新 cookie/token
   if (!valid && account.cookie) {
     logger.info(`[Step 3] 嘗試 refreshAccountToken for ${account.info?.id}...`);
-    const newTokenValue = await refreshAccountToken(account.cookie);
+    const newTokenValue = await refreshAccountToken(account.cookie, onError);
     if (newTokenValue) {
       newCookie = `ACCOUNT_TOKEN=${newTokenValue}`;
-      const verifyRes = await verifyToken(newCookie, lang);
+      const verifyRes = await verifyToken(newCookie, lang, onError);
       if (
         verifyRes &&
         verifyRes.status === 0 &&
@@ -273,7 +306,8 @@ async function refreshAccountBinding(
         newSalt = verifyRes.token;
         account.lastRefresh = now;
         try {
-          const res = await getUserInfo(newCred, lang, newSalt);
+          const res = await getUserInfo(newCred, lang, newSalt, onError);
+          noteBody(res);
           if (res && res.code === 0) {
             valid = true;
             logger.success(`[Step 3] cookie/token 刷新後憑證有效`);
@@ -291,6 +325,15 @@ async function refreshAccountBinding(
 
   // 最終判斷
   if (!valid) {
+    if (probe.transient || !probe.auth) {
+      // Could not tell (outage, timeout, rate limit, or no explicit rejection): leave the
+      // stored flag as it is and let the caller treat this as "unknown", not "dead".
+      inconclusiveAccounts.add(account);
+      logger.warn(
+        `[Refresh] ${account.info?.id}: login could not be verified (transient=${probe.transient}, rejected=${probe.auth}); not marking invalid.`,
+      );
+      return false;
+    }
     if (!account.invalid) {
       account.invalid = true;
       modified = true;
