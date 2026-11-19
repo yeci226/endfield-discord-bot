@@ -39,7 +39,7 @@
 
 ## C. 新做法如何避開（L3 的設計，見 `src/utils/bindingRoles.ts`）
 
-- **只新增合成、不改既有選擇。** 凡是綁定已經有非空 `roles`（或 `defaultRole`）的使用者，回傳的 `roleId`／`serverId`／`nickname` 與原本逐字相同，`raw` 就是原本的角色物件；因此已存的 `autoDaily.*`（只存 `game_scope`、時間、通知設定，不存角色）與下游以 `roleId`+`serverId` 為 key 的資料（簽到去重、`EF_<uid>` 抽卡紀錄）解析到同一個角色。合成只發生在 `roles` 為空且 `defaultRole` 為空時——這些使用者原本根本沒有角色。
+- **只新增合成、不改既有選擇。** 凡是綁定已經有非空 `roles`（或 `defaultRole`）的使用者，回傳的 `roleId`／`serverId`／`nickname` 與原本逐字相同，`raw` 就是原本的角色物件；因此已存的 `autoDaily.*`（只存 `game_scope`、時間、通知設定，不存角色）與下游以 `roleId`+`serverId` 為 key 的資料（簽到去重、`EF_<uid>` 抽卡紀錄）解析到同一個角色。合成只發生在 `roles` 為空且 `defaultRole` 為空時。**更正：這不代表「原本沒有角色」——`daily.ts` 與 `AutoDailyService.ts` 目前就已對 gameId 1 合成角色**（`roleId=uid`、`serverId=channelMasterId`、`nickname=nickName||uid||"Arknights"`、`level:0`、`serverName=channelName||gameName||"-"`），生產形狀的 fixture（AK 綁定 `roles: []`、`defaultRole: null`）正是這種情況。所以新工具對 gameId 1 必須逐欄位產生與舊函式完全相同的物件（`raw` 即該物件），測試以舊函式輸出作對照。只有 gameId 3 的合成與 `roles: []` 但 `defaultRole` 非空這兩種是**新解析出來**的（舊程式先判斷 `Array.isArray(entry.roles)`，空陣列就不會看 `defaultRole`），這兩類使用者原本在簽到流程中得不到角色。
 - **一定要指定 gameId**：`normalizeBindingRoles(bindings, gameIds)` 只處理列出的遊戲，沒有「任意遊戲」的合成。沒有 uid 也沒有 id 的角色不輸出（不產生空 `roleId`）。
 - **不改任何 API 的 `userId` 來源。** 本 lane 的 `indieHard` 維持 `binding.uid || account.info.id`（原樣）；`profile`／`MonitorService`／`WebManager` 不在本 lane，**不動它們送的 id**，之後換呼叫點時也只換「選角色」那一步。這點我無法驗證哪個 id 才對，列入「需要線上驗證」。
 - **舊函式保留**：`getPrimaryBindingRole(bindings)` 簽名不變、標 `@deprecated`，其他 lane 不受影響；回歸測試把 `2dd055e` 的生產形狀 fixture（AK 在前、終末地 `roles: []` 且 `defaultRole: null`）原樣收入。
