@@ -342,7 +342,9 @@ export async function migrateNewsSubscriptions(
         guildId: entry.guildId,
         channelId: entry.channelId,
         failCount: 0,
-        addedAt: Number(entry.boundAt) || now,
+        // DM entries were never delivered by the old code: start them now so the
+        // first poll does not send a backlog. Guild entries keep their bind time.
+        addedAt: entry.guildId === "DM" ? now : Number(entry.boundAt) || now,
       } as NewsSub);
       n++;
     }

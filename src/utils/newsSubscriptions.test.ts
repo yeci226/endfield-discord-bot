@@ -227,7 +227,15 @@ async function main() {
       addedAt: 111,
     });
     assert.equal((await db.get<NewsSub>(newsSubKey("g2", "c3")))!.addedAt, 5000);
-    assert.equal((await db.get<NewsSub>(newsSubKey("DM", "dm9")))!.guildId, "DM");
+    const dm = (await db.get<NewsSub>(newsSubKey("DM", "dm9")))!;
+    assert.equal(dm.guildId, "DM");
+    assert.equal(dm.addedAt, 5000, "a migrated DM subscription starts at the migration time, not the old boundAt");
+    // the old code never delivered to DMs: ten older items must not arrive as a backlog
+    const feed = Array.from({ length: 10 }, (_, i) => ({ id: String(i), timestampMs: 1000 + i * 100, hash: "h" }));
+    assert.deepEqual(selectItemsToDispatch({ items: feed, subs: [dm], getRecord: () => null }), []);
+    const fresh = { id: "new", timestampMs: 5001, hash: "h" };
+    const picked = selectItemsToDispatch({ items: [...feed, fresh], subs: [dm], getRecord: () => null });
+    assert.deepEqual(picked.map((p) => [p.item.id, p.work.length]), [["new", 1]]);
     assert.equal((await db.get<any[]>("news_subscriptions"))!.length, 6, "legacy array is kept");
     assert.ok(await db.get(NEWS_MIGRATION_MARKER));
 
