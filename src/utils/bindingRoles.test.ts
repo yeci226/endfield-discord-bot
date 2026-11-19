@@ -3,6 +3,7 @@ import {
   ARKNIGHTS_GAME_ID,
   ENDFIELD_GAME_ID,
   gameIdsForScope,
+  resolveEndfieldTarget,
   getPrimaryBindingRoleForGame,
   normalizeBindingRoles,
 } from "./bindingRoles";
@@ -187,5 +188,23 @@ function legacyArknightsRole(entry: any) {
 assert.deepEqual(gameIdsForScope("endfield"), [3]);
 assert.deepEqual(gameIdsForScope("arknights"), [1]);
 assert.deepEqual(gameIdsForScope("both"), [1, 3]);
+
+// --- resolveEndfieldTarget: zero accounts, Arknights-only, picker -----------------
+{
+  const akOnly = { info: { id: "ak" }, roles: [productionBindings[0]] };
+  const both = { info: { id: "both" }, roles: productionBindings };
+  assert.deepEqual(resolveEndfieldTarget([]), { ok: false, reason: "no_account" });
+  assert.deepEqual(resolveEndfieldTarget(null), { ok: false, reason: "no_account" });
+  assert.deepEqual(resolveEndfieldTarget([akOnly]), { ok: false, reason: "no_endfield_role" });
+  assert.deepEqual(resolveEndfieldTarget([akOnly], 0), { ok: false, reason: "no_endfield_role" });
+  assert.deepEqual(resolveEndfieldTarget([akOnly, both], 2), { ok: false, reason: "account_not_found" });
+  assert.deepEqual(resolveEndfieldTarget([akOnly, both], -1), { ok: false, reason: "account_not_found" });
+  assert.deepEqual(resolveEndfieldTarget([akOnly, both], 1.5), { ok: false, reason: "account_not_found" });
+  const auto = resolveEndfieldTarget([akOnly, both]);
+  assert.ok(auto.ok && auto.accountIndex === 1 && auto.role.roleId === "837903459");
+  const explicit = resolveEndfieldTarget([both, akOnly], 0);
+  assert.ok(explicit.ok && explicit.accountIndex === 0);
+  assert.deepEqual(resolveEndfieldTarget([both, akOnly], 1), { ok: false, reason: "no_endfield_role" });
+}
 
 console.log("bindingRoles checks passed");

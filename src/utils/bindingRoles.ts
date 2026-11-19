@@ -139,3 +139,48 @@ export function getPrimaryBindingRoleForGame(
 ): NormalizedRole | null {
   return normalizeBindingRoles(bindings, [gameId])[0] ?? null;
 }
+
+export type EndfieldTarget =
+  | {
+      ok: true;
+      account: any;
+      accountIndex: number;
+      role: NormalizedRole;
+    }
+  | { ok: false; reason: "no_account" | "account_not_found" | "no_endfield_role" };
+
+/**
+ * Picks the account + Endfield role a command should use.
+ * - no accounts                                  -> no_account
+ * - `requestedIndex` given but out of range       -> account_not_found
+ * - not given: the first account that has an Endfield role (else the first account)
+ * - the chosen account has no Endfield role (e.g. Arknights only) -> no_endfield_role
+ */
+export function resolveEndfieldTarget(
+  accounts: any[] | null | undefined,
+  requestedIndex?: number | null,
+): EndfieldTarget {
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return { ok: false, reason: "no_account" };
+  }
+  let accountIndex: number;
+  if (requestedIndex === undefined || requestedIndex === null) {
+    const found = accounts.findIndex(
+      (a) => getPrimaryBindingRoleForGame(a?.roles, ENDFIELD_GAME_ID) !== null,
+    );
+    accountIndex = found >= 0 ? found : 0;
+  } else {
+    if (
+      !Number.isInteger(requestedIndex) ||
+      requestedIndex < 0 ||
+      requestedIndex >= accounts.length
+    ) {
+      return { ok: false, reason: "account_not_found" };
+    }
+    accountIndex = requestedIndex;
+  }
+  const account = accounts[accountIndex];
+  const role = getPrimaryBindingRoleForGame(account?.roles, ENDFIELD_GAME_ID);
+  if (!role) return { ok: false, reason: "no_endfield_role" };
+  return { ok: true, account, accountIndex, role };
+}

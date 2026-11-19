@@ -19,17 +19,40 @@ import { makeRequest } from "../../utils/skportApi";
 import {
   getAccounts,
   ensureAccountBinding,
-  getPrimaryBindingRole,
+  withAutoRefresh,
 } from "../../utils/accountUtils";
+import {
+  ENDFIELD_GAME_ID,
+  getPrimaryBindingRoleForGame,
+  resolveEndfieldTarget,
+} from "../../utils/bindingRoles";
 import {
   buildIndieHardCard,
   IndieHardGroup,
 } from "../../utils/indieHardCanvasUtils";
 import { createTranslator, toI18nLang } from "../../utils/i18n";
+import { isTokenExpiredError } from "../../services/autoDailyPlan";
 
-// Module-level cache: userId -> groups (expires after 10 min)
+// Module-level cache: `${userId}:${accountIndex}` -> groups (expires after 10 min)
 const groupCache = new Map<string, { groups: IndieHardGroup[]; ts: number }>();
 const CACHE_TTL = 10 * 60 * 1000;
+const cacheKey = (userId: string, accountIndex: number) =>
+  `${userId}:${accountIndex}`;
+
+const SELECT_PREFIX = "影拓豐碑:select:";
+
+/** customId: `影拓豐碑:select:<userId>[:<accountIndex>]` (old ids have no index). */
+function parseSelectId(customId: string): { accountIndex: number } {
+  const parts = customId.slice(SELECT_PREFIX.length).split(":");
+  const parsed = Number.parseInt(parts[1] ?? "0", 10);
+  return { accountIndex: Number.isInteger(parsed) && parsed >= 0 ? parsed : 0 };
+}
+
+const REASON_KEY = {
+  no_account: "indieHard_NoAccount",
+  account_not_found: "indieHard_AccountNotFound",
+  no_endfield_role: "indieHard_NoEndfieldRole",
+} as const;
 
 async function getIndieHard(
   roleId: string,
@@ -38,6 +61,7 @@ async function getIndieHard(
   locale?: string,
   cred?: string,
   salt?: string,
+  options: any = {},
 ): Promise<{ indieHardGroups: IndieHardGroup[] } | null> {
   const url =
     "https://zonai.skport.com/api/v1/game/endfield/card/indie-hard";
@@ -49,49 +73,75 @@ async function getIndieHard(
     cred,
     locale,
     salt,
+    ...options,
   });
   if (!res || (res as any).code !== 0) return null;
   return (res as any).data?.indieHard ?? null;
 }
 
+/** Fetches the groups with auto-refresh on a stale token. */
+async function fetchGroups(
+  client: ExtendedClient,
+  discordUserId: string,
+  account: any,
+  role: { roleId: string; serverId: string; bindingUid?: string },
+  locale: string,
+): Promise<{ indieHardGroups: IndieHardGroup[] } | null> {
+  // Same `userId` parameter as before this change: the binding uid, else the SKPort id.
+  const skUserId = String(role.bindingUid || account.info?.id || "");
+  return withAutoRefresh(
+    client,
+    discordUserId,
+    account,
+    (c: string, s: string, options: any) =>
+      getIndieHard(role.roleId, role.serverId, skUserId, locale, c, s, options),
+    locale,
+  );
+}
+
 async function fetchAndCacheGroups(
+  client: ExtendedClient,
   db: CustomDatabase,
   discordUserId: string,
+  accountIndex: number | null,
   locale: string,
 ): Promise<
-  | { groups: IndieHardGroup[]; error: null }
-  | { groups: null; error: string }
+  | { groups: IndieHardGroup[]; accountIndex: number; error: null }
+  | { groups: null; accountIndex: number; error: string }
 > {
   const tr = createTranslator(toI18nLang(locale));
   const accounts = await getAccounts(db, discordUserId);
-  if (!accounts || accounts.length === 0) {
-    return { groups: null, error: tr("indieHard_NoAccount") };
+  let target = resolveEndfieldTarget(accounts, accountIndex);
+  if (!target.ok) {
+    return { groups: null, accountIndex: accountIndex ?? 0, error: tr(REASON_KEY[target.reason]) };
   }
 
-  const account = accounts[0];
-  const primary = getPrimaryBindingRole(account.roles);
-  if (!primary) {
-    return { groups: null, error: tr("indieHard_RoleNotFound") };
+  // Refresh the binding first; it may add the Endfield role or fix the credentials.
+  await ensureAccountBinding(target.account, discordUserId, db, locale);
+  target = resolveEndfieldTarget(accounts, target.accountIndex);
+  if (!target.ok) {
+    return { groups: null, accountIndex: accountIndex ?? 0, error: tr(REASON_KEY[target.reason]) };
   }
-
-  const { role, binding } = primary;
-  const roleId = String(role.roleId || "");
-  const serverId = String(role.serverId || "");
-  const skUserId = String(binding?.uid || account.info?.id || "");
 
   let data: { indieHardGroups: IndieHardGroup[] } | null = null;
   try {
-    data = await getIndieHard(roleId, serverId, skUserId, locale, account.cred, account.salt);
+    data = await fetchGroups(client, discordUserId, target.account, target.role, locale);
   } catch (err) {
+    if (isTokenExpiredError(err)) {
+      return { groups: null, accountIndex: target.accountIndex, error: tr("TokenExpired") };
+    }
     console.error("[indieHard] API error:", err);
   }
 
   if (!data || !data.indieHardGroups || data.indieHardGroups.length === 0) {
-    return { groups: null, error: tr("indieHard_APIFailed") };
+    return { groups: null, accountIndex: target.accountIndex, error: tr("indieHard_APIFailed") };
   }
 
-  groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
-  return { groups: data.indieHardGroups, error: null };
+  groupCache.set(cacheKey(discordUserId, target.accountIndex), {
+    groups: data.indieHardGroups,
+    ts: Date.now(),
+  });
+  return { groups: data.indieHardGroups, accountIndex: target.accountIndex, error: null };
 }
 
 async function sendGroupCard(
@@ -100,6 +150,7 @@ async function sendGroupCard(
     | StringSelectMenuInteraction,
   groups: IndieHardGroup[],
   groupIndex: number,
+  accountIndex: number,
   locale: string,
 ) {
   const tr = createTranslator(toI18nLang(locale));
@@ -125,7 +176,7 @@ async function sendGroupCard(
   });
 
   const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId(`影拓豐碑:select:${interaction.user.id}`)
+    .setCustomId(`${SELECT_PREFIX}${interaction.user.id}:${accountIndex}`)
     .setPlaceholder(tr("indieHard_SelectPeriod"))
     .addOptions(
       groups.map((g, i) =>
@@ -145,6 +196,24 @@ async function sendGroupCard(
     ],
   });
 }
+
+function accountLabel(account: any, accountIndex: number, isZh: boolean): string {
+  const name = `${account?.info?.nickname || "Unknown"}`;
+  const id = `${account?.info?.id || "-"}`;
+  const role = getPrimaryBindingRoleForGame(account?.roles, ENDFIELD_GAME_ID);
+  const none = isZh ? "無" : "None";
+  return `${accountIndex + 1}. ${name} (${id}) | ${isZh ? "終末地" : "Endfield"}: ${role?.nickname || none}`.slice(0, 100);
+}
+
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timeout")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -169,53 +238,79 @@ const command: Command = {
         })
         .setAutocomplete(true)
         .setRequired(false),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("account")
+        .setDescription("Select which bound account to use")
+        .setNameLocalizations({ "zh-TW": "帳號", "zh-CN": "账号" })
+        .setDescriptionLocalizations({
+          "zh-TW": "選擇要使用的綁定帳號",
+          "zh-CN": "选择要使用的绑定账号",
+        })
+        .setAutocomplete(true)
+        .setRequired(false),
     ) as SlashCommandBuilder,
 
   autocomplete: async (
-    _client: ExtendedClient,
+    client: ExtendedClient,
     interaction: AutocompleteInteraction,
     db: CustomDatabase,
   ) => {
-    const focusedValue = interaction.options.getFocused().toLowerCase();
+    const focused = interaction.options.getFocused(true);
+    const query = String(focused.value || "").toLowerCase();
     const discordUserId = interaction.user.id;
-
-    // Try cache first
-    const entry = groupCache.get(discordUserId);
-    if (entry && Date.now() - entry.ts <= CACHE_TTL) {
-      const choices = entry.groups
-        .map((g, i) => ({ name: g.activityName, value: String(i) }))
-        .filter((c) => c.name.toLowerCase().includes(focusedValue));
-      await interaction.respond(choices.slice(0, 25));
-      return;
-    }
-
-    // Fetch fresh data
     const accounts = await getAccounts(db, discordUserId);
     if (!accounts || accounts.length === 0) {
       await interaction.respond([]);
       return;
     }
-    const account = accounts[0];
-    const primary = getPrimaryBindingRole(account.roles);
-    if (!primary) {
+
+    // Account picker: stored data only, no network.
+    if (focused.name === "account") {
+      const isZh = interaction.locale === "zh-TW";
+      await interaction.respond(
+        accounts
+          .map((acc: any, i: number) => ({
+            name: accountLabel(acc, i, isZh),
+            value: String(i),
+          }))
+          .filter((c) => c.name.toLowerCase().includes(query))
+          .slice(0, 25),
+      );
+      return;
+    }
+
+    // Period picker (for the chosen account, default as in execute()).
+    const rawAccount = interaction.options.getString("account");
+    const requested = rawAccount === null ? null : Number(rawAccount);
+    const target = resolveEndfieldTarget(accounts, requested);
+    if (!target.ok) {
       await interaction.respond([]);
       return;
     }
-    const { role, binding } = primary;
-    const roleId = String(role.roleId || "");
-    const serverId = String(role.serverId || "");
-    const skUserId = String(binding?.uid || account.info?.id || "");
+
+    const key = cacheKey(discordUserId, target.accountIndex);
+    const entry = groupCache.get(key);
+    if (entry && Date.now() - entry.ts <= CACHE_TTL) {
+      const choices = entry.groups
+        .map((g, i) => ({ name: g.activityName, value: String(i) }))
+        .filter((c) => c.name.toLowerCase().includes(query));
+      await interaction.respond(choices.slice(0, 25));
+      return;
+    }
 
     try {
-      const data = await getIndieHard(
-        roleId, serverId, skUserId,
-        interaction.locale, account.cred, account.salt,
+      // Autocomplete cannot be deferred: stay well inside Discord's 3 s.
+      const data = await withTimeout(
+        fetchGroups(client, discordUserId, target.account, target.role, interaction.locale),
+        2000,
       );
       if (data?.indieHardGroups) {
-        groupCache.set(discordUserId, { groups: data.indieHardGroups, ts: Date.now() });
+        groupCache.set(key, { groups: data.indieHardGroups, ts: Date.now() });
         const choices = data.indieHardGroups
           .map((g, i) => ({ name: g.activityName, value: String(i) }))
-          .filter((c) => c.name.toLowerCase().includes(focusedValue));
+          .filter((c) => c.name.toLowerCase().includes(query));
         await interaction.respond(choices.slice(0, 25));
         return;
       }
@@ -237,17 +332,18 @@ const command: Command = {
     // ── Handle SelectMenu interaction ────────────────────────────────────
     if ((interaction as StringSelectMenuInteraction).isStringSelectMenu?.()) {
       const sel = interaction as StringSelectMenuInteraction;
-      if (!sel.customId.startsWith("影拓豐碑:select:")) return;
+      if (!sel.customId.startsWith(SELECT_PREFIX)) return;
       await sel.deferUpdate();
 
       const selTr = createTranslator(toI18nLang(sel.locale));
-      const entry = groupCache.get(sel.user.id);
+      const { accountIndex } = parseSelectId(sel.customId);
+      const entry = groupCache.get(cacheKey(sel.user.id, accountIndex));
       if (!entry || Date.now() - entry.ts > CACHE_TTL) {
         await sel.editReply({ content: selTr("indieHard_DataExpired"), components: [] });
         return;
       }
       const idx = parseInt(sel.values[0]) || 0;
-      await sendGroupCard(sel as any, entry.groups, idx, sel.locale);
+      await sendGroupCard(sel as any, entry.groups, idx, accountIndex, sel.locale);
       return;
     }
 
@@ -258,19 +354,22 @@ const command: Command = {
     const ciTr = createTranslator(toI18nLang(ci.locale));
     const discordUserId = ci.user.id;
 
-    // Ensure account binding
-    const accounts = await getAccounts(db, discordUserId);
-    if (accounts && accounts.length > 0) {
-      await ensureAccountBinding(accounts[0], discordUserId, db, ci.locale);
-    }
+    const rawAccount = ci.options.getString("account");
+    const requested = rawAccount === null ? null : Number(rawAccount);
 
     // Get groups (use cache or fetch)
     let groups: IndieHardGroup[];
-    const cached = groupCache.get(discordUserId);
-    if (cached && Date.now() - cached.ts <= CACHE_TTL) {
+    let accountIndex: number;
+    const accounts = await getAccounts(db, discordUserId);
+    const target = resolveEndfieldTarget(accounts, requested);
+    const cached = target.ok
+      ? groupCache.get(cacheKey(discordUserId, target.accountIndex))
+      : undefined;
+    if (target.ok && cached && Date.now() - cached.ts <= CACHE_TTL) {
       groups = cached.groups;
+      accountIndex = target.accountIndex;
     } else {
-      const result = await fetchAndCacheGroups(db, discordUserId, ci.locale);
+      const result = await fetchAndCacheGroups(client, db, discordUserId, requested, ci.locale);
       if (result.error || !result.groups) {
         const container = new ContainerBuilder().addTextDisplayComponents(
           new TextDisplayBuilder().setContent(result.error ?? ciTr("indieHard_UnknownError")),
@@ -282,6 +381,7 @@ const command: Command = {
         return;
       }
       groups = result.groups;
+      accountIndex = result.accountIndex;
     }
 
     // Determine which group to show
@@ -294,7 +394,7 @@ const command: Command = {
       }
     }
 
-    await sendGroupCard(ci as any, groups, groupIndex, ci.locale);
+    await sendGroupCard(ci as any, groups, groupIndex, accountIndex, ci.locale);
   },
 };
 
