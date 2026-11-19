@@ -6,6 +6,7 @@ import {
   ENGINE_VERSION,
   FeaturedStatus,
   getGachaStats,
+  hasFeaturedVerdict,
   isLimitedRateUpPool,
 } from "./gachaStatsEngine";
 import { GachaLogData, GachaRecord } from "./gachaTypes";
@@ -196,6 +197,34 @@ async function main() {
     stats.char.history.find((h: any) => h.seqId === "3").isUnknownFeatured,
     undefined,
   );
+
+  // --- pool types without a featured verdict --------------------------------
+  {
+    const jointLog: GachaLogData = {
+      characterList: [
+        rec({ seqId: "30", poolId: "joint_x", poolName: "聯合尋訪", poolType: "E_CharacterGachaPoolType_Joint", charId: "chr_0016_laevat", charName: "Laevatain" }),
+        rec({ seqId: "20", poolId: "joint_x", poolName: "聯合尋訪", poolType: "E_CharacterGachaPoolType_Joint", charId: "chr_0009_azrila", charName: "Azrila" }),
+        rec({ seqId: "10", poolId: "c_special_known", charId: "chr_0016_laevat", charName: "Laevatain", poolName: "特選尋訪「已知」" }),
+        rec({ seqId: "5", poolId: "c_standard_1", poolName: "基礎尋訪", poolType: "E_CharacterGachaPoolType_Standard", charId: "chr_0009_azrila", charName: "Azrila" }),
+      ],
+      weaponList: [],
+      info: { uid: "EF_2", lang: "zh-tw", serverId: "2", export_timestamp: 1 },
+    };
+    const db2 = new CustomDatabase(":memory:");
+    for (const p of ["joint_x", "c_special_known", "c_standard_1"])
+      await db2.set(`GACHA_POOL_METADATA_${p}`, { data: p === "c_special_known" ? META_WITH_ALL : {} });
+    const js: any = await getGachaStats(db2, jointLog);
+    const pool = (id: string) => js.char.pools.find((p: any) => p.id === id);
+    assert.equal(pool("joint_x").winRateAvailable, false, "Joint pool: no verdict, no win rate");
+    assert.equal(pool("c_special_known").winRateAvailable, true);
+    assert.equal(pool("c_standard_1").winRateAvailable, false);
+    assert.equal(js.char.summary.joint_x.winRateAvailable, false);
+    assert.equal(js.char.summary.SpecialShared.winRateAvailable, true);
+    assert.equal(hasFeaturedVerdict({ poolType: "E_CharacterGachaPoolType_Joint" }), false);
+    assert.equal(hasFeaturedVerdict({ poolType: "E_CharacterGachaPoolType_Rerun" }), true);
+    assert.equal(hasFeaturedVerdict({ poolType: "WeaponPool" }), true);
+  }
+  assert.ok(ENGINE_VERSION >= 3, "winRateAvailable changed the stats shape");
 
   // The stats must survive the cache's JSON round trip unchanged.
   assert.deepEqual(JSON.parse(JSON.stringify(stats)), stats);

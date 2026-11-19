@@ -10,7 +10,7 @@ export const GACHA_API_TIMEOUT_MS = 15000;
  * Options added to every axios call here: a hard timeout, and no redirects
  * (an official host that redirects elsewhere must not carry the token along).
  */
-const HTTP_OPTIONS = {
+export const HTTP_OPTIONS = {
   timeout: GACHA_API_TIMEOUT_MS,
   maxRedirects: 0,
 } as const;
@@ -55,13 +55,8 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 /**
  * Decides, without any I/O, what an import input is allowed to be:
  * a bare token, or a URL on one of the two official hosts.
- * `allowAnyHost` only exists so unit tests of the importers can use fake hosts
- * with a mocked HTTP layer; production never sets it.
  */
-export function validateGachaImportUrl(
-  input: string,
-  opts: { allowAnyHost?: boolean } = {},
-): GachaImportTarget {
+export function validateGachaImportUrl(input: string): GachaImportTarget {
   const text = String(input ?? "").trim();
   if (!text) return { ok: false, reason: "empty" };
 
@@ -88,7 +83,7 @@ export function validateGachaImportUrl(
   if (url.protocol !== "https:") return { ok: false, reason: "not_https" };
   if (url.username || url.password) return { ok: false, reason: "userinfo" };
   if (url.port) return { ok: false, reason: "port" };
-  if (!opts.allowAnyHost && !GACHA_IMPORT_HOSTS.includes(url.hostname)) {
+  if (!GACHA_IMPORT_HOSTS.includes(url.hostname)) {
     return { ok: false, reason: "host_not_allowed" };
   }
 
@@ -121,18 +116,6 @@ export class GachaImportUrlError extends Error {
   }
 }
 
-/**
- * Unit tests of the importers run against mocked HTTP with fake hosts
- * (https://example.invalid/...); NODE_ENV=test relaxes only the host check,
- * unless GACHA_STRICT_IMPORT_HOSTS=1 turns it back on.
- */
-function importHostCheckRelaxed(): boolean {
-  return (
-    process.env.NODE_ENV === "test" &&
-    process.env.GACHA_STRICT_IMPORT_HOSTS !== "1"
-  );
-}
-
 export type IncompleteFetch = {
   poolType: string;
   poolId?: string;
@@ -143,6 +126,12 @@ export type GachaStopAt = {
   /** Return true for a record that is already stored: paging stops after this page. */
   character?: (seqId: string) => boolean;
   weapon?: (seqId: string) => boolean;
+  /**
+   * The language the stored names were written in. When the import runs in
+   * another language the predicates are ignored (a full fetch renames the
+   * records inside the window, an incremental one would not).
+   */
+  lang?: string;
 };
 
 export type RawFetchedGacha = {
@@ -155,26 +144,9 @@ export type RawFetchedGacha = {
   weaponList: GachaRecord[];
   /** Parts of the history that could not be fetched. Empty = complete. */
   incomplete: IncompleteFetch[];
+  /** Which lists were fetched with a stop condition (false = paged to the end). */
+  incremental: { character: boolean; weapon: boolean };
 };
-
-/**
- * Incomplete-fetch notes keyed by the onProgress callback a caller passed in,
- * so a caller that only reaches the importer through intermediate layers can
- * still read them afterwards. Weakly held: nothing to clean up.
- */
-const incompleteByProgress = new WeakMap<
-  (message: string) => void,
-  IncompleteFetch[]
->();
-
-export function takeIncompleteFetches(
-  onProgress: ((message: string) => void) | undefined,
-): IncompleteFetch[] {
-  if (!onProgress) return [];
-  const list = incompleteByProgress.get(onProgress) ?? [];
-  incompleteByProgress.delete(onProgress);
-  return list;
-}
 
 export type PageResult = { list: GachaRecord[]; hasMore: boolean };
 
@@ -235,12 +207,9 @@ export async function fetchRawGachaFromUrl(
   locale?: string,
   options?: { stopAt?: GachaStopAt },
 ): Promise<RawFetchedGacha> {
-  const target = validateGachaImportUrl(urlStr, {
-    allowAnyHost: importHostCheckRelaxed(),
-  });
+  const target = validateGachaImportUrl(urlStr);
   if (!target.ok) throw new GachaImportUrlError(target.reason);
 
-  const stopAt = options?.stopAt;
   const incomplete: IncompleteFetch[] = [];
 
   let token: string;
@@ -309,6 +278,13 @@ export async function fetchRawGachaFromUrl(
     inferredUid =
       host === GACHA_CN_HOST ? `EF_CN_${serverId}` : `EF_${serverId}`;
   }
+
+  const requestedStop = options?.stopAt;
+  const stopAt =
+    requestedStop &&
+    (requestedStop.lang === undefined || requestedStop.lang === lang)
+      ? requestedStop
+      : undefined;
 
   const characterList: GachaRecord[] = [];
   const weaponList: GachaRecord[] = [];
@@ -478,10 +454,6 @@ export async function fetchRawGachaFromUrl(
     }
   }
 
-  if (onProgress && incomplete.length > 0) {
-    incompleteByProgress.set(onProgress, incomplete);
-  }
-
   return {
     host,
     lang,
@@ -491,6 +463,10 @@ export async function fetchRawGachaFromUrl(
     characterList,
     weaponList,
     incomplete,
+    incremental: {
+      character: !!stopAt?.character,
+      weapon: !!stopAt?.weapon,
+    },
   };
 }
 

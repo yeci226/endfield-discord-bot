@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { sumCategoryTotals } from "./summary";
+import { formatWinRate } from "./shared";
 
 const group = (nonFree: number, free: number, six: number, sixPulls: number, featured = 0, sixTotal = 0) => ({
   nonFreeTotal: nonFree,
@@ -25,6 +26,13 @@ const pools = [
 ];
 
 function main() {
+  // A pool type without a featured verdict shows a dash, never 0.00%.
+  assert.equal(formatWinRate(0, 3, false, "no data"), "—");
+  assert.equal(formatWinRate(0, 0, false, "no data"), "—");
+  assert.equal(formatWinRate(2, 4, true, "no data"), "50.00%");
+  assert.equal(formatWinRate(0, 3, true, "no data"), "0.00%", "a real 0% is still a measurement");
+  assert.equal(formatWinRate(0, 0, true, "no data"), "no data");
+
   // Joint-pool pulls belong to the limited-character category (the overview
   // lists those pools), so the limited totals must include them.
   const limited = sumCategoryTotals("limited_char", groupStats, pools);

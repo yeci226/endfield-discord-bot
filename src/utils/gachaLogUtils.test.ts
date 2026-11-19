@@ -152,7 +152,7 @@ async function main() {
     }) as typeof axios.get;
     const result = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/page?token=test&server_id=2",
+      "https://ef-webview.gryphline.com/page?token=test&server_id=2",
       undefined,
       "test",
     );

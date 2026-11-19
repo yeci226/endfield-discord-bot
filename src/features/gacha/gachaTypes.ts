@@ -71,6 +71,15 @@ export interface GachaLogData {
     weaponPityResetSeqId?: string;
     /** Set on every write of the log row; strictly increases. Cache tokens and the leaderboard rely on it. */
     updatedAt?: number;
+    /**
+     * True only when the last import of that list was complete and nothing
+     * removed records from the middle of it since (a ranged clear or a guest
+     * migration sets false). Absent on logs written by older code. An
+     * incremental import (stop at the first stored record) is allowed only
+     * while this is true.
+     */
+    charFetchComplete?: boolean;
+    weaponFetchComplete?: boolean;
   };
 }
 

@@ -66,7 +66,7 @@ async function main() {
     }) as typeof axios.get;
     const imported = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=test&server_id=2",
+      "https://ef-webview.gryphline.com/?token=test&server_id=2",
       undefined,
       "test",
     );
@@ -84,12 +84,12 @@ async function main() {
       stats.char.pools.find((p) => p.id === "rerun_chr_yvonne")?.total,
       30,
     );
-    const leaderboard = (await db.get("GACHA_LEADERBOARD_ENTRIES")).test;
+    const leaderboard = await db.get("GACHA_LB.test");
     assert.equal(leaderboard.stats.RerunShared.total, 30);
     assert.equal(leaderboard.stats.rerun_chr_yvonne.total, 30);
     const importedAgain = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=test&server_id=2",
+      "https://ef-webview.gryphline.com/?token=test&server_id=2",
       undefined,
       "test",
     );

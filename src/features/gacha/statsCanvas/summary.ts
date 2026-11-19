@@ -5,6 +5,7 @@ import {
   GachaStatsBaseState,
   GachaSummaryResult,
   GachaType,
+  formatWinRate,
   getWinRateCounts,
   roundRect,
 } from "./shared";
@@ -183,6 +184,7 @@ export function drawSummary(
 
   let poolSixStarPullCount = 0;
   let poolFeaturedSixCount = 0;
+  let poolWinRateAvailable = true;
 
   if (selectedPoolId) {
     const pool = (
@@ -193,15 +195,19 @@ export function drawSummary(
     specificPoolFree = pool ? pool.freeCount || 0 : 0;
     poolSixStarPullCount = pool ? pool.sixStarPullCount || 0 : 0;
     poolFeaturedSixCount = pool ? pool.featuredSixCount || 0 : 0;
+    // Stats from before the flag existed have none: treat as available.
+    poolWinRateAvailable = pool ? pool.winRateAvailable !== false : true;
   }
 
+  const noDataText = tr?.("gacha_log_canvas_NoData") ?? "未有資料";
   const rateUpWinRate = selectedPoolId
-    ? poolSixStarPullCount > 0
-      ? ((poolFeaturedSixCount / poolSixStarPullCount) * 100).toFixed(2) + "%"
-      : (tr?.("gacha_log_canvas_NoData") ?? "未有資料")
-    : winRateSixCount > 0
-      ? ((featuredSixCount / winRateSixCount) * 100).toFixed(2) + "%"
-      : (tr?.("gacha_log_canvas_NoData") ?? "未有資料");
+    ? formatWinRate(
+        poolFeaturedSixCount,
+        poolSixStarPullCount,
+        poolWinRateAvailable,
+        noDataText,
+      )
+    : formatWinRate(featuredSixCount, winRateSixCount, true, noDataText);
 
   // Determine activeCategoryPity for headers
   const mainActiveGroup = visualGroups[0];

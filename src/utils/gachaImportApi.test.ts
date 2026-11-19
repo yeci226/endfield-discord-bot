@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import axios from "axios";
 
-process.env.GACHA_STRICT_IMPORT_HOSTS = "1";
-
 import {
   GachaImportUrlError,
   fetchRawGachaFromUrl,
   pagePool,
-  takeIncompleteFetches,
   validateGachaImportUrl,
 } from "../features/gacha/gachaApi";
 import { analyzeGachaImportFingerprint } from "../features/gacha/gachaFingerprint";
@@ -172,7 +169,6 @@ async function main() {
       assert.equal(c.config.timeout, 15000, `timeout on ${c.url}`);
       assert.equal(c.config.maxRedirects, 0, `no redirects on ${c.url}`);
     }
-    assert.deepEqual(takeIncompleteFetches(progress), []);
 
     weaponMode = "midcode";
     const progress2 = () => undefined;
@@ -183,8 +179,6 @@ async function main() {
     assert.match(raw.incomplete[0].reason, /code 7/);
     // the page read before the failure is kept
     assert.equal(raw.weaponList.length, 2);
-    assert.deepEqual(takeIncompleteFetches(progress2), raw.incomplete);
-    assert.deepEqual(takeIncompleteFetches(progress2), [], "taken once");
 
     weaponMode = "listfail";
     raw = await fetchRawGachaFromUrl(url);

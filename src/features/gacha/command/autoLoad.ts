@@ -6,7 +6,6 @@ import {
 } from "../../../utils/gachaLogUtils";
 import {
   IncompleteFetch,
-  takeIncompleteFetches,
 } from "../gachaApi";
 import { MessageFlags } from "discord.js";
 import { GachaContext } from "./context";
@@ -44,10 +43,9 @@ export function describeIncompleteFetches(
  */
 export async function notifyIncompleteImport(
   ctx: GachaContext,
-  onProgressUpdate: (message: string) => void,
+  incomplete: IncompleteFetch[] | undefined,
 ): Promise<boolean> {
-  const incomplete = takeIncompleteFetches(onProgressUpdate);
-  if (incomplete.length === 0) return false;
+  if (!incomplete || incomplete.length === 0) return false;
   try {
     await ctx.interaction.followUp({
       content: ctx.tr("gacha_log_load_incomplete", {
@@ -156,7 +154,7 @@ export async function tryAutoLoadGachaLog(
     await interaction.editReply({ content: tr("gacha_log_load_Loading") });
     await start();
     try {
-      await fetchAndMergeGachaLogFromAccount(
+      const mergeResult = await fetchAndMergeGachaLogFromAccount(
         db,
         linkedAccount.cookie,
         efGameUid,
@@ -170,7 +168,7 @@ export async function tryAutoLoadGachaLog(
         matchedRole?.nickname,
       );
       stop();
-      await notifyIncompleteImport(ctx, onProgressUpdate);
+      await notifyIncompleteImport(ctx, mergeResult.incomplete);
       return true;
     } catch {
       stop();

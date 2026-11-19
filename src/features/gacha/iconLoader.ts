@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { fetchImage } from "../../utils/canvasUtils";
 import { decodedImageCache } from "../../utils/byteLruCache";
+import { GACHA_ICON_URLS_KEY, sanitizeStoredIconUrls } from "./gachaIconUrls";
 
 const OFFICIAL_CHARACTER_ICON_URLS: Readonly<
   Record<string, string | undefined>
@@ -165,12 +166,19 @@ const OFFICIAL_WEAPON_ICON_URLS: Readonly<Record<string, string | undefined>> =
       "https://bbs.hycdn.cn/image/common/20260712/2641152/6a53b4eba60e9ad15db7d71c_2f76db19.png",
   });
 
+/**
+ * Remote icon URLs for one id, best first. `stored` (the GACHA_ICON_URLS row,
+ * learned from the wiki pool lists) is the LAST fallback, after every
+ * hardcoded table and mirror.
+ */
 export function getGachaIconUrlCandidates(
   isCharacter: boolean,
   rawId: string,
+  stored?: Readonly<Record<string, string>>,
 ): string[] {
   const cid = String(rawId || "").replace("icon_", "");
   if (!cid) return [];
+  const learned = stored?.[cid.toLowerCase()];
 
   if (isCharacter) {
     const officialUrl = OFFICIAL_CHARACTER_ICON_URLS[cid];
@@ -178,11 +186,51 @@ export function getGachaIconUrlCandidates(
       officialUrl,
       `https://endfieldtools.dev/assets/images/endfield/charicon/icon_${cid}.png`,
       `https://endfield.ooo.run/ake/operators/icon_${cid}.webp`,
+      learned,
     ].filter((url): url is string => Boolean(url));
   }
 
   const officialUrl = OFFICIAL_WEAPON_ICON_URLS[cid];
-  return officialUrl ? [officialUrl] : [];
+  return [officialUrl, learned].filter((url): url is string => Boolean(url));
+}
+
+// ---------------------------------------------------------------------------
+// Icon URLs learned from the wiki (row GACHA_ICON_URLS)
+// ---------------------------------------------------------------------------
+
+export const STORED_ICON_URLS_TTL_MS = 60_000;
+let storedIconUrls: Readonly<Record<string, string>> = Object.freeze({});
+let storedIconUrlsLoad: { db: object; at: number } | null = null;
+
+/**
+ * Loads the stored id -> icon URL map for the icon loader: at most one read of
+ * the row per minute per process, never once per icon. Failures leave the
+ * previous map in place; the map is only ever a last fallback.
+ */
+export async function refreshStoredIconUrls(
+  db: { get<T = any>(key: string): Promise<T | null> },
+  now: number = Date.now(),
+): Promise<void> {
+  if (
+    storedIconUrlsLoad &&
+    storedIconUrlsLoad.db === db &&
+    now - storedIconUrlsLoad.at < STORED_ICON_URLS_TTL_MS
+  ) {
+    return;
+  }
+  storedIconUrlsLoad = { db, at: now };
+  try {
+    storedIconUrls = Object.freeze(
+      sanitizeStoredIconUrls(await db.get(GACHA_ICON_URLS_KEY)),
+    );
+  } catch {
+    /* keep the previous map */
+  }
+}
+
+export function resetStoredIconUrls(): void {
+  storedIconUrls = Object.freeze({});
+  storedIconUrlsLoad = null;
 }
 
 /** Names probed for one icon id, in priority order inside one directory. */
@@ -350,7 +398,11 @@ async function resolveGachaIcon(
 
   const cacheName = isCharacter ? `icon_${cid}` : cid;
   let lastError: unknown;
-  for (const iconUrl of getGachaIconUrlCandidates(isCharacter, rawId)) {
+  for (const iconUrl of getGachaIconUrlCandidates(
+    isCharacter,
+    rawId,
+    storedIconUrls,
+  )) {
     try {
       return await fetchImageTimed(iconUrl, cacheName);
     } catch (e) {
