@@ -14,8 +14,8 @@ import {
   getGachaStats,
   GachaLogData,
   migrateGachaLog,
-  updateLeaderboard,
 } from "../../../utils/gachaLogUtils";
+import { getCachedGachaStats } from "../gachaStatsCache";
 import {
   drawGachaStats,
   GachaType,
@@ -28,8 +28,38 @@ import {
   paginateGachaOverviewPools,
 } from "../../../utils/gachaPoolUtils";
 import { GachaContext } from "./context";
-import { getAllPossibleUserRoles } from "./accounts";
+import {
+  getAllPossibleUserRoles,
+  mapPossibleUserRoles,
+  PossibleUserRole,
+} from "./accounts";
 import { tryAutoLoadGachaLog } from "./autoLoad";
+
+/** Pure: is the stored nickname just the UID (or empty / "Unknown")? */
+export function isGenericNickname(
+  nickname: string | undefined,
+  targetUid: string,
+): boolean {
+  const rawUid = targetUid.replace("EF_CN_", "").replace("EF_", "");
+  return (
+    !nickname ||
+    nickname === targetUid ||
+    nickname === rawUid ||
+    nickname === "Unknown"
+  );
+}
+
+/** Pure: the nickname to draw for a log whose stored nickname is generic. */
+export function pickDisplayNickname(
+  stored: string | undefined,
+  targetUid: string,
+  roles: PossibleUserRole[],
+): string | undefined {
+  const found = roles.find((r) => r.uid === targetUid);
+  if (found) return found.nickname;
+  if (targetUid.startsWith("EF_GUEST_")) return "Guest";
+  return stored;
+}
 
 export async function showGachaStats(
   ctx: GachaContext,
@@ -42,9 +72,14 @@ export async function showGachaStats(
 ) {
   const { interaction, tr, db } = ctx;
   const dbKey = `GACHA_LOG_${targetUid}`;
-  const data = await db.get<GachaLogData>(dbKey);
 
-  if (!data) {
+  // A repeat view reads only the small cache row and writes nothing; the log row
+  // (up to several MB of JSON) is parsed only when the log has changed.
+  const cached = await getCachedGachaStats(db, dbKey, (log) =>
+    getGachaStats(db, log),
+  );
+
+  if (!cached) {
     if (!skipAutoLoad) {
       const loaded = await tryAutoLoadGachaLog(ctx, targetUid);
       if (loaded) {
@@ -68,7 +103,7 @@ export async function showGachaStats(
     return;
   }
 
-  const stats = await getGachaStats(db, data);
+  const stats = cached.stats;
 
   // Auto-correct pageType based on poolId if a specific pool is selected
   if (poolId && poolId !== "all") {
@@ -91,43 +126,23 @@ export async function showGachaStats(
     }
   }
 
-  const rawUid = targetUid.replace("EF_CN_", "").replace("EF_", "");
-
-  const allPossibleRoles = await getAllPossibleUserRoles(
-    interaction.user.id,
-    db,
-  );
-  const found = allPossibleRoles.find((r) => r.uid === targetUid);
-
-  if (
-    !data.info.nickname ||
-    data.info.nickname === targetUid ||
-    data.info.nickname === rawUid ||
-    data.info.nickname === "Unknown"
-  ) {
-    if (found) {
-      data.info.nickname = found.nickname;
-      await db.set(`GACHA_LOG_${targetUid}`, data);
-    } else if (targetUid.startsWith("EF_GUEST_")) {
-      data.info.nickname = "Guest";
+  // The card only needs the log's info block; it is part of the cache row.
+  // A generic nickname is fixed for display only (nothing is written back).
+  const info = { ...cached.info };
+  if (isGenericNickname(info.nickname, targetUid)) {
+    const viewerRoles = async (refresh: boolean) =>
+      refresh
+        ? getAllPossibleUserRoles(interaction.user.id, db)
+        : mapPossibleUserRoles(await getAccounts(db, interaction.user.id));
+    let roles = await viewerRoles(false);
+    // Refresh the bindings only when the cached mapping does not know this UID
+    // and the stats had to be computed anyway.
+    if (!cached.hit && !roles.some((r) => r.uid === targetUid)) {
+      roles = await viewerRoles(true);
     }
+    info.nickname = pickDisplayNickname(info.nickname, targetUid, roles);
   }
-
-  // Always sync leaderboard to ensure any outdated display names or nicknames are fixed
-  try {
-    const accountIndex =
-      allPossibleRoles.findIndex((r) => r.uid === targetUid) + 1;
-    await updateLeaderboard(
-      db,
-      targetUid,
-      data,
-      interaction.user.displayName,
-      accountIndex > 0 ? accountIndex : undefined,
-      found?.nickname || data.info.nickname,
-    );
-  } catch (e) {
-    console.error(`[Leaderboard] Sync failed for ${targetUid}:`, e);
-  }
+  const data: GachaLogData = { characterList: [], weaponList: [], info };
 
   // Filter pools based on current category
   const targetStats = pageType === "weapon" ? stats.weapon : stats.char;
