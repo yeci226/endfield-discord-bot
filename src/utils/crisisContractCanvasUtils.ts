@@ -1,6 +1,7 @@
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
 import axios from "axios";
 import path from "path";
+import { createTranslator } from "./i18n";
 
 export const CRISIS_CONTRACT_CARD_SIZE = { width: 1536, height: 864 } as const;
 
@@ -103,13 +104,13 @@ function drawStat(ctx: any, x: number, y: number, w: number, label: string, valu
   ctx.font = "22px NotoSansTC";
   ctx.fillText(label, x + 22, y + 16);
   ctx.fillStyle = "#fff";
-  ctx.font = `bold ${fitText(ctx, value, w - 44, hot ? 70 : 48)}px NotoSansTCBold`;
+  ctx.font = `bold ${fitText(ctx, value, w - 44, hot ? 58 : 48)}px NotoSansTCBold`;
   ctx.fillText(value, x + 22, y + 46);
 }
 
 function drawIndicatorGrid(ctx: any, indicators: any[], active: number) {
   const x0 = 72;
-  const y0 = 372;
+  const y0 = 396;
   const cell = 86;
   for (let i = 0; i < 12; i++) {
     const x = x0 + (i % 6) * cell;
@@ -146,7 +147,7 @@ function drawRankMarks(ctx: any, x: number, y: number, active: number) {
   ctx.textAlign = "left";
 }
 
-function drawCharacterCard(ctx: any, char: any, x: number, y: number, avatar: any, weapon: any, equips: any[]) {
+function drawCharacterCard(ctx: any, char: any, x: number, y: number, avatar: any, weapon: any, equips: any[], tr: any) {
   const w = 154;
   const h = 684;
   drawGlassPanel(ctx, x, y, w, h, "rgba(8,10,14,0.84)");
@@ -178,7 +179,7 @@ function drawCharacterCard(ctx: any, char: any, x: number, y: number, avatar: an
   else drawPlaceholder(ctx, x + 14, y + 398, 62, 62, "W");
   ctx.fillStyle = "rgba(255,255,255,0.72)";
   ctx.font = "15px NotoSansTC";
-  ctx.fillText("Weapon", x + 82, y + 404);
+  ctx.fillText(tr("crisis_Card_Weapon"), x + 82, y + 404);
   ctx.fillStyle = "#fff";
   ctx.font = "bold 25px NotoSansTCBold";
   ctx.fillText(`Lv.${weapon?.level ?? "-"}`, x + 82, y + 426);
@@ -202,7 +203,10 @@ export async function buildCrisisContractCard(payload: {
   roleLevel?: number;
   crisisContract: any;
   detail?: any;
+  /** Translator; defaults to Traditional Chinese. */
+  tr?: any;
 }): Promise<Buffer> {
+  const tr = payload.tr ?? createTranslator("tw");
   const { width: W, height: H } = CRISIS_CONTRACT_CARD_SIZE;
   const cc = payload.crisisContract;
   const status = cc?.status || {};
@@ -258,24 +262,24 @@ export async function buildCrisisContractCard(payload: {
 
   ctx.fillStyle = "rgba(255,255,255,0.76)";
   ctx.font = "23px NotoSansTC";
-  ctx.fillText("// 行動結果", 58, 34);
+  ctx.fillText(tr("crisis_Card_Result"), 58, 34);
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 70px NotoSansTCBold";
-  ctx.fillText("行動成功", 58, 116);
+  ctx.font = `bold ${fitText(ctx, tr("crisis_Card_Success"), 470, 70)}px NotoSansTCBold`;
+  ctx.fillText(tr("crisis_Card_Success"), 58, 116);
   line(ctx, 60, 206, 256, 5, "#e7bd37");
   ctx.fillStyle = "rgba(255,255,255,0.72)";
   ctx.font = "bold 26px NotoSansTCBold";
-  ctx.fillText(status.name || "危機合約", 62, 226);
+  ctx.fillText(status.name || tr("crisis_Title"), 62, 226);
   drawRankMarks(ctx, 542, 166, Math.min(4, Math.max(1, Math.ceil(Number(best?.indicatorCount || status.highest || 0) / 8))));
 
-  drawStat(ctx, 58, 274, 386, "指標總計", String(status.highest ?? 0), true);
-  drawStat(ctx, 458, 274, 266, "行動時長", fmtTime(best?.passTs), false);
+  drawStat(ctx, 58, 274, 386, tr("crisis_Card_Total"), String(status.highest ?? 0), true);
+  drawStat(ctx, 458, 274, 266, tr("crisis_Card_Time"), fmtTime(best?.passTs), false);
   drawIndicatorGrid(ctx, indicators, Number(best?.indicatorCount || indicators.length || 0));
 
   drawGlassPanel(ctx, 58, 700, 666, 66, "rgba(0,0,0,0.58)");
   ctx.fillStyle = "#fff";
   ctx.font = "22px NotoSansTC";
-  ctx.fillText("里程碑已更新為新的評價", 88, 720);
+  ctx.fillText(tr("crisis_Card_Milestone"), 88, 720);
   ctx.textAlign = "right";
   ctx.font = "bold 28px NotoSansTCBold";
   ctx.fillStyle = "#f0d486";
@@ -286,7 +290,7 @@ export async function buildCrisisContractCard(payload: {
     const x = 792 + i * 176;
     const char = enrichedChars[i] || { charId: "-", level: "-", potentialLevel: 0 };
     const assets = charAssets[i] || { avatar: null, weapon: {}, equips: [] };
-    drawCharacterCard(ctx, char, x, 54, assets.avatar, assets.weapon, assets.equips);
+    drawCharacterCard(ctx, char, x, 54, assets.avatar, assets.weapon, assets.equips, tr);
   }
 
   drawGlassPanel(ctx, 792, 758, 682, 62, "rgba(0,0,0,0.46)");
@@ -294,9 +298,52 @@ export async function buildCrisisContractCard(payload: {
   ctx.font = "20px NotoSansTC";
   ctx.fillText(`${payload.roleName}${payload.roleLevel ? `  Lv.${payload.roleLevel}` : ""}`, 816, 776);
   ctx.textAlign = "right";
-  ctx.fillText(`挑戰 ${status.challengeCount ?? 0} / 記錄 ${cc?.history?.records?.length ?? 0}`, 1448, 776);
+  ctx.fillText(tr("crisis_Card_Challenges", { challenges: status.challengeCount ?? 0, records: cc?.history?.records?.length ?? 0 }), 1448, 776);
   ctx.textAlign = "left";
 
   // ponytail: smoke-test dimensions catch broken output; pixel tests are too brittle for a canvas card.
   return canvas.toBuffer("image/png");
+}
+
+export interface ContractSummary {
+  id: string;
+  name: string;
+  highest?: number;
+  challengeCount?: number;
+}
+
+/** Seasons listed in `card/detail.crisisContract[]`; entries without an id are dropped. */
+export function listContracts(detail: any): ContractSummary[] {
+  const raw = Array.isArray(detail?.crisisContract) ? detail.crisisContract : [];
+  return raw
+    .filter((c: any) => c && c.id != null && String(c.id) !== "")
+    .map((c: any) => ({ id: String(c.id), name: String(c.name || c.id), highest: c.highest, challengeCount: c.challengeCount }));
+}
+
+/**
+ * Default season = the newest. The API gives no timestamp, so this assumes the
+ * list is oldest-first and takes the last entry; the season picker lets users
+ * correct it. Change here if the live list turns out to be newest-first.
+ */
+export function pickDefaultContract(list: ContractSummary[]): ContractSummary | undefined {
+  return list[list.length - 1];
+}
+
+export function resolveContract(
+  list: ContractSummary[],
+  requestedId?: string | null,
+): { contract: ContractSummary } | { error: "none" | "notFound" } {
+  if (list.length === 0) return { error: "none" };
+  if (!requestedId) return { contract: pickDefaultContract(list)! };
+  const found = list.find((c) => c.id === requestedId);
+  return found ? { contract: found } : { error: "notFound" };
+}
+
+/** Autocomplete choices: filtered by season name, at most 25, value = contract id. */
+export function contractChoices(list: ContractSummary[], focused: string, max = 25): Array<{ name: string; value: string }> {
+  const q = focused.trim().toLowerCase();
+  return list
+    .filter((c) => !q || c.name.toLowerCase().includes(q))
+    .slice(0, max)
+    .map((c) => ({ name: c.name.slice(0, 100), value: c.id }));
 }

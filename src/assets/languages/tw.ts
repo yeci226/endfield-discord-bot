@@ -441,6 +441,38 @@ const langs: Record<string, any> = {
   // --- L4 (news, reminders, core) ---
 
   // --- L5 (new commands A) ---
+  l5_NoRole: "❌ 在你已綁定的帳號中找不到終末地角色，請重新使用 `/login` 登入。",
+  l5_NotOwner: "❌ 這個面板屬於其他使用者，請自行執行指令。",
+  l5_DataExpired: "❌ 此面板已過期，請重新執行指令。",
+  l5_SelectRole: "切換角色",
+  l5_Close: "關閉",
+  stamina_Title: "理智",
+  stamina_Sanity: "理智",
+  stamina_Daily: "每日活躍",
+  stamina_Weekly: "週常進度",
+  stamina_Pass: "協議通行證",
+  stamina_TimeToFull: "距離回滿",
+  stamina_FullAt: "回滿時間",
+  stamina_Full: "已回滿",
+  stamina_Saved: "遊戲存檔時間",
+  stamina_Queried: "查詢時間",
+  stamina_NoData: "❌ 此角色目前沒有可顯示的即時資料。",
+  stamina_MsgFull: "⚡ 理智 {cur_max} · 已回滿",
+  stamina_MsgRecovering: "⚡ 理智 {cur_max} · 回滿時間 {clock}（{relative}）",
+  stamina_MsgUnknown: "⚡ 理智 {cur_max} · 無法取得回滿時間",
+  crisis_Title: "危機合約",
+  crisis_NoContract: "❌ 找不到此角色的危機合約紀錄。",
+  crisis_SeasonNotFound: "❌ 此角色沒有該賽季的資料。",
+  crisis_FetchFailed: "❌ 無法取得危機合約資料（代碼 {code}）。",
+  crisis_SelectSeason: "選擇賽季",
+  crisis_Msg: "**{name}**\n角色：`{role}`\n最高：`{highest}` | 挑戰次數：`{challenges}`\n任務：每週 `{weekly}`、指標 `{indicator}`、關卡 `{stage}`\n指標數：`{indicators}` | 紀錄數：`{records}`",
+  crisis_Card_Result: "// 行動結果",
+  crisis_Card_Success: "行動成功",
+  crisis_Card_Total: "指標總計",
+  crisis_Card_Time: "行動時長",
+  crisis_Card_Milestone: "里程碑已更新為新的評價",
+  crisis_Card_Challenges: "挑戰 {challenges} / 記錄 {records}",
+  crisis_Card_Weapon: "武器",
 
   // --- G1 (gacha security) ---
 
