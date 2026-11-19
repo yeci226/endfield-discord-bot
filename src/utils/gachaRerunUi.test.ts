@@ -55,6 +55,11 @@ async function main() {
       isModalSubmit: () => false,
       customId: "gacha:log_type:test:all",
       values: ["rerun_char"],
+      // the message this menu sits on was produced by this same user's command
+      message: {
+        flags: { has: () => false },
+        interactionMetadata: { user: { id: "test" } },
+      },
       deferUpdate: async () => {},
       editReply: async (reply: any) => replies.push(reply),
     };
