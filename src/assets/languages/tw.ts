@@ -440,6 +440,30 @@ const langs: Record<string, any> = {
 
   // --- L4 (news, reminders, core) ---
   RateLimited: "⏳ 操作太頻繁，請稍等幾秒再試。",
+  reminderList_Title: "提醒規則",
+  reminderList_Empty: "你還沒有任何提醒規則。請先使用 /提醒 設定 建立。",
+  reminderList_Status_active: "運作中",
+  reminderList_Status_paused: "已暫停",
+  reminderList_Status_system: "已自動停用，請恢復或重新設定",
+  reminderList_Status_retry: "稍後重試",
+  reminderList_TargetDm: "私訊",
+  reminderList_CheckEvery: "每 15 分鐘檢查",
+  reminderList_Page: "第 <page> / <pages> 頁",
+  reminderList_SelectPlaceholder: "選擇一條規則進行操作",
+  reminderList_Pause: "暫停",
+  reminderList_Resume: "恢復",
+  reminderList_Delete: "刪除",
+  reminderList_Close: "關閉",
+  reminderList_Prev: "上一頁",
+  reminderList_NextPage: "下一頁",
+  reminderList_ConfirmDelete: "確定要刪除「<name>」的提醒規則嗎？此動作無法復原。",
+  reminderList_ConfirmYes: "確定刪除",
+  reminderList_Cancel: "取消",
+  reminderList_Paused: "已暫停這條提醒。",
+  reminderList_Resumed: "已恢復這條提醒。",
+  reminderList_Deleted: "已刪除這條提醒。",
+  reminderList_Gone: "找不到這條規則，可能已被刪除。",
+  reminderList_Closed: "已關閉。",
 
   // --- L5 (new commands A) ---
 

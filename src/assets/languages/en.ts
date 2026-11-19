@@ -460,6 +460,30 @@ const langs: Record<string, any> = {
 
   // --- L4 (news, reminders, core) ---
   RateLimited: "⏳ You're doing that too fast. Please wait a few seconds.",
+  reminderList_Title: "Reminder rules",
+  reminderList_Empty: "You have no reminder rules yet. Use /reminder setup to create one.",
+  reminderList_Status_active: "Active",
+  reminderList_Status_paused: "Paused",
+  reminderList_Status_system: "Disabled automatically; resume or set it up again",
+  reminderList_Status_retry: "Retrying later",
+  reminderList_TargetDm: "DM",
+  reminderList_CheckEvery: "checked every 15 min",
+  reminderList_Page: "Page <page> / <pages>",
+  reminderList_SelectPlaceholder: "Select a rule to manage",
+  reminderList_Pause: "Pause",
+  reminderList_Resume: "Resume",
+  reminderList_Delete: "Delete",
+  reminderList_Close: "Close",
+  reminderList_Prev: "Previous",
+  reminderList_NextPage: "Next",
+  reminderList_ConfirmDelete: "Delete the reminder rule for \"<name>\"? This cannot be undone.",
+  reminderList_ConfirmYes: "Delete",
+  reminderList_Cancel: "Cancel",
+  reminderList_Paused: "Reminder paused.",
+  reminderList_Resumed: "Reminder resumed.",
+  reminderList_Deleted: "Reminder deleted.",
+  reminderList_Gone: "That rule no longer exists; it may have been deleted.",
+  reminderList_Closed: "Closed.",
 
   // --- L5 (new commands A) ---
 
