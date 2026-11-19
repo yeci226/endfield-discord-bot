@@ -489,6 +489,7 @@ const langs: Record<string, any> = {
   reminderList_Cancel: "Cancel",
   reminderList_Paused: "Reminder paused.",
   reminderList_Resumed: "Reminder resumed.",
+  reminderList_Migrated: "From old settings",
   reminderList_Deleted: "Reminder deleted.",
   reminderList_Gone: "That rule no longer exists; it may have been deleted.",
   reminderList_Closed: "Closed.",

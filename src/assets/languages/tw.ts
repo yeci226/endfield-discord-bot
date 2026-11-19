@@ -468,6 +468,7 @@ const langs: Record<string, any> = {
   reminderList_Cancel: "取消",
   reminderList_Paused: "已暫停這條提醒。",
   reminderList_Resumed: "已恢復這條提醒。",
+  reminderList_Migrated: "舊設定轉入",
   reminderList_Deleted: "已刪除這條提醒。",
   reminderList_Gone: "找不到這條規則，可能已被刪除。",
   reminderList_Closed: "已關閉。",

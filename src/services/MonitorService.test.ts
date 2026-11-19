@@ -3,7 +3,12 @@ import { CustomDatabase } from "../utils/Database";
 import { MonitorService } from "./MonitorService";
 import { reminderKey, reminderStateKey, ReminderConfig } from "../utils/reminders";
 
+import { toggleRule } from "../utils/reminderList";
+import { migrateLegacyMonitorConfig } from "../utils/reminderMigration";
+
 const accountUtils = require("../utils/accountUtils");
+const cardNotification = require("../utils/cardNotification");
+const playerCards = require("../utils/playerCards");
 const skport = require("../utils/skportApi");
 
 const rule = (userId: string, uid: string, roleId: string, extra: Partial<ReminderConfig> = {}): ReminderConfig => ({
@@ -91,6 +96,42 @@ async function main() {
     assert.equal(patched!.value, 210);
     assert.equal(patched!.legacyOffset, undefined);
     assert.equal(patched!.revision, legacy.revision);
+
+    // ---- a migrated channel rule: paused = never evaluated; resumed = baseline first, then only a new crossing sends
+    const sends: string[] = [];
+    let cur = "230";
+    cardNotification.deliverCardMessage = async (_c: any, userId: string) => void (userId === "20" && sends.push(userId));
+    playerCards.drawPlayerCard = async () => Buffer.from("x");
+    let fetches = 0;
+    skport.getCardDetail = async (roleId: string) => {
+      if (roleId === "3") fetches++;
+      return { code: 0, data: { detail: { dungeon: { curStamina: cur, maxStamina: "240", maxTs: "0" }, dailyMission: { dailyActivation: 100, maxDailyActivation: 100 } } } };
+    };
+    userAccounts["20"] = [account("2001", ["3"])];
+    await db.set("monitorConfig", { "20": { stamina_notify: true, stamina_offset: 30, mission_notify: false, notify_method: "channel", channelId: "555" } });
+    await migrateLegacyMonitorConfig(db, async (u) => userAccounts[u] || []);
+    const migratedKey = "reminder.v2.20.2001.2.3";
+    const mig = await db.get<ReminderConfig>(migratedKey);
+    assert.deepEqual([mig!.enabled, mig!.notify_method, mig!.channelId], [false, "channel", "555"]);
+    const client: any = { db, cluster: { id: 0 }, isReady: () => true, channels: { cache: new Map([["555", { guildId: "9" }]]) } };
+    const svc2 = new MonitorService(client);
+    const fetchesBefore = fetches;
+    await svc2.runMonitoring();
+    await svc2.runMonitoring();
+    assert.equal(sends.length, 0, "paused migrated rule sends nothing over two passes");
+    assert.equal(fetches, fetchesBefore, "...and is not even evaluated");
+    // resume with the sanity already above the threshold (210): first pass only records it
+    assert.equal(toggleRule(client, "20", "2001.2.3"), true);
+    await svc2.runMonitoring();
+    assert.equal(sends.length, 0, "no send on the first pass after resume");
+    assert.equal((await db.get<ReminderConfig>(migratedKey))!.baselinePending, undefined);
+    await svc2.runMonitoring();
+    assert.equal(sends.length, 0, "still above threshold: already notified/baselined");
+    cur = "100";
+    await svc2.runMonitoring();
+    cur = "230";
+    await svc2.runMonitoring();
+    assert.deepEqual(sends, ["20"], "a new crossing sends once");
   } finally {
     [accountUtils.getAccounts, accountUtils.withAutoRefresh, skport.getCardDetail] = originals;
   }

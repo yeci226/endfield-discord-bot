@@ -44,7 +44,10 @@ export function legacyToReminder(
     roleId: target.roleId,
     serverId: target.serverId,
     name: target.name,
-    enabled: true,
+    // Paused: old settings must not start pinging again by themselves; the owner resumes them in /reminder list.
+    enabled: false,
+    migrated: true,
+    baselinePending: true,
     mention: channel,
     notify_method: channel ? "channel" : "dm",
     channelId: channel ? String(legacy.channelId) : undefined,
