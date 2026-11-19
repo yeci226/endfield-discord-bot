@@ -83,6 +83,18 @@ export function getWinRateCounts(summary: any): {
   };
 }
 
+/** Text of a win-rate figure: a dash when the pool type has no featured verdict at all, "no data" without 6-stars. Pure. */
+export function formatWinRate(
+  featured: number,
+  total: number,
+  available: boolean,
+  noDataText: string,
+): string {
+  if (!available) return "—";
+  if (!(total > 0)) return noDataText;
+  return ((featured / total) * 100).toFixed(2) + "%";
+}
+
 export function getDetailedPageCount(
   items: any[],
   includesPlaceholder: boolean,

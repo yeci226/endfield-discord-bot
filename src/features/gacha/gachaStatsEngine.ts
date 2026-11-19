@@ -9,7 +9,7 @@ import { GachaLogData, GachaRecord, isGachaPull, isPullFree } from "./gachaTypes
  * the version they were computed with; bump this whenever getGachaStats can
  * return different numbers for the same log.
  */
-export const ENGINE_VERSION = 2;
+export const ENGINE_VERSION = 3;
 
 const STANDARD_SIX_STARS = [
   "chr_0009_azrila",
@@ -25,6 +25,19 @@ function sumMapValues(m: Map<string, number>): number {
   let n = 0;
   for (const v of m.values()) n += v;
   return n;
+}
+
+/**
+ * Does the engine have a featured / off-rate verdict for 6-stars of this pool?
+ * Only the pool types classifyFeaturedSixStar is run for (isLimitedRateUpPool).
+ * Joint pools have none, so their win rate is not a measurement: stats mark
+ * them `winRateAvailable: false` and the cards draw a dash.
+ */
+export function hasFeaturedVerdict(record: {
+  poolType?: string;
+  poolName?: string;
+}): boolean {
+  return isLimitedRateUpPool(record);
 }
 
 /** Pools where a 6-star is either the rate-up item or an off-rate one. */
@@ -361,6 +374,9 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
         poolUnknownFeaturedMap: Object.fromEntries(poolUnknownFeaturedCounters),
         unknownFeaturedCount: sumMapValues(poolUnknownFeaturedCounters),
         hasFeaturedMap: Object.fromEntries(hasFeaturedMap),
+        // false = no featured verdict exists for this group's pool type (Joint, ...)
+        winRateAvailable:
+          records.length === 0 || records.some((r) => hasFeaturedVerdict(r)),
       } as any;
     }
 
@@ -471,6 +487,8 @@ export async function getGachaStats(db: CustomDatabase, data: GachaLogData) {
           total: poolTotal, // Current non-free total
           freeCount,
           bannerUrl: p.bannerUrl,
+          // false: no featured verdict exists for this pool type, so there is no win rate
+          winRateAvailable: hasFeaturedVerdict({ poolType: p.type, poolName: p.name }),
           sixStarPullCount:
             Object.values(summary).reduce(
               (sum, s) => sum + ((s as any).poolSixStarPullMap?.[p.id] || 0),
