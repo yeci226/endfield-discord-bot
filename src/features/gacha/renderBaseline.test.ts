@@ -14,8 +14,14 @@ const baseline = JSON.parse(
 );
 
 // Render once with the card cache on (the fixture also checks a repeat render
-// returns the identical buffer) and once with it bypassed: same pixels.
-for (const noCardCache of ["0", "1"]) {
+// returns the identical buffer), once with it bypassed, and once bypassed with
+// the stats deep-frozen (stats are shared between views by the stats cache, so
+// the draw path must not mutate them): same pixels each time.
+for (const [noCardCache, deepFreeze] of [
+  ["0", "0"],
+  ["1", "0"],
+  ["1", "1"],
+]) {
   const res = spawnSync(
     process.execPath,
     [
@@ -33,6 +39,7 @@ for (const noCardCache of ["0", "1"]) {
         TS_NODE_TRANSPILE_ONLY: "1",
         NODE_ENV: "test",
         RENDER_FIXTURE_NO_CARD_CACHE: noCardCache,
+        RENDER_FIXTURE_DEEP_FREEZE: deepFreeze,
       },
     },
   );

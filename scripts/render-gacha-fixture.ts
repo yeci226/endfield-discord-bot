@@ -412,6 +412,12 @@ export async function prepareFixture() {
   };
 }
 
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const v of Object.values(value as object)) deepFreeze(v);
+}
+
 export async function renderGachaFixture(
   dumpDir?: string,
 ): Promise<Record<string, string>> {
@@ -420,6 +426,10 @@ export async function renderGachaFixture(
     renderedCardCache.enabled = false;
   }
   const { db, data, stats, tr, trEn } = await prepareFixture();
+  // RENDER_FIXTURE_DEEP_FREEZE=1: the stats are shared between views by the
+  // stats cache, so nothing in the draw path may mutate them. A mutation of a
+  // frozen object throws (strict mode) and fails the fixture.
+  if (process.env.RENDER_FIXTURE_DEEP_FREEZE === "1") deepFreeze(stats);
   const out: Record<string, string> = {};
   const record = async (name: string, buf: Buffer) => {
     out[name] = await rgbaHash(buf);

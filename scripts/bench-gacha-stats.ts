@@ -5,6 +5,10 @@
  *   node -r ts-node/register scripts/bench-gacha-stats.ts            # cache path
  *   node -r ts-node/register scripts/bench-gacha-stats.ts --no-cache # the old path
  *   options: --runs N (default 20)  --pulls N (default 9000, ~2 MB of JSON)
+ *            --codecs   also print size and time of gzip/brotli levels on the stats payload
+ *
+ * Cache path timings: cold (miss: compute + compress + store), DB hit (the
+ * in-process LRU emptied first: read row, gunzip, parse) and memory hit (LRU).
  *
  * The synthetic log has its own seeded generator (scripts/render-gacha-fixture.ts
  * keeps its generator private and must not be edited); every pool has stored
@@ -24,7 +28,11 @@ import {
   getGachaStats,
   updateLeaderboard,
 } from "../src/utils/gachaLogUtils";
-import { getCachedGachaStats } from "../src/features/gacha/gachaStatsCache";
+import {
+  getCachedGachaStats,
+  statsMemoryFor,
+} from "../src/features/gacha/gachaStatsCache";
+import zlib from "zlib";
 
 const args = process.argv.slice(2);
 const noCache = args.includes("--no-cache");
@@ -169,22 +177,35 @@ async function main() {
     // cold: first view of this log (cache path: a miss that also stores the entry)
     const cold: number[] = [];
     for (let i = 0; i < RUNS; i++) {
+      statsMemoryFor(db).clear();
       await db.delete(`GACHA_STATS.${LOG_KEY}`);
       const t0 = process.hrtime.bigint();
       await view();
       cold.push(Number(process.hrtime.bigint() - t0) / 1e6);
     }
 
-    // repeat: the same view again (cache path: a hit)
+    // repeat: the same view again. Cache path: a DB hit (LRU emptied first).
     await view();
     const repeat: number[] = [];
     const writes: number[] = [];
     for (let i = 0; i < RUNS; i++) {
+      statsMemoryFor(db).clear();
       const c0 = changes(db);
       const t0 = process.hrtime.bigint();
       await view();
       repeat.push(Number(process.hrtime.bigint() - t0) / 1e6);
       writes.push(changes(db) - c0);
+    }
+
+    // memory hit: the LRU is warm (cache path only)
+    const memory: number[] = [];
+    if (!noCache) {
+      await view();
+      for (let i = 0; i < RUNS; i++) {
+        const t0 = process.hrtime.bigint();
+        await view();
+        memory.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      }
     }
 
     const f = (n: number) => n.toFixed(2).padStart(9);
@@ -199,8 +220,49 @@ async function main() {
       }),
     );
     console.log(`first view (cold)    median ms ${f(median(cold))}`);
-    console.log(`repeat view          median ms ${f(median(repeat))}`);
+    console.log(
+      `repeat view ${noCache ? "        " : "(DB hit) "}median ms ${f(median(repeat))}`,
+    );
+    if (memory.length)
+      console.log(`repeat view (memory) median ms ${f(median(memory))}`);
     console.log(`DB row writes per repeat view     ${median(writes)}`);
+    if (!noCache) {
+      const row = db.getRowToken(`GACHA_STATS.${LOG_KEY}`)!.length;
+      console.log(
+        `stats row ${row} bytes = ${(row / logBytes).toFixed(2)}x the log row (${logBytes} bytes)`,
+      );
+    }
+    if (args.includes("--codecs")) {
+      const stats = await getGachaStats(db, (await db.get<GachaLogData>(LOG_KEY))!);
+      const json = JSON.stringify({ info: log.info, stats });
+      console.log(`stats JSON ${json.length} bytes`);
+      const time = (fn: () => Buffer) => {
+        const ts: number[] = [];
+        let out = Buffer.alloc(0);
+        for (let i = 0; i < 5; i++) {
+          const t0 = process.hrtime.bigint();
+          out = fn();
+          ts.push(Number(process.hrtime.bigint() - t0) / 1e6);
+        }
+        return { size: out.length, ms: median(ts) };
+      };
+      const tryCodec = (name: string, fn: () => Buffer) => {
+        const r = time(fn);
+        const t0 = process.hrtime.bigint();
+        for (let i = 0; i < 3; i++)
+          name.startsWith("brotli")
+            ? zlib.brotliDecompressSync(fn())
+            : zlib.gunzipSync(fn());
+        void t0;
+        console.log(`${name.padEnd(10)} ${r.size} bytes (base64 ${Math.ceil((r.size * 4) / 3)}), compress ${r.ms.toFixed(1)} ms`);
+      };
+      for (const level of [1, 3, 6]) tryCodec(`gzip-${level}`, () => zlib.gzipSync(json, { level }));
+      for (const q of [2, 4]) {
+        tryCodec(`brotli-${q}`, () =>
+          zlib.brotliCompressSync(json, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: q } }),
+        );
+      }
+    }
   } finally {
     db.close();
     for (const suffix of ["", "-wal", "-shm"]) {

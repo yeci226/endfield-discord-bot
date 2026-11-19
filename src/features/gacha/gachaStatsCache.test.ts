@@ -4,6 +4,7 @@ import {
   getCachedGachaStats,
   makeStatsToken,
   STATS_CACHE_PREFIX,
+  statsMemoryFor,
   UNKNOWN_FEATURED_TTL_MS,
 } from "./gachaStatsCache";
 import { ENGINE_VERSION } from "./gachaStatsEngine";
@@ -120,6 +121,7 @@ async function main() {
     assert.equal(entry.engine, ENGINE_VERSION);
     entry.engine = ENGINE_VERSION - 1;
     await db.real.set(key, entry);
+    statsMemoryFor(db).clear(); // as after a restart: the in-process copy is gone
     const r = await getCachedGachaStats(db, "GACHA_LOG_EF_3", async () => ({ n: ++computes }));
     assert.equal(r!.hit, false);
     assert.equal(computes, 2);

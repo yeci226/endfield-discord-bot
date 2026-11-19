@@ -1,5 +1,6 @@
 import { CustomDatabase } from "../../utils/Database";
 import { getGachaStats } from "./gachaStatsEngine";
+import { startGachaCacheJobs } from "./gachaStatsCache";
 import { GachaLeaderboardEntry, GachaLogData, GachaRecord, isGachaPull, isPullFree } from "./gachaTypes";
 
 function indexGachaLogRecords(
@@ -517,6 +518,8 @@ export function startGachaStorageJobs(
   startup.every("gacha-leaderboard-refresh", 30_000, async () => {
     await refreshLegacyLeaderboardEntries(db, { max: 3 });
   });
+  // hourly: delete stats-cache rows older than 30 days
+  startGachaCacheJobs(startup, db);
 }
 
 /**
