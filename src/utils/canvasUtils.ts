@@ -16,6 +16,7 @@ import { ProfileTemplateService } from "../services/ProfileTemplateService";
 import moment from "moment";
 import crypto from "crypto";
 import { resolveOwnAssetRel } from "./ownAssets";
+import { validateProxyUrl } from "../web/imageProxy";
 
 // Register Fonts
 const fontDir = path.join(__dirname, "../assets/fonts");
@@ -84,19 +85,7 @@ export async function drawDashboard(
   const ctx = canvas.getContext("2d");
 
   // Helper for local image loading
-  const loadLocalImage = async (relPath: string) => {
-    if (imageCache.has(relPath)) {
-      return imageCache.get(relPath)!;
-    }
-    try {
-      const fullPath = path.join(ASSETS_DIR, relPath);
-      const img = await loadImage(fs.readFileSync(fullPath));
-      imageCache.set(relPath, img);
-      return img;
-    } catch (e) {
-      throw e;
-    }
-  };
+  const loadLocalImage = readAssetImage;
 
   // Helper for styling wrappers
   const withStyles = (
@@ -1477,10 +1466,38 @@ function applyFabricClipPath(
   ctx.clip();
 }
 
+/**
+ * Absolute path of `relPath` inside the assets folder, or null when it would
+ * resolve outside it (`..`, absolute paths, NUL).
+ */
+export function resolveAssetPath(
+  relPath: string,
+  assetsDir: string = ASSETS_DIR,
+): string | null {
+  if (typeof relPath !== "string" || !relPath || relPath.includes("\0")) {
+    return null;
+  }
+  const root = path.resolve(assetsDir);
+  const full = path.resolve(path.join(root, relPath));
+  return full.startsWith(root + path.sep) ? full : null;
+}
+
+/** Reads a decoded asset image through the shared cache; throws when missing or refused. */
+async function readAssetImage(relPath: string): Promise<Image> {
+  const cached = imageCache.get(relPath);
+  if (cached) return cached;
+  const fullPath = resolveAssetPath(relPath);
+  if (!fullPath) throw new Error(`Asset path outside assets dir: ${relPath}`);
+  const img = await loadImage(fs.readFileSync(fullPath));
+  imageCache.set(relPath, img);
+  return img;
+}
+
 async function loadLocalImage(relPath: string) {
-  if (imageCache.has(relPath)) return imageCache.get(relPath)!;
-  const fullPath = path.join(ASSETS_DIR, relPath);
-  if (!fs.existsSync(fullPath)) return null;
+  const cached = imageCache.get(relPath);
+  if (cached) return cached;
+  const fullPath = resolveAssetPath(relPath);
+  if (!fullPath || !fs.existsSync(fullPath)) return null;
   const img = await loadImage(fs.readFileSync(fullPath));
   imageCache.set(relPath, img);
   return img;
@@ -1491,18 +1508,93 @@ export async function loadAssetImage(relPath: string): Promise<Image | null> {
   return loadLocalImage(relPath);
 }
 
+/**
+ * Extra hosts the card renderer may download from, on top of the web image
+ * proxy's allow-list (`validateProxyUrl`): the third-party icon mirrors the
+ * gacha icon loader and the simulator use. Exact host or subdomain, HTTPS only.
+ */
+export const RENDERER_EXTRA_IMAGE_HOSTS = [
+  "endfieldtools.dev",
+  "endfield.ooo.run",
+];
+
+export type RendererImageUrlCheck =
+  | { ok: true; url: URL }
+  | { ok: false; reason: string };
+
+/** Same rules as the web image proxy plus RENDERER_EXTRA_IMAGE_HOSTS. */
+export function validateRendererImageUrl(
+  input: unknown,
+): RendererImageUrlCheck {
+  const base = validateProxyUrl(input);
+  if (base.ok || base.reason !== "host not allowed") return base;
+  // validateProxyUrl already vetted scheme, credentials, port and IP literals;
+  // only the host list differed.
+  const url = new URL(String(input));
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const extra = RENDERER_EXTRA_IMAGE_HOSTS.some(
+    (h) => host === h || host.endsWith("." + h),
+  );
+  return extra ? { ok: true, url } : base;
+}
+
+const FETCH_IMAGE_MAX_REDIRECTS = 3;
+const FETCH_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+async function downloadImage(
+  startUrl: URL,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<Buffer> {
+  let current = startUrl;
+  for (let hop = 0; ; hop++) {
+    const response = await axios.get(current.toString(), {
+      headers,
+      responseType: "arraybuffer",
+      timeout: timeoutMs,
+      maxRedirects: 0,
+      maxContentLength: FETCH_IMAGE_MAX_BYTES,
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+    const location = response.headers?.location;
+    if (response.status >= 300 && location) {
+      if (hop >= FETCH_IMAGE_MAX_REDIRECTS) throw new Error("too many redirects");
+      // every hop must stay on an allowed host
+      const next = validateRendererImageUrl(
+        new URL(String(location), current).toString(),
+      );
+      if (!next.ok) throw new Error(`redirect refused: ${next.reason}`);
+      current = next.url;
+      continue;
+    }
+    return Buffer.from(response.data);
+  }
+}
+
 export async function fetchImage(
   url: string,
   customCacheName?: string,
   options?: { timeoutMs?: number },
 ): Promise<Image> {
   const requestTimeout = options?.timeoutMs ?? 10000;
+
+  // Only official / known icon hosts: a template or log can carry any URL.
+  const allowed = validateRendererImageUrl(url);
+  if (!allowed.ok) {
+    throw new Error(`Image host not allowed (${allowed.reason}): ${String(url).slice(0, 120)}`);
+  }
+
   if (imageCache.has(url)) return imageCache.get(url)!;
 
   const ext = url.split(".").pop()?.split(/[?#]/)[0] || "png";
-  const fileName = customCacheName
-    ? `${customCacheName}.${ext}`
-    : `${crypto.createHash("md5").update(url).digest("hex")}.${ext}`;
+  // The cache name can embed ids from imported logs: keep it a plain file name.
+  const safeName = customCacheName
+    ?.replace(/[^A-Za-z0-9_.-]/g, "_")
+    .split("..")
+    .join("_");
+  const fileName = safeName
+    ? `${safeName}.${ext.replace(/[^A-Za-z0-9]/g, "")}`
+    : `${crypto.createHash("md5").update(url).digest("hex")}.${ext.replace(/[^A-Za-z0-9]/g, "")}`;
 
   const cachePath = path.join(CACHE_DIR, fileName);
 
@@ -1520,7 +1612,6 @@ export async function fetchImage(
 
   // 2. Fetch remote
   try {
-    let response;
     const headers = {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1531,32 +1622,24 @@ export async function fetchImage(
       Pragma: "no-cache",
     };
 
+    let buffer: Buffer;
     try {
-      response = await axios.get(url, {
-        headers,
-        responseType: "arraybuffer",
-        timeout: requestTimeout,
-      });
+      buffer = await downloadImage(allowed.url, headers, requestTimeout);
     } catch (e) {
       // Fallback: If .png fails, try .webp if it's not already webp
       if (url.endsWith(".png")) {
         const webpUrl = url.replace(".png", ".webp");
-        response = await axios.get(webpUrl, {
-          headers,
-          responseType: "arraybuffer",
-          timeout: requestTimeout,
-        });
+        const webpCheck = validateRendererImageUrl(webpUrl);
+        if (!webpCheck.ok) throw e;
+        buffer = await downloadImage(webpCheck.url, headers, requestTimeout);
       } else {
         throw e;
       }
     }
 
-    const buffer = Buffer.from(response.data);
-
-    // Save to disk cache
-    fs.writeFileSync(cachePath, buffer);
-
     const img = await loadImage(buffer);
+    // Save to disk cache (only bytes that decode as an image)
+    fs.writeFileSync(cachePath, buffer);
     imageCache.set(url, img);
     return img;
   } catch (e: any) {
@@ -1846,17 +1929,7 @@ export async function drawCharacterDetail(
     char.charData.avatarRtUrl ||
     char.charData.avatarSqUrl;
 
-  const loadLocalImage = async (relPath: string) => {
-    if (imageCache.has(relPath)) return imageCache.get(relPath)!;
-    try {
-      const fullPath = path.join(ASSETS_DIR, relPath);
-      const img = await loadImage(fs.readFileSync(fullPath));
-      imageCache.set(relPath, img);
-      return img;
-    } catch (e) {
-      throw e;
-    }
-  };
+  const loadLocalImage = readAssetImage;
 
   const starImg = await loadLocalImage("star.png");
 
@@ -1926,8 +1999,8 @@ export async function drawCharacterDetail(
 
   // Trigger parallel loading
   await Promise.all([
-    ...remoteUrls.map((url) => fetchImage(url)),
-    ...localAssets.map((path) => loadLocalImage(path)),
+    ...remoteUrls.map((url) => fetchImage(url).catch(() => null)),
+    ...localAssets.map((path) => loadLocalImage(path).catch(() => null)),
   ]);
 
   // 1. Backgrounds
@@ -3232,7 +3305,7 @@ export async function drawProfileBackground(ctx: SKRSContext2D, width: number, h
         ? await loadLocalImage(ownBgRel).catch(() => null)
         : bgUrl.startsWith("http")
           ? await fetchImage(bgUrl).catch(() => null)
-          : await loadImage(path.join(ASSETS_DIR, bgUrl)).catch(() => null);
+          : await loadLocalImage(bgUrl).catch(() => null);
 
       if (bg) {
         // 1.1 Handle Background Fill Color
