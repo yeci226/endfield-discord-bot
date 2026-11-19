@@ -64,5 +64,6 @@ export class MonitorService {
     } catch (error) { this.logger.error(`Monitoring loop failed: ${error}`); }
     finally { this.isRunning = false; }
   }
+  register() { this.client.startup.onPrimary("reminder-service", () => this.start()); }
   stop() { if (this.interval) clearInterval(this.interval); this.interval = null; }
 }

@@ -93,7 +93,8 @@ export class ExtendedClient extends Client {
     });
   }
 
-  public start() {
+  /** Resolves once the gateway login succeeded; exits the process (code 1) if it fails. */
+  public async start(): Promise<void> {
     const isDev = process.env.NODE_ENV === "development";
     const token = isDev
       ? process.env.TEST_DISCORD_TOKEN
@@ -107,9 +108,16 @@ export class ExtendedClient extends Client {
       );
       process.exit(1);
     }
-    this.login(token);
+    try {
+      await this.login(token);
+    } catch (error: any) {
+      this.logger.error(`Login failed: ${error?.message || error}`);
+      process.exit(1);
+      return;
+    }
+    const shards = this.options.shards;
     this.logger.success(
-      `Client logged in. Shards: ${getInfo().SHARD_LIST.join(", ")}`,
+      `Client logged in. Shards: ${Array.isArray(shards) ? shards.join(", ") : shards}`,
     );
 
     // Memory monitoring

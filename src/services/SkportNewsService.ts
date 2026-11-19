@@ -77,6 +77,11 @@ export class SkportNewsService {
     this.isReady = true;
   }
 
+  /** Registers the primary-cluster startup work (TEMP: replaced in the news task). */
+  public register() {
+    this.client.startup.onPrimary("news-service", () => this.start());
+  }
+
   public stop() {
     if (this.interval) {
       clearInterval(this.interval);

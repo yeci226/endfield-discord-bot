@@ -105,6 +105,44 @@ async function main() {
     "a single worker death must not launch a second full recluster; built-in respawn owns recovery",
   );
 
+  // one memory timer per cluster id: a respawn ("ready" again) replaces it, death clears it
+  {
+    const realSet = global.setInterval;
+    const realClear = global.clearInterval;
+    const live = new Set<unknown>();
+    (global as any).setInterval = (fn: () => void, ms: number) => {
+      const handle = realSet(fn, ms);
+      handle.unref();
+      live.add(handle);
+      return handle;
+    };
+    (global as any).clearInterval = (handle: unknown) => {
+      live.delete(handle);
+      realClear(handle as any);
+    };
+    try {
+      const c1 = new EventEmitter() as any;
+      c1.id = 1;
+      manager.emit("clusterCreate", c1);
+      c1.emit("ready");
+      c1.emit("ready");
+      c1.emit("ready");
+      assert.equal(live.size, 1, "respawned cluster must not stack timers");
+      const c2 = new EventEmitter() as any;
+      c2.id = 2;
+      manager.emit("clusterCreate", c2);
+      c2.emit("ready");
+      assert.equal(live.size, 2, "one timer per cluster id");
+      c1.emit("death");
+      assert.equal(live.size, 1, "death clears the timer");
+      c2.emit("death");
+      assert.equal(live.size, 0);
+    } finally {
+      global.setInterval = realSet;
+      global.clearInterval = realClear;
+    }
+  }
+
   await manager.recluster.start();
   assert.equal(
     manager.recluster.respawnDuringStart,

@@ -65,17 +65,30 @@ if (originalReclusterStart) {
 
 const logger = new Logger("Cluster Manager");
 
+// One memory-report timer per cluster id. A respawned cluster emits "ready"
+// again, so the previous timer must be cleared rather than stacked.
+const memoryTimers = new Map<number, NodeJS.Timeout>();
+const clearMemoryTimer = (id: number) => {
+  const timer = memoryTimers.get(id);
+  if (timer) clearInterval(timer);
+  memoryTimers.delete(id);
+};
+
 manager.on("clusterCreate", (cluster) => {
   cluster.on("ready", () => {
     logger.info(`Launched Cluster ${cluster.id}`);
-    setInterval(
-      () => {
-        const memory = process.memoryUsage();
-        logger.info(
-          `[Cluster #${cluster.id}] RSS: ${(memory.rss / 1024 / 1024).toFixed(2)}MB, Heap: ${(memory.heapUsed / 1024 / 1024).toFixed(2)}MB`,
-        );
-      },
-      1000 * 60 * 10,
+    clearMemoryTimer(cluster.id);
+    memoryTimers.set(
+      cluster.id,
+      setInterval(
+        () => {
+          const memory = process.memoryUsage();
+          logger.info(
+            `[Cluster #${cluster.id}] RSS: ${(memory.rss / 1024 / 1024).toFixed(2)}MB, Heap: ${(memory.heapUsed / 1024 / 1024).toFixed(2)}MB`,
+          );
+        },
+        1000 * 60 * 10,
+      ),
     );
   });
 
@@ -84,6 +97,7 @@ manager.on("clusterCreate", (cluster) => {
   });
 
   cluster.on("death", () => {
+    clearMemoryTimer(cluster.id);
     logger.info(
       `Cluster ${cluster.id} exited; cluster-manager respawn handles single-worker recovery`,
     );
