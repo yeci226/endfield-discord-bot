@@ -9,27 +9,33 @@ import {
   getAccounts,
   withAutoRefresh,
 } from "../utils/accountUtils";
-import { createTranslator } from "../utils/i18n";
+import { accountId, patchAccount } from "../utils/accountData";
 import {
-  AttachmentBuilder,
-  ContainerBuilder,
-  MediaGalleryBuilder,
-  MediaGalleryItemBuilder,
-  MessageFlags,
-  SeparatorBuilder,
-  TextDisplayBuilder,
-} from "discord.js";
-import moment from "moment-timezone";
+  DailyGameScope,
+  gameIdsForScope,
+  normalizeBindingRoles,
+  toAttendanceRole,
+} from "../utils/bindingRoles";
+import { createTranslator } from "../utils/i18n";
+import { AttachmentBuilder } from "discord.js";
 import { Logger } from "../utils/Logger";
 import { processRoleAttendance } from "../utils/attendanceUtils";
 import {
   buildDailyAttendanceCard,
   DailyCardPayload,
 } from "../utils/dailyCanvasUtils";
-import { Readable } from "stream";
-
-type DailyGameScope = "endfield" | "arknights" | "both";
-const AUTO_DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
+import {
+  AttendanceKind,
+  AutoDailyState,
+  classifyAttendance,
+  isTokenExpiredError,
+  nextAutoDailyState,
+  nextHourStart,
+  planAutoDaily,
+  RunSummary,
+  taipeiDate,
+  taipeiHour,
+} from "./autoDailyPlan";
 
 interface AutoDailyConfig {
   time: number; // 0-23
@@ -39,6 +45,43 @@ interface AutoDailyConfig {
   channelId?: string;
   mention?: boolean;
   game_scope?: DailyGameScope;
+}
+
+interface AutoDailyResult {
+  gameId?: number;
+  roleName: string;
+  roleMeta: string;
+  rewardName: string;
+  rewardIcon: string;
+  firstRewardName?: string;
+  firstRewardIcon?: string;
+  totalDays: number;
+  calendarTotalDays: number;
+  todayClaimedNow: boolean;
+  checkedDaysThisMonth?: number;
+  missedDaysThisMonth?: number;
+  yesterdayReward?: {
+    name: string;
+    icon?: string;
+    resourceId?: string;
+    done?: boolean;
+  };
+  todayReward?: {
+    name: string;
+    icon?: string;
+    resourceId?: string;
+    done?: boolean;
+  };
+  nextRewards?: {
+    name: string;
+    icon?: string;
+    resourceId?: string;
+    done?: boolean;
+  }[];
+  status: string;
+  kind?: AttendanceKind;
+  isError?: boolean;
+  accountIdx?: number;
 }
 
 export class AutoDailyService {
@@ -89,59 +132,6 @@ export class AutoDailyService {
     return parsed.length > 0 ? parsed[0] : fallback;
   }
 
-  private normalizeAttendanceBindings(
-    raw: any,
-    scope: DailyGameScope,
-  ): Array<{ gameId: number; roles: any[] }> {
-    const normalized: Array<{ gameId: number; roles: any[] }> = [];
-
-    const pushBinding = (entry: any) => {
-      const gameId = Number(entry?.gameId || 0);
-      if (!AUTO_DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
-      if (!this.isGameInScope(gameId, scope)) return;
-
-      let roles = Array.isArray(entry?.roles)
-        ? entry.roles
-        : entry?.defaultRole
-          ? [entry.defaultRole]
-          : [];
-
-      if (
-        roles.length === 0 &&
-        gameId === 1 &&
-        (entry?.uid || entry?.nickName)
-      ) {
-        roles = [
-          {
-            roleId: String(entry?.uid || ""),
-            serverId: String(entry?.channelMasterId || ""),
-            nickname: String(entry?.nickName || entry?.uid || "Arknights"),
-            level: 0,
-            serverName: String(entry?.channelName || entry?.gameName || "-"),
-          },
-        ];
-      }
-
-      if (roles.length > 0) {
-        normalized.push({ gameId, roles });
-      }
-    };
-
-    if (!Array.isArray(raw)) return normalized;
-
-    for (const item of raw) {
-      if (Array.isArray(item?.bindingList)) {
-        for (const binding of item.bindingList) {
-          pushBinding(binding);
-        }
-        continue;
-      }
-      pushBinding(item);
-    }
-
-    return normalized;
-  }
-
   private normalizeGameScope(
     value: unknown,
     fallback: DailyGameScope,
@@ -150,12 +140,6 @@ export class AutoDailyService {
       return value;
     }
     return fallback;
-  }
-
-  private isGameInScope(gameId: number, scope: DailyGameScope): boolean {
-    if (scope === "both") return gameId === 1 || gameId === 3;
-    if (scope === "arknights") return gameId === 1;
-    return gameId === 3;
   }
 
   constructor(client: ExtendedClient) {
@@ -254,10 +238,10 @@ export class AutoDailyService {
     if (targetHour === undefined) this.isRunning = true;
 
     try {
+      const nowMs = Date.now();
+      const today = taipeiDate(nowMs);
       const currentHour =
-        targetHour !== undefined
-          ? targetHour
-          : parseInt(moment().tz("Asia/Taipei").format("H"));
+        targetHour !== undefined ? targetHour : taipeiHour(nowMs);
       this.logger.info(
         `Running checks for hour ${currentHour}:00 (Asia/Taipei)`,
       );
@@ -265,6 +249,13 @@ export class AutoDailyService {
       // Migrate to prefixed keys
       const dailyUsers =
         await this.client.db.findByPrefix<AutoDailyConfig>("autoDaily.");
+      const states = new Map<string, AutoDailyState>();
+      for (const { id, value } of await this.client.db.findByPrefix<AutoDailyState>(
+        "autoDailyState.",
+      )) {
+        if (value && typeof value === "object")
+          states.set(id.replace("autoDailyState.", ""), value);
+      }
 
       const eligibleUsers = [];
       for (const { id, value: config } of dailyUsers) {
@@ -294,7 +285,14 @@ export class AutoDailyService {
         }
 
         const userId = id.replace("autoDaily.", "");
-        if ((config as any).time !== currentHour) continue;
+        const state = states.get(userId);
+        if (targetHour !== undefined) {
+          // Manual range: the users configured for that hour, unless already done today.
+          if ((config as any).time !== currentHour) continue;
+          if (state?.date === today && state.status === "done") continue;
+        } else if (planAutoDaily(nowMs, config as any, state) !== "run") {
+          continue;
+        }
 
         eligibleUsers.push({ userId, config });
       }
@@ -302,7 +300,7 @@ export class AutoDailyService {
       this.logger.info(`Found ${eligibleUsers.length} users for this hour.`);
 
       for (const { userId, config } of eligibleUsers) {
-        await this.processUser(userId, config);
+        await this.processUser(userId, config, currentHour);
       }
 
       // 簽到任務完成後手動觸發垃圾回收 (GC)
@@ -336,96 +334,154 @@ export class AutoDailyService {
     };
   }
 
-  public async processUser(userId: string, config: AutoDailyConfig) {
+  /**
+   * Tells the user once that this account must be logged in again. Ignores `notify`.
+   * Returns true when the user has been dealt with (sent, or DMs are closed): the flag is
+   * set so we do not try again. Other failures leave the flag unset and retry next time.
+   */
+  private async notifyTokenExpired(
+    userId: string,
+    account: any,
+    tr: any,
+  ): Promise<boolean> {
+    let delivered = true;
     try {
-      const today = moment().tz("Asia/Taipei").format("YYYY-MM-DD");
-      // Atomically claim today's slot — guards against concurrent cluster processes
-      // (graceful recluster can briefly run two cluster-0s simultaneously).
-      if (!this.client.db.claimSlot(`${userId}.lastAutoDaily`, today)) {
+      const user = await this.client.users.fetch(userId);
+      await user.send({
+        content: tr("autoDaily_TokenExpiredDM", {
+          name: account.info?.nickname || account.info?.id || "?",
+        }),
+        allowedMentions: { parse: [] },
+      });
+    } catch (error: any) {
+      if (error?.code !== 50007) {
+        this.logger.error(
+          `Failed to send token-expired DM to ${userId}: ${error?.message || error}`,
+        );
+        return false;
+      }
+      delivered = false; // DMs closed: swallow, but do not ask again
+    }
+    account.tokenExpiredNotified = true;
+    patchAccount(this.client.db, userId, accountId(account), {
+      tokenExpiredNotified: true,
+    });
+    return delivered;
+  }
+
+  public async processUser(
+    userId: string,
+    config: AutoDailyConfig,
+    hour?: number,
+  ) {
+    const db = this.client.db;
+    try {
+      const nowMs = Date.now();
+      const today = taipeiDate(nowMs);
+      const hr = hour ?? taipeiHour(nowMs);
+      // One run per user per hour, even if two primaries overlap (graceful recluster can
+      // briefly run two cluster-0s). Whether today is finished is tracked separately in
+      // autoDailyState, so a failed hour does not use up the day.
+      if (!db.claimSlot(`${userId}.autoDailyHour`, `${today}T${hr}`)) {
         this.logger.info(
-          `Skipping user ${userId}: already processed for ${today}.`,
+          `Skipping user ${userId}: already processed for ${today} hour ${hr}.`,
         );
         return;
       }
 
-      const accounts = await getAccounts(this.client.db, userId);
-      if (!accounts || accounts.length === 0) return;
+      const stateKey = `autoDailyState.${userId}`;
+      let prev = await db.get<AutoDailyState>(stateKey);
+      if (!prev || prev.date !== today) {
+        prev = null;
+        // Rows from before autoDailyState existed: the old code marked the day here.
+        if ((await db.get(`${userId}.lastAutoDaily`)) === today) {
+          await db.set(stateKey, { date: today, status: "done", attempts: 0 });
+          return;
+        }
+      } else if (prev.status === "done") {
+        return;
+      }
 
-      let successCount = 0;
-      let alreadySignedCount = 0;
-      let failCount = 0;
+      // Write the attempt first: a crash mid-run still counts, so a bad user cannot loop.
+      const attempts = (prev?.attempts ?? 0) + 1;
+      await db.set(stateKey, {
+        date: today,
+        status: "retry",
+        attempts,
+        nextAttemptAt: nextHourStart(nowMs),
+        ...(prev?.lastError ? { lastError: prev.lastError } : {}),
+      } satisfies AutoDailyState);
+
+      const accounts = await getAccounts(db, userId);
+      if (!accounts || accounts.length === 0) {
+        await db.set(stateKey, { date: today, status: "done", attempts });
+        return;
+      }
+
+      const summary: RunSummary = {
+        signed: 0,
+        already: 0,
+        error: 0,
+        tokenExpiredPending: 0,
+        tokenExpiredConfirmed: 0,
+      };
+      let lastError: string | undefined;
       this.logger.info(`Starting auto-daily processing for user ${userId}`);
-      const results: {
-        gameId?: number;
-        roleName: string;
-        roleMeta: string;
-        rewardName: string;
-        rewardIcon: string;
-        firstRewardName?: string;
-        firstRewardIcon?: string;
-        totalDays: number;
-        calendarTotalDays: number;
-        todayClaimedNow: boolean;
-        checkedDaysThisMonth?: number;
-        missedDaysThisMonth?: number;
-        yesterdayReward?: {
-          name: string;
-          icon?: string;
-          resourceId?: string;
-          done?: boolean;
-        };
-        todayReward?: {
-          name: string;
-          icon?: string;
-          resourceId?: string;
-          done?: boolean;
-        };
-        nextRewards?: {
-          name: string;
-          icon?: string;
-          resourceId?: string;
-          done?: boolean;
-        }[];
-        status: string;
-        isError?: boolean;
-        accountIdx?: number;
-      }[] = [];
+      const results: AutoDailyResult[] = [];
+      const confirmedExpired: any[] = [];
 
       const processedRoles = new Set<string>();
 
-      const userLang = (await this.client.db.get(`${userId}.locale`)) || "tw";
+      const userLang = (await db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
+
+      const markExpired = (account: any, wasInvalid: boolean) => {
+        // Seen dead on entry and still dead: confirmed. A first sighting could be an SKPort
+        // outage (all recovery steps fail on network errors too), so confirm next hour.
+        if (wasInvalid) {
+          summary.tokenExpiredConfirmed++;
+          if (!confirmedExpired.includes(account)) confirmedExpired.push(account);
+        } else {
+          summary.tokenExpiredPending++;
+        }
+      };
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
+        const wasInvalid = !!account.invalid;
 
         try {
           // Always attempt account validation/recovery, even if previously marked invalid.
           // ensureAccountBinding will try all 3 refresh steps and clear the invalid flag if successful.
-          await ensureAccountBinding(account, userId, this.client.db, tr.lang);
+          await ensureAccountBinding(account, userId, db, tr.lang);
 
-          if (account.invalid) {
-            // Still invalid after recovery attempt — token is truly expired
+          const expiredResult = () => {
             this.logger.warn(
-              `Skipping unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
+              `Unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
             );
             results.push({
               ...this.makeErrorResult(
                 account.info?.nickname || "Unknown",
                 tr("TokenExpired"),
               ),
+              kind: "token_expired",
               accountIdx: i,
             });
-            failCount++;
+            markExpired(account, wasInvalid);
+          };
+
+          if (account.invalid) {
+            // Still invalid after recovery attempt — token is truly expired
+            expiredResult();
             continue;
           }
 
           const gameScope = this.normalizeGameScope(config.game_scope, "both");
 
           let liveBindings: any = null;
-          let roles = this.normalizeAttendanceBindings(
+          let roles = normalizeBindingRoles(
             account.roles,
-            gameScope,
+            gameIdsForScope(gameScope),
           );
           try {
             liveBindings = await withAutoRefresh(
@@ -443,9 +499,9 @@ export class AutoDailyService {
                 ),
               tr.lang,
             );
-            const liveRoles = this.normalizeAttendanceBindings(
+            const liveRoles = normalizeBindingRoles(
               liveBindings,
-              gameScope,
+              gameIdsForScope(gameScope),
             );
             if (liveRoles.length > 0) {
               roles = liveRoles;
@@ -457,39 +513,30 @@ export class AutoDailyService {
           // Re-check invalid flag: the getGamePlayerBinding onStale may have
           // exhausted all refresh steps and marked the account invalid.
           if (account.invalid) {
-            results.push({
-              ...this.makeErrorResult(
-                account.info?.nickname || "Unknown",
-                tr("TokenExpired"),
-              ),
-              accountIdx: i,
-            });
-            failCount++;
+            expiredResult();
             continue;
           }
 
           // Fallback: if the configured scope filtered out all roles (e.g. user has
           // only Endfield chars but scope was saved as "arknights"), retry with "both".
-          if ((!roles || roles.length === 0) && gameScope !== "both") {
-            const fallbackRoles = this.normalizeAttendanceBindings(
-              account.roles,
-              "both",
-            );
-            const fallbackLive = this.normalizeAttendanceBindings(
-              liveBindings,
-              "both",
-            );
-            roles = fallbackLive.length > 0 ? fallbackLive : fallbackRoles;
+          if (roles.length === 0 && gameScope !== "both") {
+            const bothIds = gameIdsForScope("both");
+            const fallbackLive = normalizeBindingRoles(liveBindings, bothIds);
+            roles =
+              fallbackLive.length > 0
+                ? fallbackLive
+                : normalizeBindingRoles(account.roles, bothIds);
           }
 
-          if (!roles || roles.length === 0) {
-            // Check if this account genuinely has no game bindings at all.
-            // If so, skip silently rather than reporting an error.
+          if (roles.length === 0) {
+            // No supported game binding at all: nothing to sign, skip silently.
             const hasAnySupportedBinding =
-              Array.isArray(account.roles) &&
-              account.roles.some((r: any) =>
-                AUTO_DAILY_SUPPORTED_GAME_IDS.has(Number(r?.gameId)),
-              );
+              normalizeBindingRoles(account.roles, gameIdsForScope("both"))
+                .length > 0 ||
+              (Array.isArray(account.roles) &&
+                account.roles.some((r: any) =>
+                  [1, 3].includes(Number(r?.gameId)),
+                ));
             if (!hasAnySupportedBinding) {
               this.logger.info(
                 `Skipping account ${account.info?.nickname} (${account.info?.id}) — no game bindings.`,
@@ -501,97 +548,121 @@ export class AutoDailyService {
                 account.info?.nickname || "Unknown",
                 tr("Error") || "No roles found",
               ),
+              kind: "error",
               accountIdx: i,
             });
-            failCount++;
+            summary.error++;
+            lastError = "no roles found";
             continue;
           }
 
-          for (const binding of roles) {
-            for (const role of binding.roles) {
-              const gameId = binding.gameId || 3;
-              const gameRoleStr = formatSkGameRole(
-                gameId,
-                role.roleId,
-                role.serverId,
+          for (const normalized of roles) {
+            const role = toAttendanceRole(normalized);
+            const gameId = normalized.gameId;
+            const gameRoleStr = formatSkGameRole(
+              gameId,
+              role.roleId,
+              role.serverId,
+            );
+
+            if (processedRoles.has(gameRoleStr)) continue;
+            processedRoles.add(gameRoleStr);
+
+            try {
+              const res: any = await withAutoRefresh(
+                this.client,
+                userId,
+                account,
+                (c: string, s: string, opt: any) =>
+                  processRoleAttendance(
+                    role,
+                    gameId,
+                    account.cookie,
+                    tr.lang,
+                    c,
+                    s,
+                    true,
+                    tr,
+                    opt,
+                  ),
+                tr.lang,
               );
 
-              if (processedRoles.has(gameRoleStr)) continue;
-              processedRoles.add(gameRoleStr);
+              if (res) {
+                const kind = classifyAttendance(res);
+                const isArknights = Number(gameId) === 1;
+                const roleName = `${res.nickname ?? role.nickname}`;
+                const roleMeta = isArknights
+                  ? `${role.serverName || "-"}`
+                  : `Lv.${res.level ?? role.level} - ${role.serverName || "-"}`;
 
-              try {
-                const res: any = await withAutoRefresh(
-                  this.client,
-                  userId,
-                  account,
-                  (c: string, s: string, opt: any) =>
-                    processRoleAttendance(
-                      role,
-                      gameId,
-                      account.cookie,
-                      tr.lang,
-                      c,
-                      s,
-                      true,
-                      tr,
-                      opt,
-                    ),
-                  tr.lang,
-                );
-
-                if (res) {
-                  const isArknights = Number(gameId) === 1;
-                  const roleName = `${res.nickname}`;
-                  const roleMeta = isArknights
-                    ? `${role.serverName || "-"}`
-                    : `Lv.${res.level} - ${role.serverName || "-"}`;
-
-                  if (res.signedNow) successCount++;
-                  else if (res.hasToday) alreadySignedCount++;
-                  else if (res.error) failCount++;
-
-                  // Support multi-line rewards from Python logic
-                  const displayedReward = res.rewardName || tr("None");
-
-                  results.push({
-                    gameId,
-                    roleName,
-                    roleMeta,
-                    rewardName: displayedReward,
-                    rewardIcon: res.rewardIcon,
-                    firstRewardName: res.firstRewardName,
-                    totalDays: res.totalDays,
-                    calendarTotalDays: res.calendarTotalDays || 0,
-                    todayClaimedNow: !!res.signedNow,
-                    checkedDaysThisMonth: res.checkedDaysThisMonth,
-                    missedDaysThisMonth: res.missedDaysThisMonth,
-                    yesterdayReward: res.yesterdayReward,
-                    todayReward: res.todayReward,
-                    nextRewards: res.nextRewards,
-                    status: res.signedNow
-                      ? tr("daily_Success")
-                      : tr("daily_StatusAlready"),
-                    isError: !!res.error && !res.signedNow && !res.hasToday,
-                    accountIdx: i,
-                  });
-
-                  this.logger.info(
-                    `User ${userId} - Role ${res.nickname} (${res.uid}): ${res.signedNow ? "SUCCESS" : res.hasToday ? "ALREADY SIGNED" : "ERROR"}` +
-                      (res.signedNow ? ` (Reward: ${displayedReward})` : ""),
-                  );
+                let status: string;
+                if (kind === "signed") {
+                  summary.signed++;
+                  status = tr("daily_Success");
+                } else if (kind === "already") {
+                  summary.already++;
+                  status = tr("daily_StatusAlready");
+                } else if (kind === "token_expired") {
+                  markExpired(account, wasInvalid);
+                  status = tr("TokenExpired");
+                } else {
+                  summary.error++;
+                  // The real reason, never "already signed".
+                  status = String(res.message || tr("Error"));
+                  lastError = status.slice(0, 200);
                 }
-              } catch (roleError) {
-                this.logger.error(
-                  `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
-                );
+
+                // Support multi-line rewards from Python logic
+                const displayedReward = res.rewardName || tr("None");
+
                 results.push({
-                  ...this.makeErrorResult(
-                    role.nickname || "Unknown",
-                    tr("Error"),
-                  ),
+                  gameId,
+                  roleName,
+                  roleMeta,
+                  rewardName: displayedReward,
+                  rewardIcon: res.rewardIcon,
+                  firstRewardName: res.firstRewardName,
+                  totalDays: res.totalDays,
+                  calendarTotalDays: res.calendarTotalDays || 0,
+                  todayClaimedNow: !!res.signedNow,
+                  checkedDaysThisMonth: res.checkedDaysThisMonth,
+                  missedDaysThisMonth: res.missedDaysThisMonth,
+                  yesterdayReward: res.yesterdayReward,
+                  todayReward: res.todayReward,
+                  nextRewards: res.nextRewards,
+                  status,
+                  kind,
+                  isError: kind === "error" || kind === "token_expired",
                   accountIdx: i,
                 });
-                failCount++;
+
+                this.logger.info(
+                  `User ${userId} - Role ${res.nickname} (${res.uid}): ${kind.toUpperCase()}` +
+                    (res.signedNow ? ` (Reward: ${displayedReward})` : ""),
+                );
+              }
+            } catch (roleError) {
+              this.logger.error(
+                `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
+              );
+              const dead = isTokenExpiredError(roleError);
+              results.push({
+                ...this.makeErrorResult(
+                  role.nickname || "Unknown",
+                  dead ? tr("TokenExpired") : tr("Error"),
+                ),
+                kind: dead ? "token_expired" : "error",
+                accountIdx: i,
+              });
+              if (dead) {
+                markExpired(account, wasInvalid);
+              } else {
+                summary.error++;
+                lastError =
+                  roleError instanceof Error
+                    ? roleError.message.slice(0, 200)
+                    : String(roleError).slice(0, 200);
               }
             }
           }
@@ -604,18 +675,50 @@ export class AutoDailyService {
               account.info?.nickname || "Unknown",
               tr("Error"),
             ),
+            kind: "error",
             accountIdx: i,
           });
-          failCount++;
+          summary.error++;
+          lastError =
+            accError instanceof Error
+              ? accError.message.slice(0, 200)
+              : String(accError).slice(0, 200);
         }
       }
 
       this.logger.info(
-        `Finished auto-daily for user ${userId}. Result: ${successCount} success, ${alreadySignedCount} already signed, ${failCount} failed.`,
+        `Finished auto-daily for user ${userId} (attempt ${attempts}). Result: ${summary.signed} success, ${summary.already} already signed, ${summary.error} failed, ${summary.tokenExpiredPending + summary.tokenExpiredConfirmed} token expired.`,
       );
 
+      // Today is marked done only after every role signed or was already signed.
+      const finalState = nextAutoDailyState(
+        today,
+        Date.now(),
+        attempts,
+        summary,
+        lastError,
+      );
+      await db.set(stateKey, finalState);
+      if (finalState.status === "done") {
+        // Kept for rollback: the previous version reads this key.
+        await db.set(`${userId}.lastAutoDaily`, today);
+      }
+      const terminal = finalState.status !== "retry";
+
+      // Dead tokens: tell the user once per expiry, whatever `notify` says.
+      const toldAboutExpiry = new Set<any>();
+      for (const account of confirmedExpired) {
+        if (account.tokenExpiredNotified) {
+          toldAboutExpiry.add(account);
+          continue;
+        }
+        if (await this.notifyTokenExpired(userId, account, tr))
+          toldAboutExpiry.add(account);
+      }
+
       if (config.notify && results.length > 0) {
-        // Group non-error results by account, preserving order
+        // Group non-error results by account, preserving order. Retries stay quiet about
+        // roles already reported and about failures that will be retried.
         const accountGroups = new Map<
           number,
           { res: (typeof results)[0]; idx: number }[]
@@ -625,10 +728,17 @@ export class AutoDailyService {
         for (const [idx, res] of results.entries()) {
           const accountIdx = res.accountIdx ?? 0;
           if (!res.isError) {
+            if (attempts > 1 && res.kind === "already") continue;
             if (!accountGroups.has(accountIdx))
               accountGroups.set(accountIdx, []);
             accountGroups.get(accountIdx)!.push({ res, idx });
           } else {
+            if (attempts > 1 && !terminal) continue;
+            if (
+              res.kind === "token_expired" &&
+              toldAboutExpiry.has(accounts[accountIdx])
+            )
+              continue;
             errorLines.push(`- ${res.roleName}: ${res.status}`);
           }
         }
@@ -712,8 +822,16 @@ export class AutoDailyService {
                 config.mention !== false ? `<@${userId}>` : undefined,
                 true,
               );
-        for (const payload of messages)
-          await this.sendNotification(userId, config, payload);
+        try {
+          for (const payload of messages)
+            await this.sendNotification(userId, config, payload);
+        } catch (e) {
+          // The sign-in itself is done and recorded; a closed DM must not undo that.
+          this.logger.error(
+            "Failed to send card notification: " +
+              (e instanceof Error ? e.message : e),
+          );
+        }
 
         if (errorLines.length > 0) {
           const mentionPrefix =

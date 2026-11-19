@@ -4,6 +4,7 @@ import {
   getAttendanceList,
 } from "./skportApi";
 import { Logger } from "./Logger";
+import { isTokenExpiredError } from "../services/autoDailyPlan";
 
 const logger = new Logger("AttendanceUtils");
 
@@ -57,10 +58,11 @@ export async function processRoleAttendance(
         nickname: role.nickname,
         level: role.level,
         error: true,
+        errorKind: res?.code === 10000 ? "token_expired" : "error",
         message:
           res?.code === 10000
             ? tr("TokenExpired")
-            : tr("Error") || "Status request failed",
+            : (res as any)?.message || tr("Error") || "Status request failed",
       };
     }
 
@@ -292,7 +294,14 @@ export async function processRoleAttendance(
       missedDaysThisMonth,
       firstRewardName,
       error: !status.hasToday && !signedNow && isClaim,
-      message: claimResult?.message,
+      errorKind:
+        claimResult?.code === 10000
+          ? ("token_expired" as const)
+          : ("error" as const),
+      message:
+        claimResult?.code === 10000
+          ? tr("TokenExpired")
+          : claimResult?.message,
     };
   } catch (error: any) {
     logger.error(`Error for role ${role.roleId}: ${error.message}`);
@@ -301,6 +310,9 @@ export async function processRoleAttendance(
       nickname: role.nickname,
       level: role.level,
       error: true,
+      errorKind: isTokenExpiredError(error)
+        ? ("token_expired" as const)
+        : ("error" as const),
       message: error.message,
     };
   }

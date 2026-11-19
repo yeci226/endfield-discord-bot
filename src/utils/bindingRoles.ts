@@ -120,6 +120,19 @@ export function normalizeBindingRoles(
   return out;
 }
 
+/**
+ * The role object attendance / card calls expect. For stored roles this equals the stored
+ * object (same roleId / serverId / nickname); fallbacks only fill in missing fields.
+ */
+export function toAttendanceRole(role: NormalizedRole): any {
+  return {
+    ...role.raw,
+    roleId: role.roleId,
+    serverId: role.serverId,
+    nickname: role.nickname,
+  };
+}
+
 export function getPrimaryBindingRoleForGame(
   bindings: any[] | null | undefined,
   gameId: number,

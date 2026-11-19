@@ -437,6 +437,11 @@ const langs: Record<string, any> = {
   // --- L2 (web & credentials) ---
 
   // --- L3 (daily & account) ---
+  autoDaily_TokenExpiredDM:
+    "⚠️ **{name} 的自動簽到已停止**\n這個帳號的 SKPort 登入已過期且無法自動恢復，請使用 `/login` 重新登入。",
+  indieHard_NoEndfieldRole:
+    "❌ 這個帳號沒有綁定終末地角色，僅綁定明日方舟的帳號無法使用此指令。",
+  indieHard_AccountNotFound: "❌ 找不到指定帳號，請重新選擇。",
 
   // --- L4 (news, reminders, core) ---
 

@@ -457,6 +457,12 @@ const langs: Record<string, any> = {
   // --- L2 (web & credentials) ---
 
   // --- L3 (daily & account) ---
+  autoDaily_TokenExpiredDM:
+    "⚠️ **Auto sign-in stopped for {name}**\nYour SKPort login for this account has expired and could not be restored. Please use `/login` to sign in again.",
+  indieHard_NoEndfieldRole:
+    "❌ No Endfield role is bound to this account. Arknights-only accounts cannot use this command.",
+  indieHard_AccountNotFound:
+    "❌ The selected account was not found. Please choose again.",
 
   // --- L4 (news, reminders, core) ---
 
