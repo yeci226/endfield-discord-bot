@@ -1,11 +1,92 @@
 import { SKRSContext2D } from "@napi-rs/canvas";
 import moment from "moment";
+import { getGachaPityGroupId } from "../../../utils/gachaPoolUtils";
 import {
   GachaStatsBaseState,
   GachaSummaryResult,
+  GachaType,
   getWinRateCounts,
   roundRect,
 } from "./shared";
+
+export interface CategoryTotals {
+  nonFreeTotal: number;
+  freeTotal: number;
+  sixCount: number;
+  sixPullCount: number;
+  featured: number;
+  winRateTotal: number;
+}
+
+/** Pity-group ids of the Joint pools in `pools` (they are their own group, keyed by pool id). */
+function getJointGroupIds(pools: any[] | undefined): Set<string> {
+  const ids = new Set<string>();
+  for (const p of pools || []) {
+    const poolType = String(p?.poolType || p?.type || "");
+    const poolId = String(p?.poolId || p?.id || "");
+    if (poolType.includes("Joint") || poolId.startsWith("joint_")) {
+      ids.add(getGachaPityGroupId(p));
+    }
+  }
+  return ids;
+}
+
+/**
+ * Totals shown on the overview summary cards for one category. Joint pools are
+ * listed in (and paged with) the limited-character overview, so their pulls
+ * count in its totals; they stay out of the up/off-rate figures because no
+ * featured verdict is made for them.
+ */
+export function sumCategoryTotals(
+  type: GachaType,
+  groupStats: Record<string, any>,
+  pools?: any[],
+): CategoryTotals {
+  const out: CategoryTotals = {
+    nonFreeTotal: 0,
+    freeTotal: 0,
+    sixCount: 0,
+    sixPullCount: 0,
+    featured: 0,
+    winRateTotal: 0,
+  };
+  const jointIds = type === "limited_char" ? getJointGroupIds(pools) : null;
+  for (const [gid, s] of Object.entries(groupStats || {})) {
+    const sObj = s as any;
+    const isJoint =
+      !!jointIds && (jointIds.has(gid) || gid.startsWith("joint_"));
+    let isMatch = false;
+    if (type === "weapon") {
+      isMatch = true;
+    } else if (type === "limited_char") {
+      isMatch = gid === "SpecialShared" || isJoint;
+    } else if (type === "rerun_char") {
+      isMatch = gid === "RerunShared";
+    } else if (type === "standard_char") {
+      isMatch = gid.startsWith("Standard");
+    } else if (type === "beginner_char") {
+      isMatch = gid === "Beginner";
+    }
+    if (!isMatch) continue;
+
+    out.nonFreeTotal += sObj.nonFreeTotal || 0;
+    out.freeTotal += sObj.freeTotal || 0;
+    out.sixCount += sObj.sixStarCount || 0;
+    out.sixPullCount += sObj.sixStarPullCount || 0;
+
+    // Win rate in overview (Limited, Rerun or Weapon); never from Joint pools
+    if (
+      !isJoint &&
+      (type === "limited_char" || type === "rerun_char" || type === "weapon") &&
+      sObj.poolFeaturedSixMap
+    ) {
+      const counts = getWinRateCounts(sObj);
+      out.featured += counts.featured;
+      out.winRateTotal += counts.total;
+    }
+  }
+  return out;
+}
 
 /** Header, branding and the three summary cards. */
 export function drawSummary(
@@ -84,53 +165,21 @@ export function drawSummary(
   // Filter total pulls by current pool group
   // For Character limited, we should only sum history from SpecialShared group
   const groupStats = stats[baseType].summary;
-  // Aggregated Category Stats
-  let categoryNonFreeTotal = 0;
-  let categoryFreeTotal = 0;
-  let categorySixCount = 0;
-  let categorySixPullCount = 0; // Only non-free
-  let featuredSixCount = 0;
-  let winRateSixCount = 0; // All 6★ incl. free, same basis as featuredSixCount
-
   // Specific pool values for header
   let specificPoolTotal = 0;
   let specificPoolFree = 0;
 
   // Overview: Sum relevant groups in category
-  for (const [gid, s] of Object.entries(groupStats)) {
-    const sObj = s as any;
-    let isMatch = false;
-    if (type === "weapon") {
-      isMatch = true;
-    } else if (type === "limited_char") {
-      isMatch = gid === "SpecialShared";
-    } else if (type === "rerun_char") {
-      isMatch = gid === "RerunShared";
-    } else if (type === "standard_char") {
-      isMatch = gid.startsWith("Standard");
-    } else if (type === "beginner_char") {
-      isMatch = gid === "Beginner";
-    }
-
-    if (isMatch) {
-      categoryNonFreeTotal += sObj.nonFreeTotal || 0;
-      categoryFreeTotal += sObj.freeTotal || 0;
-      categorySixCount += sObj.sixStarCount || 0;
-      categorySixPullCount += sObj.sixStarPullCount || 0;
-
-      // For Win Rate in Overview (Limited or Weapon)
-      if (
-        (type === "limited_char" ||
-          type === "rerun_char" ||
-          type === "weapon") &&
-        sObj.poolFeaturedSixMap
-      ) {
-        const counts = getWinRateCounts(sObj);
-        featuredSixCount += counts.featured;
-        winRateSixCount += counts.total;
-      }
-    }
-  }
+  const totals = sumCategoryTotals(
+    type,
+    groupStats,
+    (type === "weapon" ? stats.weapon.pools : stats.char.pools) as any[],
+  );
+  const categoryNonFreeTotal = totals.nonFreeTotal;
+  const categoryFreeTotal = totals.freeTotal;
+  const categorySixPullCount = totals.sixPullCount; // Only non-free
+  const featuredSixCount = totals.featured;
+  const winRateSixCount = totals.winRateTotal; // All 6★ incl. free, same basis as featuredSixCount
 
   let poolSixStarPullCount = 0;
   let poolFeaturedSixCount = 0;
