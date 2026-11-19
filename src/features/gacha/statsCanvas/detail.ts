@@ -179,11 +179,15 @@ export async function drawDetail(
   }
   ctx.textBaseline = "alphabetic";
 
-  // "總計"
+  const totalPrefix = tr("gacha_log_canvas_Total_Prefix").trim();
+  const freeLabel = tr("gacha_log_canvas_FreeRecruit");
+  const pullsSuffix = tr("gacha_log_canvas_Pulls_Suffix").trim();
+
+  // "Total"
   ctx.fillStyle = "#888";
   ctx.font = "28px NotoSans";
-  ctx.fillText("總計", startX, headerMetaY);
-  startX += ctx.measureText("總計").width + 8;
+  ctx.fillText(totalPrefix, startX, headerMetaY);
+  startX += ctx.measureText(totalPrefix).width + 8;
 
   // Non-free count
   ctx.fillStyle = "#444";
@@ -204,17 +208,17 @@ export async function drawDetail(
     ctx.fillText(String(specificPoolFree), startX, headerMetaY);
     startX += ctx.measureText(String(specificPoolFree)).width + 8;
 
-    // "加急"
+    // "Expedited"
     ctx.fillStyle = "#ffcc00";
     ctx.font = "28px NotoSans";
-    ctx.fillText("加急", startX, headerMetaY);
-    startX += ctx.measureText("加急").width + 8;
+    ctx.fillText(freeLabel, startX, headerMetaY);
+    startX += ctx.measureText(freeLabel).width + 8;
   }
 
-  // "抽"
+  // "pulls"
   ctx.fillStyle = "#888";
   ctx.font = "28px NotoSans";
-  ctx.fillText("抽", startX, headerMetaY);
+  ctx.fillText(pullsSuffix, startX, headerMetaY);
 
   currentY = headerMetaY + 70;
 

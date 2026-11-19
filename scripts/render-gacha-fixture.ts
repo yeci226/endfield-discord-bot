@@ -446,6 +446,7 @@ export async function renderGachaFixture(
   await stat("detail_weapon", "weapon", "weaponbox_1_0_1", 0);
   await stat("detail_standard", "standard_char", "c_standard_1", 0);
   await stat("overview_limited_en", "limited_char", undefined, 0, trEn);
+  await stat("detail_special_page1_en", "limited_char", "c_special_1_0_1", 0, trEn);
 
   const entries = buildLeaderboardEntries();
   const lbPulls = await drawGachaLeaderboard(
