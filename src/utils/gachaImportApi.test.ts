@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import axios from "axios";
 
-process.env.GACHA_STRICT_IMPORT_HOSTS = "1";
-
 import {
   GachaImportUrlError,
   fetchRawGachaFromUrl,

@@ -66,7 +66,7 @@ async function main() {
     }) as typeof axios.get;
     const imported = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=test&server_id=2",
+      "https://ef-webview.gryphline.com/?token=test&server_id=2",
       undefined,
       "test",
     );
@@ -89,7 +89,7 @@ async function main() {
     assert.equal(leaderboard.stats.rerun_chr_yvonne.total, 30);
     const importedAgain = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=test&server_id=2",
+      "https://ef-webview.gryphline.com/?token=test&server_id=2",
       undefined,
       "test",
     );

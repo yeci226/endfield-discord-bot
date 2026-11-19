@@ -55,13 +55,8 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 /**
  * Decides, without any I/O, what an import input is allowed to be:
  * a bare token, or a URL on one of the two official hosts.
- * `allowAnyHost` only exists so unit tests of the importers can use fake hosts
- * with a mocked HTTP layer; production never sets it.
  */
-export function validateGachaImportUrl(
-  input: string,
-  opts: { allowAnyHost?: boolean } = {},
-): GachaImportTarget {
+export function validateGachaImportUrl(input: string): GachaImportTarget {
   const text = String(input ?? "").trim();
   if (!text) return { ok: false, reason: "empty" };
 
@@ -88,7 +83,7 @@ export function validateGachaImportUrl(
   if (url.protocol !== "https:") return { ok: false, reason: "not_https" };
   if (url.username || url.password) return { ok: false, reason: "userinfo" };
   if (url.port) return { ok: false, reason: "port" };
-  if (!opts.allowAnyHost && !GACHA_IMPORT_HOSTS.includes(url.hostname)) {
+  if (!GACHA_IMPORT_HOSTS.includes(url.hostname)) {
     return { ok: false, reason: "host_not_allowed" };
   }
 
@@ -119,18 +114,6 @@ export class GachaImportUrlError extends Error {
     this.name = "GachaImportUrlError";
     this.reason = reason;
   }
-}
-
-/**
- * Unit tests of the importers run against mocked HTTP with fake hosts
- * (https://example.invalid/...); NODE_ENV=test relaxes only the host check,
- * unless GACHA_STRICT_IMPORT_HOSTS=1 turns it back on.
- */
-function importHostCheckRelaxed(): boolean {
-  return (
-    process.env.NODE_ENV === "test" &&
-    process.env.GACHA_STRICT_IMPORT_HOSTS !== "1"
-  );
 }
 
 export type IncompleteFetch = {
@@ -235,9 +218,7 @@ export async function fetchRawGachaFromUrl(
   locale?: string,
   options?: { stopAt?: GachaStopAt },
 ): Promise<RawFetchedGacha> {
-  const target = validateGachaImportUrl(urlStr, {
-    allowAnyHost: importHostCheckRelaxed(),
-  });
+  const target = validateGachaImportUrl(urlStr);
   if (!target.ok) throw new GachaImportUrlError(target.reason);
 
   const stopAt = options?.stopAt;

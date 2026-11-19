@@ -177,7 +177,7 @@ async function testImportWritesLeaderboardAndKeepsMarkers() {
     stubApi(() => [rec(30), rec(25), rec(20, { rarity: 6 })]);
     const first = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=t&server_id=2",
+      "https://ef-webview.gryphline.com/?token=t&server_id=2",
       undefined,
       "test",
       undefined,
@@ -205,7 +205,7 @@ async function testImportWritesLeaderboardAndKeepsMarkers() {
     stubApi(() => [rec(35), rec(30), rec(25), rec(20, { rarity: 6 })]);
     const second = await fetchAndMergeGachaLog(
       db,
-      "https://example.invalid/?token=t&server_id=2",
+      "https://ef-webview.gryphline.com/?token=t&server_id=2",
       undefined,
       "test",
     );
@@ -234,11 +234,11 @@ async function testGuestAndRawKeys() {
   try {
     stubApi(() => [rec(3), rec(2), rec(1)]);
     // Guest key: log is written, no leaderboard row.
-    await fetchAndMergeGachaLog(db, "https://example.invalid/?token=t&server_id=2", undefined, "EF_GUEST_42_abc");
+    await fetchAndMergeGachaLog(db, "https://ef-webview.gryphline.com/?token=t&server_id=2", undefined, "EF_GUEST_42_abc");
     assert.ok(await db.get("GACHA_LOG_EF_GUEST_42_abc"));
     assert.equal(await db.get(lbKey("EF_GUEST_42_abc")), null);
     // A raw (prefix-less) uid key still works.
-    await fetchAndMergeGachaLog(db, "https://example.invalid/?token=t&server_id=2", undefined, "123456");
+    await fetchAndMergeGachaLog(db, "https://ef-webview.gryphline.com/?token=t&server_id=2", undefined, "123456");
     assert.ok(await db.get("GACHA_LOG_123456"));
     assert.ok(await db.get(lbKey("123456")));
   } finally {
@@ -349,7 +349,7 @@ async function testConcurrentLoad() {
         commitFetchedGachaLog(b, "test", raw([rec(150), rec(100)]), {});
       },
     );
-    await fetchAndMergeGachaLog(a, "https://example.invalid/?token=t&server_id=2", undefined, "test");
+    await fetchAndMergeGachaLog(a, "https://ef-webview.gryphline.com/?token=t&server_id=2", undefined, "test");
     const log = (await b.get<GachaLogData>("GACHA_LOG_test"))!;
     assert.deepEqual(
       log.characterList.map((r) => r.seqId),

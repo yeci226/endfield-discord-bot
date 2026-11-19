@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import axios from "axios";
 
 process.env.ENCRYPTION_KEY = "k".repeat(40);
-process.env.GACHA_STRICT_IMPORT_HOSTS = "1";
-
 import { CustomDatabase } from "./Database";
 import {
   findLinkedAccount,
