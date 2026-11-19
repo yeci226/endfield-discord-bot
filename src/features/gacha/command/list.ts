@@ -14,6 +14,46 @@ import {
 } from "../../../utils/accountUtils";
 import { GachaContext } from "./context";
 
+/** One banner: title + both end times, then the picture gallery. */
+function addPoolBlock(
+  container: ContainerBuilder,
+  pool: { name: string; poolEndAtTs: number | string },
+  items: Array<{ pic?: string }> | undefined,
+  tr: any,
+) {
+  // Asia (UTC+8) - base timestamp from API
+  const asiaEndTs = Number(pool.poolEndAtTs);
+  // Americas/Europe - roughly 13 hours after Asia if local time is same
+  const globalEndTs = asiaEndTs + 13 * 3600;
+
+  const header =
+    `## ${pool.name}
+` +
+    `${tr("gacha_Global_End", { globalEndTs: `<t:${globalEndTs}:f>`, globalEndTsRelative: `<t:${globalEndTs}:R>` })}
+` +
+    `${tr("gacha_Asia_End", { asiaEndTs: `<t:${asiaEndTs}:f>`, asiaEndTsRelative: `<t:${asiaEndTs}:R>` })}`;
+
+  container.addSeparatorComponents(
+    new SeparatorBuilder().setDivider(true).setSpacing(2),
+  );
+  container.addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(header),
+  );
+
+  const gallery = new MediaGalleryBuilder();
+  // A media gallery holds at most 10 items.
+  for (const item of (items ?? []).slice(0, 10)) {
+    if (item.pic) {
+      gallery.addItems(
+        new MediaGalleryItemBuilder({ media: { url: item.pic } }),
+      );
+    }
+  }
+  if (gallery.items.length > 0) {
+    container.addMediaGalleryComponents(gallery);
+  }
+}
+
 export async function handleGachaList(
   ctx: GachaContext,
   interaction: ChatInputCommandInteraction,
@@ -70,8 +110,6 @@ export async function handleGachaList(
       new TextDisplayBuilder().setContent(tr("gacha_Title")),
     );
 
-    let hasData = false;
-
     // --- Character Pools ---
     if (
       charPoolData &&
@@ -79,46 +117,34 @@ export async function handleGachaList(
       charPoolData.data.list.length > 0
     ) {
       for (const charPool of charPoolData.data.list) {
-        // Asia (UTC+8) - base timestamp from API
-        const asiaEndTs = Number(charPool.poolEndAtTs);
-        // Americas/Europe - roughly 13 hours after Asia if local time is same
-        const globalEndTs = asiaEndTs + 13 * 3600;
-
-        const charPoolHeader =
-          `## ${charPool.name}\n` +
-          `${tr("gacha_Global_End", { globalEndTs: `<t:${globalEndTs}:f>`, globalEndTsRelative: `<t:${globalEndTs}:R>` })}\n` +
-          `${tr("gacha_Asia_End", { asiaEndTs: `<t:${asiaEndTs}:f>`, asiaEndTsRelative: `<t:${asiaEndTs}:R>` })}`;
-
-        container.addSeparatorComponents(
-          new SeparatorBuilder().setDivider(true).setSpacing(2),
-        );
-        container.addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(charPoolHeader),
-        );
-
-        const charGallery = new MediaGalleryBuilder();
-        charPool.chars.forEach((c: any) => {
-          if (c.pic) {
-            charGallery.addItems(
-              new MediaGalleryItemBuilder({ media: { url: c.pic } }),
-            );
-          }
-        });
-        if (charGallery.items.length > 0) {
-          container.addMediaGalleryComponents(charGallery);
-        }
-        hasData = true;
+        addPoolBlock(container, charPool, charPool.chars, tr);
       }
     } else if (charPoolData?.code === 10000) {
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(tr("TokenExpired")),
       );
-      hasData = true;
     } else {
       container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(tr("gacha_CharEmpty")),
       );
-      hasData = true; // Still show the message
+    }
+
+    // --- Weapon Pools (fetched above; same layout as the character banners) ---
+    // An expired token already said so in the character block.
+    if (charPoolData?.code !== 10000) {
+      if (
+        weaponPoolData &&
+        weaponPoolData.code === 0 &&
+        weaponPoolData.data.list.length > 0
+      ) {
+        for (const weaponPool of weaponPoolData.data.list) {
+          addPoolBlock(container, weaponPool, weaponPool.weapons, tr);
+        }
+      } else {
+        container.addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(tr("gacha_WeaponEmpty")),
+        );
+      }
     }
 
     await interaction.editReply({
