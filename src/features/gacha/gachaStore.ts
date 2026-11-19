@@ -5,6 +5,9 @@ import { mapLocaleToLang, refreshAccountToken } from "../../utils/skportApi";
 import {
   getEndfieldU8Token,
   fetchRawGachaFromUrl,
+  GachaStopAt,
+  HTTP_OPTIONS,
+  IncompleteFetch,
   POOL_TYPES,
   RawFetchedGacha,
 } from "./gachaApi";
@@ -46,6 +49,7 @@ export async function fetchAndMergeGachaLogFromAccount(
   displayName?: string,
   accountIndex?: number,
   gameNickname?: string,
+  options?: FetchAndMergeOptions,
 ) {
   // Extract raw token value from "ACCOUNT_TOKEN=xxx" cookie string
   const tokenMatch = accountCookie.match(/ACCOUNT_TOKEN=([^;]+)/);
@@ -100,6 +104,7 @@ export async function fetchAndMergeGachaLogFromAccount(
     for (const candidate of serverCandidates) {
       try {
         const probeRes = await axios.get(`${apiDomain}/api/record/char`, {
+          ...HTTP_OPTIONS,
           params: {
             token: u8Token,
             lang,
@@ -142,6 +147,7 @@ export async function fetchAndMergeGachaLogFromAccount(
     displayName,
     accountIndex,
     gameNickname,
+    options,
   );
 }
 
@@ -173,6 +179,106 @@ function detectPityGapSeqId(
     return String(newMinSeqId);
   }
   return undefined;
+}
+
+function isCharIncomplete(item: IncompleteFetch): boolean {
+  return item.poolType !== "WeaponPool";
+}
+
+/**
+ * The records of a list that may take part in pity-gap detection: a pool whose
+ * fetch was cut short only returned its newest pages, so comparing it with the
+ * stored log would invent a gap. Character pools are told apart by poolType,
+ * weapon pools by poolId; when the weapon pool list itself failed there is
+ * nothing trustworthy at all.
+ */
+export function recordsForGapDetection(
+  list: GachaRecord[],
+  incomplete: IncompleteFetch[] | undefined,
+  kind: "character" | "weapon",
+): GachaRecord[] {
+  if (!incomplete || incomplete.length === 0) return list;
+  if (kind === "character") {
+    const bad = new Set(
+      incomplete.filter(isCharIncomplete).map((i) => i.poolType),
+    );
+    return bad.size === 0 ? list : list.filter((r) => !bad.has(r.poolType));
+  }
+  const weapon = incomplete.filter((i) => !isCharIncomplete(i));
+  if (weapon.length === 0) return list;
+  if (weapon.some((i) => i.poolId == null)) return [];
+  const bad = new Set(weapon.map((i) => String(i.poolId)));
+  return list.filter((r) => !bad.has(String(r.poolId)));
+}
+
+/** Pity-gap markers for one import, leaving out the pools whose fetch was incomplete. Pure. */
+export function detectPityGaps(
+  existing: { characterList: GachaRecord[]; weaponList: GachaRecord[] },
+  fetched: { characterList: GachaRecord[]; weaponList: GachaRecord[] },
+  incomplete?: IncompleteFetch[],
+): PityResetMarkers {
+  return {
+    charPityResetSeqId: detectPityGapSeqId(
+      recordsForGapDetection(existing.characterList, incomplete, "character"),
+      recordsForGapDetection(fetched.characterList, incomplete, "character"),
+    ),
+    weaponPityResetSeqId: detectPityGapSeqId(
+      recordsForGapDetection(existing.weaponList, incomplete, "weapon"),
+      recordsForGapDetection(fetched.weaponList, incomplete, "weapon"),
+    ),
+  };
+}
+
+/**
+ * Which lists of a stored log may be fetched incrementally, as the stop
+ * predicates for the importer (undefined = full fetch of everything).
+ * A list qualifies only when its last import was positively recorded as
+ * complete, it has no pending pity marker (a gap can only close through a full
+ * fetch) and it has records. Records are matched by seqId against the stored
+ * set; seqIds are not assumed to follow one global order.
+ */
+export function decideStopAt(
+  stored: GachaLogData | null | undefined,
+  opts: { forceFull?: boolean } = {},
+): GachaStopAt | undefined {
+  if (opts.forceFull || !stored || !stored.info || !stored.info.lang) {
+    return undefined;
+  }
+  const known = (list: GachaRecord[] | undefined) => {
+    if (!Array.isArray(list) || list.length === 0) return undefined;
+    const ids = new Set(list.map((r) => String(r.seqId)));
+    return (seqId: string) => ids.has(String(seqId));
+  };
+  const character =
+    stored.info.charFetchComplete === true && !stored.info.charPityResetSeqId
+      ? known(stored.characterList)
+      : undefined;
+  const weapon =
+    stored.info.weaponFetchComplete === true &&
+    !stored.info.weaponPityResetSeqId
+      ? known(stored.weaponList)
+      : undefined;
+  if (!character && !weapon) return undefined;
+  return { character, weapon, lang: stored.info.lang };
+}
+
+/** Reads the stored log only when its small info block says an incremental import is possible. */
+function readLogForIncremental(
+  db: CustomDatabase,
+  uid: string,
+): Promise<GachaLogData | null> {
+  const token = db.getRowToken(`GACHA_LOG_${uid}`, "$.info");
+  if (!token?.field) return Promise.resolve(null);
+  try {
+    const info = JSON.parse(token.field) as GachaLogData["info"];
+    const charOk = info.charFetchComplete === true && !info.charPityResetSeqId;
+    const weaponOk =
+      info.weaponFetchComplete === true && !info.weaponPityResetSeqId;
+    if (!charOk && !weaponOk) return Promise.resolve(null);
+  } catch {
+    return Promise.resolve(null);
+  }
+  return db.get<GachaLogData>(`GACHA_LOG_${uid}`);
 }
 
 /** Strictly increasing write stamp for a log row (never equal to or below the previous one). */
@@ -408,6 +514,11 @@ function normalizeStored(
   };
 }
 
+export interface FetchAndMergeOptions {
+  /** Page every pool to the end even when the stored log would allow an incremental import. */
+  forceFull?: boolean;
+}
+
 export interface CommitFetchedExtras {
   avatarUrl?: string;
   gameNickname?: string;
@@ -425,7 +536,8 @@ export function commitFetchedGachaLog(
   rawFetched: Pick<
     RawFetchedGacha,
     "lang" | "serverId" | "characterList" | "weaponList"
-  >,
+  > &
+    Partial<Pick<RawFetchedGacha, "incomplete" | "incremental">>,
   extras: CommitFetchedExtras,
 ): { data: GachaLogData; hasDataGap: boolean } {
   const dbKey = `GACHA_LOG_${uid}`;
@@ -436,17 +548,9 @@ export function commitFetchedGachaLog(
       rawFetched.lang,
     );
 
-    // Gap detection compares what is stored NOW with what was fetched.
-    const detected: PityResetMarkers = {
-      charPityResetSeqId: detectPityGapSeqId(
-        existing.characterList,
-        rawFetched.characterList,
-      ),
-      weaponPityResetSeqId: detectPityGapSeqId(
-        existing.weaponList,
-        rawFetched.weaponList,
-      ),
-    };
+    // Gap detection compares what is stored NOW with what was fetched, leaving
+    // out pools whose fetch was cut short (a truncated pool is not a gap).
+    const detected = detectPityGaps(existing, rawFetched, rawFetched.incomplete);
     const hasDataGap = !!(
       detected.charPityResetSeqId || detected.weaponPityResetSeqId
     );
@@ -464,6 +568,21 @@ export function commitFetchedGachaLog(
       { characterList, weaponList },
       { detected, existing },
     );
+
+    // A list is "complete" when nothing in it failed AND it was either paged to
+    // the end now or was already complete in the row as it is right now (a
+    // clear or an incomplete import on another cluster may have changed that).
+    const incompleteNow = rawFetched.incomplete ?? [];
+    const incremental = rawFetched.incremental ?? {
+      character: false,
+      weapon: false,
+    };
+    const charFetchComplete =
+      !incompleteNow.some(isCharIncomplete) &&
+      (!incremental.character || existing.info.charFetchComplete === true);
+    const weaponFetchComplete =
+      !incompleteNow.some((i) => !isCharIncomplete(i)) &&
+      (!incremental.weapon || existing.info.weaponFetchComplete === true);
 
     const data: GachaLogData = {
       characterList,
@@ -483,6 +602,8 @@ export function commitFetchedGachaLog(
         charPityResetSeqId: markers.charPityResetSeqId,
         weaponPityResetSeqId: markers.weaponPityResetSeqId,
         updatedAt: nextUpdatedAt(existing.info.updatedAt),
+        charFetchComplete,
+        weaponFetchComplete,
       },
     };
 
@@ -514,9 +635,22 @@ export async function fetchAndMergeGachaLog(
   displayName?: string,
   accountIndex?: number,
   gameNickname?: string,
+  options?: FetchAndMergeOptions,
 ) {
+  // Incremental import: only when the target UID is known up front and its
+  // stored log says every condition in decideStopAt holds.
+  const stopAt =
+    targetUid && !options?.forceFull
+      ? decideStopAt(await readLogForIncremental(db, targetUid))
+      : undefined;
+
   // Network first, outside any transaction.
-  const rawFetched = await fetchRawGachaFromUrl(urlStr, onProgress, locale);
+  const rawFetched = await fetchRawGachaFromUrl(
+    urlStr,
+    onProgress,
+    locale,
+    stopAt ? { stopAt } : undefined,
+  );
   const uid = targetUid || rawFetched.inferredUid;
 
   const { data: updatedData, hasDataGap } = commitFetchedGachaLog(
@@ -547,6 +681,10 @@ export async function fetchAndMergeGachaLog(
     totalChar: updatedData.characterList.filter(isGachaPull).length,
     totalWeapon: updatedData.weaponList.filter(isGachaPull).length,
     hasDataGap,
+    /** Parts of the history that could not be fetched (empty = complete). */
+    incomplete: rawFetched.incomplete,
+    /** Which lists stopped paging at the first stored record. */
+    incremental: rawFetched.incremental,
     data: updatedData,
   };
 }
@@ -614,6 +752,9 @@ export function commitGachaLogMigration(
         charPityResetSeqId: markers.charPityResetSeqId,
         weaponPityResetSeqId: markers.weaponPityResetSeqId,
         updatedAt: nextUpdatedAt(targetData.info.updatedAt),
+        // Two logs were joined: whatever lies between them is only restored by a full fetch.
+        charFetchComplete: false,
+        weaponFetchComplete: false,
       },
     };
 
@@ -724,6 +865,9 @@ export async function clearGachaLog(
         charPityResetSeqId: markers.charPityResetSeqId,
         weaponPityResetSeqId: markers.weaponPityResetSeqId,
         updatedAt: nextUpdatedAt(data.info.updatedAt),
+        // A range was cut out of the middle: only a full fetch brings it back.
+        charFetchComplete: false,
+        weaponFetchComplete: false,
       },
     };
     store.set(dbKey, updated);

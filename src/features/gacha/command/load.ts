@@ -204,7 +204,7 @@ export async function doFetchGachaLog(
         flags: MessageFlags.Ephemeral,
       });
     }
-    await notifyIncompleteImport(ctx, onProgressUpdate);
+    await notifyIncompleteImport(ctx, mergeResult.incomplete);
   } catch (error) {
     stop();
     let errorMessage: string;
@@ -337,7 +337,7 @@ export async function handleLogLoad(
           flags: MessageFlags.Ephemeral,
         });
       }
-      await notifyIncompleteImport(ctx, onProgressUpdate);
+      await notifyIncompleteImport(ctx, mergeResult.incomplete);
     } catch (error) {
       stop();
       const errorMessage =
@@ -486,7 +486,7 @@ export async function handleLoadModal(
               flags: MessageFlags.Ephemeral,
             });
           }
-          await notifyIncompleteImport(ctx, onProgressUpdate);
+          await notifyIncompleteImport(ctx, mergeResult.incomplete);
         } catch (error) {
           stop();
           const errorMessage =
