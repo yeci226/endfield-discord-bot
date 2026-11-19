@@ -1,7 +1,6 @@
 import { SKRSContext2D } from "@napi-rs/canvas";
 import { getGachaPityGroupId } from "../../../utils/gachaPoolUtils";
-import { fetchImage } from "../../../utils/canvasUtils";
-import { loadGachaIconImage } from "../iconLoader";
+import { fetchImageTimed, loadGachaIconImage } from "../iconLoader";
 import {
   GachaStatsState,
   normalizeGachaText,
@@ -65,7 +64,7 @@ export async function drawQuickStrip(
       let titleMaxWidth = quickCardW - 24;
       if (quickBannerUrl) {
         try {
-          const bannerImg = await fetchImage(
+          const bannerImg = await fetchImageTimed(
             quickBannerUrl,
             `pool_quick_${p.id}`,
           );

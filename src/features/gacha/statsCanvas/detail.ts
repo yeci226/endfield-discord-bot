@@ -1,7 +1,6 @@
 import { SKRSContext2D } from "@napi-rs/canvas";
 import moment from "moment";
-import { fetchImage } from "../../../utils/canvasUtils";
-import { loadGachaIconImage } from "../iconLoader";
+import { fetchImageTimed, loadGachaIconImage } from "../iconLoader";
 import {
   GachaStatsState,
   ITEMS_PER_PAGE,
@@ -27,7 +26,6 @@ export async function drawDetail(
     width,
     height,
     padding,
-    poolApiData,
     visualGroups,
     listY,
     specificPoolTotal,
@@ -130,7 +128,7 @@ export async function drawDetail(
   ctx.textAlign = "left";
   const poolTitle = normalizeGachaText(group.title);
   const detailedBannerUrl =
-    (group.pId && poolBannerUrlMap.get(group.pId)) || poolApiData?.up6_image;
+    group.pId ? poolBannerUrlMap.get(group.pId) : undefined;
   ctx.fillStyle = "#111";
   ctx.font = "bold 52px NotoSansTCBold";
   ctx.fillText("I", centerPadding, currentY);
@@ -139,7 +137,7 @@ export async function drawDetail(
   let titleRight = centerPadding;
   if (detailedBannerUrl) {
     try {
-      const bannerImg = await fetchImage(
+      const bannerImg = await fetchImageTimed(
         detailedBannerUrl,
         `pool_detail_header_${group.pId || selectedPoolId || "current"}`,
       );

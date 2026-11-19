@@ -185,7 +185,6 @@ export interface GachaStatsBaseState {
   padding: number;
   baseType: "weapon" | "char";
   history: any[];
-  poolApiData: any;
   visualGroups: GachaVisualGroup[];
   poolBannerUrlMap: Map<string, string>;
   getPoolPaddedCount: (poolId: string, groupId: string) => number;

@@ -7,6 +7,7 @@ import {
   paginateGachaOverviewPools,
 } from "../../../utils/gachaPoolUtils";
 import { getPoolMetadata } from "../gachaApi";
+import { GACHA_IMAGE_TIMEOUT_MS, withTimeout } from "../iconLoader";
 import { GachaLogData } from "../gachaTypes";
 import { drawSummary } from "./summary";
 import { drawOverview } from "./overview";
@@ -31,24 +32,6 @@ export async function drawGachaStats(
   const apiLang = data.info.lang || "zh-tw";
   const isEn = apiLang.toLowerCase().includes("en");
   const apiServerId = data.info.serverId || "2";
-  // Load Pool API Data if applicable
-  let poolApiData: any = null;
-  if (selectedPoolId) {
-    try {
-      const res = await fetch(
-        `https://ef-webview.gryphline.com/api/content?lang=${apiLang}&pool_id=${selectedPoolId}&server_id=${apiServerId}`,
-      );
-      if (res.ok) {
-        const json = await res.json();
-        if (json.code === 0 && json.data?.pool) {
-          poolApiData = json.data.pool;
-        }
-      }
-    } catch (e) {
-      console.error("[drawGachaStats] Failed to fetch Gryphline API", e);
-    }
-  }
-
   const width = 2400;
   let height = 1400;
   const padding = 80;
@@ -164,7 +147,11 @@ export async function drawGachaStats(
 
     // 1. Global DB cache (persists across restarts, shared across all users)
     if (db) {
-      const meta = await getPoolMetadata(db, poolId, apiLang, apiServerId);
+      // getPoolMetadata may hit the network on a miss: never let it stall a card.
+      const meta = await withTimeout(
+        getPoolMetadata(db, poolId, apiLang, apiServerId),
+        GACHA_IMAGE_TIMEOUT_MS,
+      ).catch(() => null);
       const bannerUrl =
         meta?.up6_image || meta?.up5_image || meta?.banner_image;
       if (bannerUrl) {
@@ -178,12 +165,6 @@ export async function drawGachaStats(
     if (cachedBanner) {
       poolBannerUrlMap.set(poolId, cachedBanner);
       return cachedBanner;
-    }
-
-    // 3. Current selected pool from already-fetched API data
-    if (selectedPoolId === poolId && poolApiData?.up6_image) {
-      poolBannerUrlMap.set(poolId, poolApiData.up6_image);
-      return poolApiData.up6_image;
     }
 
     return undefined;
@@ -335,7 +316,6 @@ export async function drawGachaStats(
     padding,
     baseType,
     history,
-    poolApiData,
     visualGroups,
     poolBannerUrlMap,
     getPoolPaddedCount,

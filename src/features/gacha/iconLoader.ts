@@ -256,6 +256,57 @@ export function resetLocalIconIndex(): void {
   iconIndex = null;
 }
 
+/** Longest a card render waits for one remote image before drawing without it. */
+export const GACHA_IMAGE_TIMEOUT_MS = 8000;
+const FAILED_IMAGE_TTL_MS = 60_000;
+const FAILED_IMAGE_MAX = 500;
+const failedImageUrls = new Map<string, number>();
+
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number = GACHA_IMAGE_TIMEOUT_MS,
+): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Remote image for a draw path: 8 s ceiling, and a URL that just failed is not
+ * retried for a minute (so one dead host cannot add 8 s to every card).
+ * Callers draw a placeholder when this throws.
+ */
+export async function fetchImageTimed(
+  url: string,
+  cacheName?: string,
+  now: number = Date.now(),
+): Promise<any> {
+  const failedAt = failedImageUrls.get(url);
+  if (failedAt !== undefined && now - failedAt < FAILED_IMAGE_TTL_MS) {
+    throw new Error(`recently failed: ${url}`);
+  }
+  try {
+    return await withTimeout(
+      fetchImage(url, cacheName, { timeoutMs: GACHA_IMAGE_TIMEOUT_MS }),
+      GACHA_IMAGE_TIMEOUT_MS,
+    );
+  } catch (e) {
+    if (failedImageUrls.size >= FAILED_IMAGE_MAX) {
+      const oldest = failedImageUrls.keys().next();
+      if (!oldest.done) failedImageUrls.delete(oldest.value);
+    }
+    failedImageUrls.delete(url);
+    failedImageUrls.set(url, now);
+    throw e;
+  }
+}
+
+export function resetFailedImageUrls(): void {
+  failedImageUrls.clear();
+}
+
 const inFlightIcons = new Map<string, Promise<any>>();
 
 export const loadGachaIconImage = async (
@@ -301,7 +352,7 @@ async function resolveGachaIcon(
   let lastError: unknown;
   for (const iconUrl of getGachaIconUrlCandidates(isCharacter, rawId)) {
     try {
-      return await fetchImage(iconUrl, cacheName);
+      return await fetchImageTimed(iconUrl, cacheName);
     } catch (e) {
       lastError = e;
     }

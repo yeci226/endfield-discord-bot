@@ -1494,7 +1494,9 @@ export async function loadAssetImage(relPath: string): Promise<Image | null> {
 export async function fetchImage(
   url: string,
   customCacheName?: string,
+  options?: { timeoutMs?: number },
 ): Promise<Image> {
+  const requestTimeout = options?.timeoutMs ?? 10000;
   if (imageCache.has(url)) return imageCache.get(url)!;
 
   const ext = url.split(".").pop()?.split(/[?#]/)[0] || "png";
@@ -1533,7 +1535,7 @@ export async function fetchImage(
       response = await axios.get(url, {
         headers,
         responseType: "arraybuffer",
-        timeout: 10000,
+        timeout: requestTimeout,
       });
     } catch (e) {
       // Fallback: If .png fails, try .webp if it's not already webp
@@ -1542,7 +1544,7 @@ export async function fetchImage(
         response = await axios.get(webpUrl, {
           headers,
           responseType: "arraybuffer",
-          timeout: 10000,
+          timeout: requestTimeout,
         });
       } else {
         throw e;

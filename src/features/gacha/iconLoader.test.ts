@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import * as canvasUtils from "../../utils/canvasUtils";
 import {
   buildIconIndex,
+  fetchImageTimed,
+  GACHA_IMAGE_TIMEOUT_MS,
+  resetFailedImageUrls,
+  withTimeout,
   getLocalIconIndex,
   ICON_INDEX_REFRESH_MS,
   localIconCandidateNames,
@@ -21,6 +26,50 @@ function oldProbe(dirs: string[], isCharacter: boolean, cid: string): string[] {
     }
   }
   return out;
+}
+
+async function timeoutAndNetworkChecks() {
+  // no untimed network call is left in the draw path
+  const drawSrc = fs.readFileSync(
+    path.join(__dirname, "statsCanvas", "drawGachaStats.ts"),
+    "utf8",
+  );
+  assert.ok(!drawSrc.includes("fetch("), "drawGachaStats must not call fetch()");
+  assert.ok(!/axios/.test(drawSrc));
+  assert.equal(GACHA_IMAGE_TIMEOUT_MS, 8000);
+
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 20),
+    /timed out/,
+  );
+  assert.equal(await withTimeout(Promise.resolve(7), 20), 7);
+
+  // fetchImageTimed: ceiling + a URL that just failed is not retried at once
+  const real = (canvasUtils as any).fetchImage;
+  let calls = 0;
+  (canvasUtils as any).fetchImage = async (url: string) => {
+    calls++;
+    if (url.includes("bad")) throw new Error("boom");
+    return { width: 1, height: 1 };
+  };
+  try {
+    resetFailedImageUrls();
+    await assert.rejects(fetchImageTimed("https://x.invalid/bad.png", "n", 1000));
+    await assert.rejects(
+      fetchImageTimed("https://x.invalid/bad.png", "n", 1000 + 59_000),
+      /recently failed/,
+    );
+    assert.equal(calls, 1);
+    await assert.rejects(fetchImageTimed("https://x.invalid/bad.png", "n", 1000 + 61_000));
+    assert.equal(calls, 2);
+    assert.deepEqual(await fetchImageTimed("https://x.invalid/ok.png"), {
+      width: 1,
+      height: 1,
+    });
+  } finally {
+    (canvasUtils as any).fetchImage = real;
+    resetFailedImageUrls();
+  }
 }
 
 function main() {
@@ -104,3 +153,4 @@ function main() {
 }
 
 main();
+timeoutAndNetworkChecks();

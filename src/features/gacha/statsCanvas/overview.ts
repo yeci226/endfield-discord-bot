@@ -1,6 +1,5 @@
 import { SKRSContext2D } from "@napi-rs/canvas";
-import { fetchImage } from "../../../utils/canvasUtils";
-import { loadGachaIconImage } from "../iconLoader";
+import { fetchImageTimed, loadGachaIconImage } from "../iconLoader";
 import { drawQuickStrip } from "./quickStrip";
 import {
   GachaStatsState,
@@ -57,7 +56,7 @@ export async function drawOverview(
 
     if (poolBannerUrl) {
       try {
-        const bannerImg = await fetchImage(
+        const bannerImg = await fetchImageTimed(
           poolBannerUrl,
           `pool_header_${group.pId || `group_${i}`}`,
         );
