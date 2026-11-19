@@ -4,6 +4,13 @@ import moment from "moment";
 import { getPoolMetadata } from "./gachaApi";
 import { GachaLogData, GachaRecord, isGachaPull, isPullFree } from "./gachaTypes";
 
+/**
+ * Version of the statistics algorithm. Cached stats (gachaStatsCache.ts) carry
+ * the version they were computed with; bump this whenever getGachaStats can
+ * return different numbers for the same log.
+ */
+export const ENGINE_VERSION = 1;
+
 const STANDARD_SIX_STARS = [
   "chr_0009_azrila",
   "chr_0015_lifeng",
