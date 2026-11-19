@@ -120,7 +120,12 @@ export class MonitorService {
           validateReminder(config, detail);
           const result = evaluateReminder(config, state, detail);
           state = result.state;
-          if (result.sanity || result.daily) {
+          if (config.baselinePending) {
+            // First evaluation after a migrated rule was resumed: remember what is already true, send nothing.
+            if (result.sanity) state.sanitySent = true;
+            if (result.daily) state.dailyCycle = result.reset;
+            patchRule({ baselinePending: undefined });
+          } else if (result.sanity || result.daily) {
             const image = await drawPlayerCard(detail, playerText(lang, "理智與每日任務提醒", "Sanity & daily reminder"), reminderSections(config, detail, result, lang), lang, Date.now(), await ProfileTemplateService.getUserTemplate(this.client.db, config.userId));
             const latest = await this.client.db.get<ReminderConfig>(id);
             if (!latest?.enabled || latest.revision !== config.revision) continue;

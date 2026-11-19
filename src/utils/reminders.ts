@@ -10,6 +10,10 @@ export interface ReminderConfig extends NotificationDestination {
   daily: boolean; dailyHours: number; resetOffset?: 8 | -5;
   /** Set on rules migrated from monitorConfig: sanity "amount" threshold is max stamina minus this, resolved on the first poll. */
   legacyOffset?: number;
+  /** Created by the startup migration from an old /monitor entry: shown with a badge in /reminder list until the owner edits it. */
+  migrated?: boolean;
+  /** Migrated rules start paused; the first evaluation after resume only records the current condition (no send). Cleared by the monitor. */
+  baselinePending?: boolean;
 }
 export interface ReminderState { revision?: string; sanitySent?: boolean; dailyCycle?: number; retryAt?: number; disabledReason?: string; guildLookupFails?: number }
 export const reminderKey = (c: Pick<ReminderConfig, "userId" | "uid" | "serverId" | "roleId">) => `reminder.v2.${c.userId}.${c.uid}.${c.serverId}.${c.roleId}`;

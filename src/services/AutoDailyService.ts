@@ -278,7 +278,10 @@ export class AutoDailyService {
       }
 
       const eligibleUsers = [];
+      let scanned = 0;
       for (const { id, value: config } of dailyUsers) {
+        // Thousands of rows are pure CPU here: give timers and heartbeats a turn regularly.
+        if (++scanned % 100 === 0) await new Promise<void>((r) => setImmediate(r));
         if (!config || typeof config !== "object") continue;
 
         const normalizedTime = this.normalizeHour((config as any).time, 13);
@@ -335,6 +338,8 @@ export class AutoDailyService {
         // No hour for a regular tick: processUser reads the Taipei hour when it actually runs,
         // not the one this tick started in. Only a manual range names its hour.
         await this.processUser(userId, config, targetHour);
+        // Users already signed today finish without any I/O: yield so the loop cannot freeze the cluster.
+        await new Promise<void>((r) => setImmediate(r));
       }
       this.logger.info(
         `Expired-login DMs this tick: ${this.tickExpiredSent} sent, ${this.tickExpiredDeferred} deferred (cap ${MAX_EXPIRED_DMS_PER_TICK}).`,

@@ -3,6 +3,7 @@ import { CustomDatabase } from "../../utils/Database";
 import {
   LB_BLOB_KEY,
   LB_MIGRATION_MARKER,
+  LB_REFRESH_MARKER,
   deduplicateLeaderboardAliases,
   lbKey,
   migrateLeaderboardBlob,
@@ -311,7 +312,74 @@ async function testRefreshLegacyRows() {
   }
 }
 
+/** Wraps a database and counts the whole-board scans. */
+function scanCounting(real: CustomDatabase) {
+  const counts = { scans: 0 };
+  const db = new Proxy(real, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, target);
+      if (prop === "findFieldByPrefix")
+        return (...a: any[]) => {
+          counts.scans++;
+          return (value as any).apply(target, a);
+        };
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { db: db as CustomDatabase, counts };
+}
+
+async function testRefreshFinishesAndStops() {
+  const real = new CustomDatabase(":memory:");
+  const { db, counts } = scanCounting(real);
+  const axios = (await import("axios")).default;
+  const originalGet = axios.get;
+  axios.get = (async () => {
+    throw new Error("no network");
+  }) as any;
+  try {
+    const blob: Record<string, GachaLeaderboardEntry> = {};
+    for (let i = 0; i < 25; i++) {
+      const uid = `EF_${2000 + i}`;
+      blob[uid] = entry(uid, 10 + i);
+      await real.set(`GACHA_LOG_${uid}`, emptyLog(uid));
+    }
+    // a row whose log is corrupt: cannot be refreshed, must not block completion or be retried forever
+    blob.EF_BAD = entry("EF_BAD");
+    await real.set("GACHA_LOG_EF_BAD", { info: { uid: "EF_BAD" } });
+    await real.set(LB_BLOB_KEY, blob);
+    // not migrated yet: the job must neither refresh nor declare itself done
+    assert.equal(await refreshLegacyLeaderboardEntries(db), 0);
+    assert.equal(await real.get(LB_REFRESH_MARKER), null, "no marker before the blob migration finished");
+    await migrateLeaderboardBlob(real);
+
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      assert.equal(await refreshLegacyLeaderboardEntries(db), 10, "up to 10 rows per run");
+      assert.equal(await refreshLegacyLeaderboardEntries(db), 10);
+      assert.equal(await refreshLegacyLeaderboardEntries(db), 5, "the last 5 good rows (the bad one failed in an earlier run)");
+      assert.equal(await real.get(LB_REFRESH_MARKER), null, "the run that still did work writes no marker");
+      assert.equal(await refreshLegacyLeaderboardEntries(db), 0);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(await real.get(LB_REFRESH_MARKER), "a run that finds nothing stale writes the marker");
+    assert.equal(await real.get(lbKey("EF_2000")).then((r: any) => r.metricsVersion), 2);
+    assert.ok(!(await real.get(lbKey("EF_BAD")).then((r: any) => r.metricsVersion)), "the corrupt row stays as it was");
+
+    const scans = counts.scans;
+    assert.equal(await refreshLegacyLeaderboardEntries(db), 0);
+    assert.equal(await refreshLegacyLeaderboardEntries(db), 0);
+    assert.equal(counts.scans, scans, "after the marker a run does no prefix scan");
+  } finally {
+    axios.get = originalGet;
+    real.close();
+  }
+}
+
 async function main() {
+  await testRefreshFinishesAndStops();
   await testMigration();
   await testInterruptedResume();
   await testWriteDuringMigration();

@@ -723,6 +723,26 @@ async function main() {
       }
     }
 
+    // --- thousands of purely synchronous users must not starve the event loop -------
+    {
+      const N = 3000;
+      const rows = Array.from({ length: N }, (_, i) => ({ id: "autoDaily." + (1000 + i), value: config({ time: 5 }) }));
+      const fakeDb = {
+        findByPrefix: async (prefix: string) => (prefix === "autoDaily." ? rows : []),
+        set: async () => {},
+      };
+      const service = new AutoDailyService({ db: fakeDb } as any);
+      let processed = 0;
+      (service as any).processUser = async () => {
+        processed++; // no I/O: only microtasks, like "already signed today"
+      };
+      let seenAtImmediate = -1;
+      setImmediate(() => (seenAtImmediate = processed)); // scheduled before the loop starts
+      await service.manualRunRange(5, 5);
+      assert.equal(processed, N);
+      assert.ok(seenAtImmediate >= 0 && seenAtImmediate < N, "the loop yielded: a callback queued before it ran mid-loop, got " + seenAtImmediate);
+    }
+
     console.log("AutoDaily checks passed");
   } finally {
     Object.assign(accountUtils, { ensureAccountBinding: originals.ensureAccountBinding });

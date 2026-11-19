@@ -62,7 +62,9 @@ async function main() {
   const legacyDm = { stamina_notify: true, stamina_offset: 20, mission_notify: true, notify_method: "dm" as const, channelId: "555" };
   const rule = legacyToReminder("99", { uid: "1001", roleId: "7", serverId: "2", name: "Role" }, legacyDm)!;
   assert.equal(rule.version, 2);
-  assert.equal(rule.enabled, true);
+  assert.equal(rule.enabled, false, "migrated rules start paused");
+  assert.equal(rule.migrated, true);
+  assert.equal(rule.baselinePending, true);
   assert.equal(rule.sanity, "amount");
   assert.equal(rule.legacyOffset, 20);
   assert.equal(rule.daily, true);
@@ -119,6 +121,9 @@ async function main() {
     assert.equal(k1!.roleId, "7", "only the first (primary) role of the account");
     assert.equal(await db.get("reminder.v2.100.1001.2.8"), null);
     assert.equal(k1!.legacyOffset, 30);
+    assert.equal(k1!.enabled, false);
+    const ch = await db.get<ReminderConfig>("reminder.v2.200.2001.3.9");
+    assert.deepEqual([ch!.enabled, ch!.notify_method, ch!.mention, ch!.migrated], [false, "channel", true, true], "a channel entry becomes a paused channel rule");
     assert.equal(k1!.daily, false);
     assert.ok(await db.get("reminder.v2.200.2001.3.9"));
     assert.ok(await db.get("reminder.v2.200.2002.3.10"), "one rule per account");

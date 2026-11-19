@@ -152,7 +152,7 @@ export function buildReminderListPayload(view: ListView, tr: any): any {
     const next = nextText(r, status, view.now, tr);
     return (
       `${mark}${typeIcons(r.config)} **${r.config.name}** · ${r.accountName}\n` +
-      `-# ${statusIcon[status]} ${tr("reminderList_Status_" + status)} · ${targetText(r.config, tr)}${next ? " · " + next : ""}`
+      `-# ${statusIcon[status]} ${tr("reminderList_Status_" + status)}${r.config.migrated ? ` · 🕰️ ${tr("reminderList_Migrated")}` : ""} · ${targetText(r.config, tr)}${next ? " · " + next : ""}`
     );
   });
   container.addTextDisplayComponents(

@@ -201,6 +201,61 @@ async function testVerdictCache() {
   real.close();
 }
 
+/** Board entries carry updatedAt/logUpdatedAt: a rebuild with unchanged entries must not touch the log rows at all. */
+async function testVerdictKeyedByEntries() {
+  const real = new CustomDatabase(":memory:");
+  const reads = { logGets: 0, tokens: 0 };
+  const db = new Proxy(real, {
+    get(target, prop) {
+      if (prop === "get")
+        return (key: string) => {
+          if (key.startsWith("GACHA_LOG_")) reads.logGets++;
+          return target.get(key);
+        };
+      if (prop === "getRowToken")
+        return (...a: any[]) => {
+          reads.tokens++;
+          return (target as any).getRowToken(...a);
+        };
+      const v = Reflect.get(target, prop, target);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  }) as CustomDatabase;
+  await real.set("GACHA_LOG_EF_30", logOf("EF_30", [1, 2], "2", 100));
+  await real.set("GACHA_LOG_EF_CN_30", logOf("EF_CN_30", [1, 2, 3], "2", 200));
+  const board = (gLog: number, cLog: number, gUp = 1000, cUp = 2000) => ({
+    EF_30: entry("EF_30", { updatedAt: gUp, logUpdatedAt: gLog }),
+    EF_CN_30: entry("EF_CN_30", { updatedAt: cUp, logUpdatedAt: cLog }),
+  });
+  let out = await deduplicateLeaderboardAliases(db, board(100, 200));
+  assert.deepEqual(Object.keys(out), ["EF_CN_30"]);
+  assert.equal(reads.logGets, 2);
+  assert.equal(reads.tokens, 0, "entries carrying the versions never ask the database for a row token");
+
+  const before = { ...reads };
+  out = await deduplicateLeaderboardAliases(db, board(100, 200));
+  assert.deepEqual(Object.keys(out), ["EF_CN_30"]);
+  assert.deepEqual(reads, before, "second rebuild with unchanged entries: zero log-row reads");
+
+  // a rewritten board row (the log changed) is re-evaluated
+  await real.set("GACHA_LOG_EF_30", logOf("EF_30", [1, 2, 3, 4], "2", 150));
+  out = await deduplicateLeaderboardAliases(db, board(150, 200, 1500));
+  assert.deepEqual(Object.keys(out), ["EF_30"], "now the CN log is the subset");
+  assert.equal(reads.logGets, before.logGets + 2);
+
+  // entries without the version fields fall back to the row token and still cache
+  await real.set("GACHA_LOG_EF_31", logOf("EF_31", [1, 2], "2", 100));
+  await real.set("GACHA_LOG_EF_CN_31", logOf("EF_CN_31", [1, 2, 3], "2", 100));
+  const legacy = { EF_31: entry("EF_31", { updatedAt: undefined }), EF_CN_31: entry("EF_CN_31", { updatedAt: undefined }) };
+  await deduplicateLeaderboardAliases(db, legacy);
+  const tokens = reads.tokens;
+  const gets = reads.logGets;
+  assert.ok(tokens > 0);
+  await deduplicateLeaderboardAliases(db, legacy);
+  assert.equal(reads.logGets, gets, "fallback path still caches by the row token");
+  real.close();
+}
+
 async function testBoardAppliesDedup() {
   const real = new CustomDatabase(":memory:");
   await real.set("GACHA_LOG_EF_20", logOf("EF_20", [1, 2]));
@@ -216,6 +271,7 @@ async function testBoardAppliesDedup() {
 async function main() {
   await testBoardCache();
   await testVerdictCache();
+  await testVerdictKeyedByEntries();
   await testBoardAppliesDedup();
   console.log("gacha leaderboard cache tests passed");
 }
