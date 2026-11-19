@@ -17,10 +17,39 @@ import {
   GachaApiError,
   analyzeGachaImportFingerprint,
 } from "../../../utils/gachaLogUtils";
+import {
+  GachaImportRefusal,
+  GachaImportUrlError,
+  validateGachaImportUrl,
+} from "../gachaApi";
 import { GachaContext } from "./context";
-import { getAllPossibleUserRoles, findLinkedAccount } from "./accounts";
-import { buildProgressHandlers } from "./autoLoad";
+import {
+  getAllPossibleUserRoles,
+  findLinkedAccount,
+  getOwnedGachaUids,
+  resolveOwnedGachaUid,
+} from "./accounts";
+import { buildProgressHandlers, notifyIncompleteImport } from "./autoLoad";
+import {
+  pendingFingerprintKey,
+  pendingUrlKey,
+  readPending,
+  savePending,
+} from "./pending";
 import { showGachaStats } from "./view";
+
+/** User-facing text for an import input that was refused before any request. */
+export function importRefusedMessage(
+  tr: any,
+  reason: GachaImportRefusal,
+): string {
+  return reason === "host_not_allowed" ||
+    reason === "userinfo" ||
+    reason === "port" ||
+    reason === "not_https"
+    ? tr("gacha_import_url_refused")
+    : tr("gacha_import_url_invalid");
+}
 
 export async function doFetchGachaLog(
   ctx: GachaContext,
@@ -31,6 +60,30 @@ export async function doFetchGachaLog(
 ) {
   const { interaction, tr, db } = ctx;
   const TOKEN_EXPIRED_MESSAGE = tr("gacha_log_token_expired_message");
+
+  // Refuse a foreign host before anything (fingerprint check included) can
+  // send the token there.
+  const urlCheck = validateGachaImportUrl(url);
+  if (!urlCheck.ok) {
+    await interaction.followUp({
+      content: importRefusedMessage(tr, urlCheck.reason),
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // The UID may only be one of the clicker's own (or a new guest log).
+  if (selectedUidRaw !== "CREATE_NEW_GUEST") {
+    const owned = await getOwnedGachaUids(db, interaction.user.id);
+    if (!resolveOwnedGachaUid(selectedUidRaw, owned).ok) {
+      await interaction.followUp({
+        content: tr("gacha_uid_not_owned"),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  }
+
   const allRoles = await getAllPossibleUserRoles(userId, db);
 
   let selectedUid = selectedUidRaw;
@@ -70,19 +123,17 @@ export async function doFetchGachaLog(
       const lowConfidence = bestScore > 0 && bestScore < 0.58;
 
       if (hasMismatch || lowConfidence) {
-        const pendingKey = `PENDING_GACHA_FINGERPRINT_${interaction.user.id}`;
-        await db.set(pendingKey, {
+        savePending(db, pendingFingerprintKey(interaction.user.id), {
           url,
           userId,
           selectedUid,
           predictedUid: bestUid || null,
           confidence: bestScore,
-          createdAt: Date.now(),
         });
 
         const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
-            .setCustomId("gacha:log_load_confirm:keep")
+            .setCustomId(`gacha:log_load_confirm:keep:${interaction.user.id}`)
             .setLabel(
               tr("gacha_log_fingerprint_keep_selected", {
                 uid: selectedUid,
@@ -92,7 +143,9 @@ export async function doFetchGachaLog(
           ...(hasMismatch && bestUid
             ? [
                 new ButtonBuilder()
-                  .setCustomId("gacha:log_load_confirm:switch")
+                  .setCustomId(
+                    `gacha:log_load_confirm:switch:${interaction.user.id}`,
+                  )
                   .setLabel(
                     tr("gacha_log_fingerprint_switch_predicted", {
                       uid: bestUid,
@@ -102,7 +155,7 @@ export async function doFetchGachaLog(
               ]
             : []),
           new ButtonBuilder()
-            .setCustomId("gacha:log_load_confirm:cancel")
+            .setCustomId(`gacha:log_load_confirm:cancel:${interaction.user.id}`)
             .setLabel(tr("Cancel"))
             .setStyle(ButtonStyle.Danger),
         );
@@ -151,10 +204,13 @@ export async function doFetchGachaLog(
         flags: MessageFlags.Ephemeral,
       });
     }
+    await notifyIncompleteImport(ctx, onProgressUpdate);
   } catch (error) {
     stop();
     let errorMessage: string;
-    if (error instanceof GachaApiError && error.apiCode === 40100) {
+    if (error instanceof GachaImportUrlError) {
+      errorMessage = importRefusedMessage(tr, error.reason);
+    } else if (error instanceof GachaApiError && error.apiCode === 40100) {
       errorMessage = TOKEN_EXPIRED_MESSAGE;
     } else {
       const err = error as Error;
@@ -226,6 +282,15 @@ export async function handleLogLoad(
   const accountIndex =
     allRoles.findIndex((r) => r.uid === selectedUid) + 1;
   const matchedRole = allRoles.find((r) => r.uid === selectedUid);
+  if (!matchedRole) {
+    const owned = await getOwnedGachaUids(db, interaction.user.id);
+    await replyError(
+      resolveOwnedGachaUid(selectedUid, owned).ok
+        ? tr("gacha_log_load_NoLinkedAccount")
+        : tr("gacha_uid_not_owned"),
+    );
+    return;
+  }
   const nickname = matchedRole?.nickname;
   // Use bindingUid (account-level uid) for u8_token_by_uid OAuth exchange,
   // not rawUid (role-level roleId) which is for game API calls.
@@ -233,7 +298,7 @@ export async function handleLogLoad(
   // Find the account that owns this specific game UID
   const linkedAccount = findLinkedAccount(userAccounts, efGameUid);
   if (!linkedAccount || !efGameUid) {
-    await replyError(tr("gacha_log_load_NoLinkedAccount"));
+    await replyError(tr("gacha_log_load_NoAccountForUid"));
     return;
   }
   {
@@ -272,6 +337,7 @@ export async function handleLogLoad(
           flags: MessageFlags.Ephemeral,
         });
       }
+      await notifyIncompleteImport(ctx, onProgressUpdate);
     } catch (error) {
       stop();
       const errorMessage =
@@ -295,8 +361,8 @@ export async function handleLoadConfirmButton(
   const { tr, db } = ctx;
 
   const mode = parts[2];
-  const pendingKey = `PENDING_GACHA_FINGERPRINT_${btnInteraction.user.id}`;
-  const pending = await db.get<any>(pendingKey);
+  const pendingKey = pendingFingerprintKey(btnInteraction.user.id);
+  const pending = await readPending<any>(db, pendingKey);
 
   if (!pending) {
     await btnInteraction.update({
@@ -316,17 +382,6 @@ export async function handleLoadConfirmButton(
   }
 
   await btnInteraction.deferUpdate();
-
-  const isExpired =
-    Date.now() - Number(pending.createdAt || 0) > 1000 * 60 * 15;
-  if (isExpired) {
-    await db.delete(pendingKey);
-    await btnInteraction.editReply({
-      content: tr("gacha_log_fingerprint_expired"),
-      components: [],
-    });
-    return;
-  }
 
   const targetImportUid =
     mode === "switch" && pending.predictedUid
@@ -391,7 +446,7 @@ export async function handleLoadModal(
       const linkedAccount = findLinkedAccount(userAccounts, efGameUid2);
       if (!linkedAccount) {
         await interaction.editReply({
-          content: tr("gacha_log_load_NoLinkedAccount"),
+          content: tr("gacha_log_load_NoAccountForUid"),
         });
         return;
       }
@@ -431,6 +486,7 @@ export async function handleLoadModal(
               flags: MessageFlags.Ephemeral,
             });
           }
+          await notifyIncompleteImport(ctx, onProgressUpdate);
         } catch (error) {
           stop();
           const errorMessage =
@@ -452,31 +508,41 @@ export async function handleLoadModal(
     return;
   }
 
-  // Regular flow — store URL and show account selection
+  // Regular flow — store URL and show account selection.
+  // Acknowledge first: the account lookup below may call the network.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   if (!url) {
-    await interaction.reply({
+    await interaction.editReply({
       content: tr("gacha_log_load_NoLinkedAccount"),
-      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const urlCheck = validateGachaImportUrl(url);
+  if (!urlCheck.ok) {
+    await interaction.editReply({
+      content: importRefusedMessage(tr, urlCheck.reason),
     });
     return;
   }
 
   const allRoles = await getAllPossibleUserRoles(userId, db);
 
-  await db.set(`PENDING_GACHA_URL_${userId}`, url);
+  savePending(db, pendingUrlKey(userId), { url });
 
-  // Deduplicate by rawUid — prefer the uid that already has gacha log data
+  // Deduplicate by rawUid — prefer the uid that already has gacha log data.
+  // Existence is checked on the key index; the logs (up to MBs) are not read.
+  const logKeys = new Set(db.findKeysByPrefix("GACHA_LOG_"));
+  const hasData = (uid: string) => logKeys.has(`GACHA_LOG_${uid}`);
   const seenRawUids = new Map<string, string>(); // rawUid -> selected uid
   for (const r of allRoles) {
     if (!seenRawUids.has(r.rawUid)) {
       seenRawUids.set(r.rawUid, r.uid);
     } else {
       const existing = seenRawUids.get(r.rawUid)!;
-      const existingHasData =
-        (await db.get(`GACHA_LOG_${existing}`)) != null;
-      if (!existingHasData) {
-        const thisHasData = (await db.get(`GACHA_LOG_${r.uid}`)) != null;
-        if (thisHasData) seenRawUids.set(r.rawUid, r.uid);
+      if (!hasData(existing) && hasData(r.uid)) {
+        seenRawUids.set(r.rawUid, r.uid);
       }
     }
   }
@@ -499,12 +565,11 @@ export async function handleLoadModal(
   const row =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu);
 
-  await interaction.reply({
+  await interaction.editReply({
     content: tr("gacha_log_load_SelectAccount", {
       user: interaction.user.toString(),
     }),
     components: [row],
-    flags: MessageFlags.Ephemeral,
   });
   return;
 }

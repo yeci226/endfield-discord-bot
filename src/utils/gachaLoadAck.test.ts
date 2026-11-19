@@ -1,16 +1,24 @@
 import assert from "node:assert/strict";
+import { CustomDatabase } from "./Database";
 
 const gachaCommand = require("../commands/general/gacha").default;
 
 async function main() {
   const events: string[] = [];
   const userId = "123456789012345678";
-  const db: any = {
-    get: async () => {
-      events.push("db.get");
-      return [];
-    },
-  };
+  // A real in-memory database that records its accesses, so the test keeps
+  // working when the code under test starts using newer db methods.
+  const db = new CustomDatabase(":memory:");
+  const realGet = db.get.bind(db);
+  db.get = (async (key: string) => {
+    events.push("db.get");
+    return realGet(key);
+  }) as typeof db.get;
+  const realTransaction = db.transaction.bind(db);
+  db.transaction = ((cb: any) => {
+    events.push("db.transaction");
+    return realTransaction(cb);
+  }) as typeof db.transaction;
   const interaction: any = {
     locale: "zh-TW",
     user: { id: userId },
@@ -48,4 +56,7 @@ async function main() {
   console.log("gacha log load acknowledgement regression test passed");
 }
 
-void main();
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

@@ -1,4 +1,5 @@
 import {
+  MessageFlags,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -22,6 +23,73 @@ import {
   handleMigrateSelect,
 } from "./maintenance";
 import { handleSimPullButton } from "./simulate";
+import { pendingUrlKey, readPending } from "./pending";
+
+export type ComponentOperator = {
+  /** The user who clicked. */
+  clickerId: string;
+  /** Who ran the command that produced the message (Discord's own record). */
+  messageInvokerId?: string | null;
+  /** An invoker id carried in the customId (only on ids built since this check existed). */
+  embeddedInvokerId?: string | null;
+  /** Ephemeral messages are only ever shown to their invoker. */
+  ephemeral?: boolean;
+};
+
+/**
+ * May this click change the message / act on the stored state?
+ * Only the user who invoked the command. The customId's UID or user id are
+ * never proof on their own; Discord's record of who the message was
+ * answering is.
+ */
+export function mayOperateGachaComponent(op: ComponentOperator): boolean {
+  if (op.embeddedInvokerId && op.embeddedInvokerId !== op.clickerId) {
+    return false;
+  }
+  if (op.messageInvokerId) return op.messageInvokerId === op.clickerId;
+  // No record on an old message: an embedded id that matched is enough,
+  // otherwise only an ephemeral message (visible to its invoker alone) is safe.
+  if (op.embeddedInvokerId) return true;
+  return !!op.ephemeral;
+}
+
+/** The invoker Discord recorded on a message (new metadata first, legacy field second). */
+export function getMessageInvokerId(message: any): string | null {
+  const id = message?.interactionMetadata?.user?.id ?? message?.interaction?.user?.id;
+  return id ? String(id) : null;
+}
+
+/** The invoker id a customId carries, for the actions that carry one. */
+export function getEmbeddedInvokerId(parts: string[]): string | null {
+  const pick = (v: string | undefined) =>
+    v && /^\d{15,25}$/.test(v) ? v : null;
+  if (parts[1] === "sim_pull") return pick(parts[2]);
+  if (parts[1] === "log_load_confirm") return pick(parts[3]);
+  return null;
+}
+
+/** Gate for every gacha button / select. Replies (ephemeral) and returns false when refused. */
+async function allowClicker(
+  ctx: GachaContext,
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  parts: string[],
+): Promise<boolean> {
+  const message: any = interaction.message;
+  const ok = mayOperateGachaComponent({
+    clickerId: interaction.user.id,
+    messageInvokerId: getMessageInvokerId(message),
+    embeddedInvokerId: getEmbeddedInvokerId(parts),
+    ephemeral: !!message?.flags?.has?.(MessageFlags.Ephemeral),
+  });
+  if (ok) return true;
+  await interaction
+    .reply({
+      content: ctx.tr("gacha_component_not_yours"),
+      flags: MessageFlags.Ephemeral,
+    })
+    .catch(() => {});
+  return false;
+}
 
 export async function handleGachaSelectMenu(
   ctx: GachaContext,
@@ -33,6 +101,8 @@ export async function handleGachaSelectMenu(
   const parts = customId.split(":");
   const action = parts[1];
   const targetUid = parts[2];
+
+  if (!(await allowClicker(ctx, interaction, parts))) return;
 
   if (action === "log_type") {
     await interaction.deferUpdate();
@@ -94,7 +164,9 @@ export async function handleGachaSelectMenu(
   } else if (action === "log_load_select_target") {
     const selectedUidRaw = interaction.values[0];
     const userId = interaction.user.id;
-    const pendingUrl = await db.get<string>(`PENDING_GACHA_URL_${userId}`);
+    const pendingKey = pendingUrlKey(userId);
+    const pendingUrl = (await readPending<{ url: string }>(db, pendingKey))
+      ?.url;
 
     if (!pendingUrl) {
       // URL expired or missing — show URL input modal again with uid in customId
@@ -118,7 +190,7 @@ export async function handleGachaSelectMenu(
     }
 
     await interaction.deferUpdate();
-    await db.delete(`PENDING_GACHA_URL_${userId}`);
+    await db.delete(pendingKey);
     await doFetchGachaLog(ctx, pendingUrl, selectedUidRaw, userId);
     return;
   }
@@ -138,6 +210,8 @@ export async function handleGachaButton(
   const parts = customId.split(":");
   const action = parts[1];
   const targetUid = parts[2];
+
+  if (!(await allowClicker(ctx, btnInteraction, parts))) return;
 
   if (action === "log_page") {
     await btnInteraction.deferUpdate();

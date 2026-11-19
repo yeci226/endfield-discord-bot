@@ -3,6 +3,148 @@ import { CustomDatabase } from "../../utils/Database";
 import { mapLocaleToLang } from "../../utils/skportApi";
 import { GachaApiError, GachaRecord, isPullFree } from "./gachaTypes";
 
+/** Per-request timeout for every call to the game APIs. */
+export const GACHA_API_TIMEOUT_MS = 15000;
+
+/**
+ * Options added to every axios call here: a hard timeout, and no redirects
+ * (an official host that redirects elsewhere must not carry the token along).
+ */
+const HTTP_OPTIONS = {
+  timeout: GACHA_API_TIMEOUT_MS,
+  maxRedirects: 0,
+} as const;
+
+/** Auth failures are real errors, never "an incomplete import". */
+const AUTH_API_CODES = new Set([40100]);
+
+export const GACHA_GLOBAL_HOST = "ef-webview.gryphline.com";
+export const GACHA_CN_HOST = "ef-webview.hypergryph.com";
+
+/** The only hosts an import URL may point at (exact match, https, default port). */
+export const GACHA_IMPORT_HOSTS: readonly string[] = [
+  GACHA_GLOBAL_HOST,
+  GACHA_CN_HOST,
+];
+
+export type GachaImportRefusal =
+  | "empty"
+  | "invalid_url"
+  | "not_https"
+  | "userinfo"
+  | "port"
+  | "host_not_allowed"
+  | "missing_params"
+  | "bad_server";
+
+export type GachaImportTarget =
+  | { ok: true; kind: "token"; token: string; apiBase: null }
+  | {
+      ok: true;
+      kind: "url";
+      token: string;
+      apiBase: string;
+      host: string;
+      serverId: string;
+      lang: string | null;
+    }
+  | { ok: false; reason: GachaImportRefusal };
+
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
+ * Decides, without any I/O, what an import input is allowed to be:
+ * a bare token, or a URL on one of the two official hosts.
+ * `allowAnyHost` only exists so unit tests of the importers can use fake hosts
+ * with a mocked HTTP layer; production never sets it.
+ */
+export function validateGachaImportUrl(
+  input: string,
+  opts: { allowAnyHost?: boolean } = {},
+): GachaImportTarget {
+  const text = String(input ?? "").trim();
+  if (!text) return { ok: false, reason: "empty" };
+
+  if (!URL_SCHEME.test(text)) {
+    // Bookmarklet method: raw token. May be "part1:part2"; only part1 is used.
+    // decodeURIComponent handles browsers that store URL-encoded tokens.
+    const rawPart = text.split(":")[0].trim();
+    let token = rawPart;
+    try {
+      token = decodeURIComponent(rawPart);
+    } catch {
+      token = rawPart;
+    }
+    if (!token) return { ok: false, reason: "empty" };
+    return { ok: true, kind: "token", token, apiBase: null };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return { ok: false, reason: "invalid_url" };
+  }
+  if (url.protocol !== "https:") return { ok: false, reason: "not_https" };
+  if (url.username || url.password) return { ok: false, reason: "userinfo" };
+  if (url.port) return { ok: false, reason: "port" };
+  if (!opts.allowAnyHost && !GACHA_IMPORT_HOSTS.includes(url.hostname)) {
+    return { ok: false, reason: "host_not_allowed" };
+  }
+
+  const token =
+    url.searchParams.get("token") || url.searchParams.get("u8_token");
+  const serverId =
+    url.searchParams.get("server_id") || url.searchParams.get("server");
+  if (!token || !serverId) return { ok: false, reason: "missing_params" };
+  if (!/^\d{1,3}$/.test(serverId)) return { ok: false, reason: "bad_server" };
+
+  return {
+    ok: true,
+    kind: "url",
+    token,
+    // Built from the validated host, never from the raw input.
+    apiBase: `https://${url.hostname}`,
+    host: url.hostname,
+    serverId,
+    lang: url.searchParams.get("lang"),
+  };
+}
+
+/** Thrown before any request when an import input is not acceptable. */
+export class GachaImportUrlError extends Error {
+  reason: GachaImportRefusal;
+  constructor(reason: GachaImportRefusal) {
+    super(`Import URL refused: ${reason}`);
+    this.name = "GachaImportUrlError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * Unit tests of the importers run against mocked HTTP with fake hosts
+ * (https://example.invalid/...); NODE_ENV=test relaxes only the host check,
+ * unless GACHA_STRICT_IMPORT_HOSTS=1 turns it back on.
+ */
+function importHostCheckRelaxed(): boolean {
+  return (
+    process.env.NODE_ENV === "test" &&
+    process.env.GACHA_STRICT_IMPORT_HOSTS !== "1"
+  );
+}
+
+export type IncompleteFetch = {
+  poolType: string;
+  poolId?: string;
+  reason: string;
+};
+
+export type GachaStopAt = {
+  /** Return true for a record that is already stored: paging stops after this page. */
+  character?: (seqId: string) => boolean;
+  weapon?: (seqId: string) => boolean;
+};
+
 export type RawFetchedGacha = {
   host: string;
   lang: string;
@@ -11,14 +153,95 @@ export type RawFetchedGacha = {
   inferredUid: string;
   characterList: GachaRecord[];
   weaponList: GachaRecord[];
+  /** Parts of the history that could not be fetched. Empty = complete. */
+  incomplete: IncompleteFetch[];
 };
+
+/**
+ * Incomplete-fetch notes keyed by the onProgress callback a caller passed in,
+ * so a caller that only reaches the importer through intermediate layers can
+ * still read them afterwards. Weakly held: nothing to clean up.
+ */
+const incompleteByProgress = new WeakMap<
+  (message: string) => void,
+  IncompleteFetch[]
+>();
+
+export function takeIncompleteFetches(
+  onProgress: ((message: string) => void) | undefined,
+): IncompleteFetch[] {
+  if (!onProgress) return [];
+  const list = incompleteByProgress.get(onProgress) ?? [];
+  incompleteByProgress.delete(onProgress);
+  return list;
+}
+
+export type PageResult = { list: GachaRecord[]; hasMore: boolean };
+
+/**
+ * Pages one pool until the source says there is no more, or until
+ * `stop(seqId)` is true for a record on the page just read (that page is kept
+ * whole). Records go into `out` as each page arrives, so a failure on page N
+ * still leaves pages 1..N-1 in `out`.
+ */
+export async function pagePool(
+  fetchPage: (lastSeqId: string | undefined, page: number) => Promise<PageResult>,
+  out: GachaRecord[],
+  opts: {
+    tag: (item: GachaRecord) => void;
+    stop?: (seqId: string) => boolean;
+    delayMs?: number;
+  },
+): Promise<void> {
+  let lastSeqId: string | undefined = undefined;
+  let page = 1;
+  let hasMore = true;
+  while (hasMore) {
+    const res = await fetchPage(lastSeqId, page);
+    const list = res.list;
+    hasMore = !!res.hasMore;
+    if (list && list.length > 0) {
+      let reachedKnown = false;
+      for (const item of list) {
+        opts.tag(item);
+        out.push(item);
+        if (opts.stop && opts.stop(String(item.seqId))) reachedKnown = true;
+      }
+      lastSeqId = list[list.length - 1].seqId;
+      if (reachedKnown) hasMore = false;
+    }
+    page++;
+    if (hasMore) {
+      await new Promise((resolve) => setTimeout(resolve, opts.delayMs ?? 50));
+    }
+  }
+}
+
+function describeFetchError(e: unknown): string {
+  if (e instanceof GachaApiError) return `code ${e.apiCode}`;
+  const err = e as any;
+  if (err?.code === "ECONNABORTED") return "timeout";
+  if (err?.response?.status) return `http ${err.response.status}`;
+  return String(err?.message || e).slice(0, 80);
+}
+
+function isAuthError(e: unknown): boolean {
+  return e instanceof GachaApiError && AUTH_API_CODES.has(e.apiCode);
+}
 
 export async function fetchRawGachaFromUrl(
   urlStr: string,
   onProgress?: (message: string) => void,
   locale?: string,
+  options?: { stopAt?: GachaStopAt },
 ): Promise<RawFetchedGacha> {
-  const isRawToken = !urlStr.trimStart().startsWith("http");
+  const target = validateGachaImportUrl(urlStr, {
+    allowAnyHost: importHostCheckRelaxed(),
+  });
+  if (!target.ok) throw new GachaImportUrlError(target.reason);
+
+  const stopAt = options?.stopAt;
+  const incomplete: IncompleteFetch[] = [];
 
   let token: string;
   let lang: string;
@@ -27,23 +250,15 @@ export async function fetchRawGachaFromUrl(
   let host: string;
   let inferredUid: string;
 
-  if (isRawToken) {
-    // New bookmarklet method: raw token pasted directly
-    // Token may be full "part1:part2" format — only the first part is needed
-    // decodeURIComponent handles browsers that store URL-encoded tokens in sessionStorage
-    const rawPart = urlStr.split(":")[0].trim();
-    try {
-      token = decodeURIComponent(rawPart);
-    } catch {
-      token = rawPart;
-    }
+  if (target.kind === "token") {
+    token = target.token;
     lang = locale ? mapLocaleToLang(locale) : "en-us";
 
     // Auto-detect server by trying gryphline (global) first, then hypergryph (CN)
     if (onProgress) onProgress("Detecting server region...");
     const domainCandidates = [
-      { domain: "https://ef-webview.gryphline.com", servers: ["3", "2", "1"] },
-      { domain: "https://ef-webview.hypergryph.com", servers: ["1"] },
+      { domain: `https://${GACHA_GLOBAL_HOST}`, servers: ["3", "2", "1"] },
+      { domain: `https://${GACHA_CN_HOST}`, servers: ["1"] },
     ];
 
     let detectedServer: string | null = null;
@@ -53,6 +268,7 @@ export async function fetchRawGachaFromUrl(
       for (const candidate of servers) {
         try {
           const probeRes = await axios.get(`${domain}/api/record/char`, {
+            ...HTTP_OPTIONS,
             params: {
               token,
               lang,
@@ -82,32 +298,16 @@ export async function fetchRawGachaFromUrl(
     apiDomain = detectedDomain;
     host = detectedDomain.replace("https://", "");
     serverId = detectedServer;
-    inferredUid = host.includes("hypergryph")
-      ? `EF_CN_${serverId}`
-      : `EF_${serverId}`;
+    inferredUid = host === GACHA_CN_HOST ? `EF_CN_${serverId}` : `EF_${serverId}`;
   } else {
-    // Legacy URL method (backward compatible)
-    const url = new URL(urlStr);
-    const rawToken =
-      url.searchParams.get("token") || url.searchParams.get("u8_token");
-    const rawServerId =
-      url.searchParams.get("server_id") || url.searchParams.get("server");
-
-    if (!rawToken || !rawServerId) {
-      throw new Error("Invalid URL: Missing token or server_id");
-    }
-
-    token = rawToken;
-    serverId = rawServerId;
-    lang = locale
-      ? mapLocaleToLang(locale)
-      : url.searchParams.get("lang") || "en-us";
-    apiDomain = `${url.protocol}//${url.host}`;
-    host = url.host;
-    inferredUid = `EF_${serverId}`;
-    if (host.includes("hypergryph")) {
-      inferredUid = `EF_CN_${serverId}`;
-    }
+    // Legacy URL method (backward compatible), host already validated
+    token = target.token;
+    serverId = target.serverId;
+    lang = locale ? mapLocaleToLang(locale) : target.lang || "en-us";
+    apiDomain = target.apiBase;
+    host = target.host;
+    inferredUid =
+      host === GACHA_CN_HOST ? `EF_CN_${serverId}` : `EF_${serverId}`;
   }
 
   const characterList: GachaRecord[] = [];
@@ -117,114 +317,169 @@ export async function fetchRawGachaFromUrl(
   const charResults = await Promise.all(
     POOL_TYPES.map(async (poolType) => {
       const records: GachaRecord[] = [];
-      let hasMore = true;
-      let lastSeqId: string | undefined = undefined;
-      let page = 1;
+      try {
+        await pagePool(
+          async (lastSeqId, page) => {
+            if (onProgress)
+              onProgress(
+                `Fetching character records (${poolType}, page ${page})...`,
+              );
 
-      while (hasMore) {
-        if (onProgress)
-          onProgress(
-            `Fetching character records (${poolType}, page ${page})...`,
-          );
+            const res = await axios.get(`${apiDomain}/api/record/char`, {
+              ...HTTP_OPTIONS,
+              params: {
+                token,
+                lang,
+                server_id: serverId,
+                pool_type: poolType,
+                seq_id: lastSeqId,
+              },
+            });
 
-        const res = await axios.get(`${apiDomain}/api/record/char`, {
-          params: {
-            token,
-            lang,
-            server_id: serverId,
-            pool_type: poolType,
-            seq_id: lastSeqId,
+            const data = res.data;
+            if (data.code !== 0) {
+              throw new GachaApiError(
+                data.msg || data.message || "API Error",
+                data.code,
+              );
+            }
+            return {
+              list: (data.data?.list ?? []) as GachaRecord[],
+              hasMore: !!data.data?.hasMore,
+            };
           },
-        });
-
-        const data = res.data;
-        if (data.code !== 0) {
-          throw new GachaApiError(
-            data.msg || data.message || "API Error",
-            data.code,
-          );
-        }
-
-        const list = data.data.list as GachaRecord[];
-        if (list && list.length > 0) {
-          for (const item of list) {
-            item.poolType = poolType;
-            item.isFree = isPullFree(item);
-            records.push(item);
-          }
-          lastSeqId = list[list.length - 1].seqId;
-        }
-        hasMore = data.data.hasMore;
-        page++;
-        await new Promise((resolve) => setTimeout(resolve, 50));
+          records,
+          {
+            tag: (item) => {
+              item.poolType = poolType;
+              item.isFree = isPullFree(item);
+            },
+            stop: stopAt?.character,
+          },
+        );
+        return { records, error: null as unknown };
+      } catch (e) {
+        if (isAuthError(e)) throw e;
+        return { records, error: e };
       }
-
-      return records;
     }),
   );
 
-  for (const records of charResults) {
+  for (let i = 0; i < charResults.length; i++) {
+    const { records, error } = charResults[i];
     characterList.push(...records);
+    if (error) {
+      incomplete.push({
+        poolType: POOL_TYPES[i],
+        reason: describeFetchError(error),
+      });
+    }
+  }
+  // Every character pool failing is a failed import, not a partial one.
+  if (incomplete.length === POOL_TYPES.length) {
+    const firstError = charResults.find((r) => r.error)!.error;
+    throw firstError instanceof Error
+      ? firstError
+      : new Error(describeFetchError(firstError));
   }
 
   if (onProgress) onProgress("Fetching weapon pools...");
-  const wpRes = await axios.get(`${apiDomain}/api/record/weapon/pool`, {
-    params: { lang, token, server_id: serverId },
-  });
+  let weaponPools: any[] = [];
+  try {
+    const wpRes = await axios.get(`${apiDomain}/api/record/weapon/pool`, {
+      ...HTTP_OPTIONS,
+      params: { lang, token, server_id: serverId },
+    });
+    if (wpRes.data.code === 0 && Array.isArray(wpRes.data.data)) {
+      weaponPools = wpRes.data.data;
+    } else {
+      const code = Number(wpRes.data.code);
+      if (AUTH_API_CODES.has(code)) {
+        throw new GachaApiError(
+          wpRes.data.msg || wpRes.data.message || "API Error",
+          code,
+        );
+      }
+      incomplete.push({
+        poolType: "WeaponPool",
+        reason: `pool list: code ${wpRes.data.code}`,
+      });
+    }
+  } catch (e) {
+    if (isAuthError(e)) throw e;
+    incomplete.push({
+      poolType: "WeaponPool",
+      reason: `pool list: ${describeFetchError(e)}`,
+    });
+  }
 
-  if (wpRes.data.code === 0) {
-    const weaponPools = wpRes.data.data;
+  // Fetch all weapon pools in parallel
+  const weaponResults = await Promise.all(
+    weaponPools.map(async (pool: any) => {
+      const records: GachaRecord[] = [];
+      const poolId = pool.poolId;
+      const poolName = pool.poolName;
+      try {
+        await pagePool(
+          async (lastSeqId, page) => {
+            if (onProgress)
+              onProgress(
+                `Fetching weapon records (${poolName}, page ${page})...`,
+              );
 
-    // Fetch all weapon pools in parallel
-    const weaponResults = await Promise.all(
-      weaponPools.map(async (pool: any) => {
-        const records: GachaRecord[] = [];
-        const poolId = pool.poolId;
-        const poolName = pool.poolName;
-        let hasMore = true;
-        let lastSeqId: string | undefined = undefined;
-        let page = 1;
+            const res = await axios.get(`${apiDomain}/api/record/weapon`, {
+              ...HTTP_OPTIONS,
+              params: {
+                token,
+                lang,
+                server_id: serverId,
+                pool_id: poolId,
+                seq_id: lastSeqId,
+              },
+            });
 
-        while (hasMore) {
-          if (onProgress)
-            onProgress(
-              `Fetching weapon records (${poolName}, page ${page})...`,
-            );
-
-          const res = await axios.get(`${apiDomain}/api/record/weapon`, {
-            params: {
-              token,
-              lang,
-              server_id: serverId,
-              pool_id: poolId,
-              seq_id: lastSeqId,
-            },
-          });
-
-          const data = res.data;
-          if (data.code !== 0) break;
-
-          const list = data.data.list as GachaRecord[];
-          if (list && list.length > 0) {
-            for (const item of list) {
+            const data = res.data;
+            if (data.code !== 0) {
+              throw new GachaApiError(
+                data.msg || data.message || "API Error",
+                data.code,
+              );
+            }
+            return {
+              list: (data.data?.list ?? []) as GachaRecord[],
+              hasMore: !!data.data?.hasMore,
+            };
+          },
+          records,
+          {
+            tag: (item) => {
               item.poolType = "WeaponPool";
               item.isFree = isPullFree(item);
-              records.push(item);
-            }
-            lastSeqId = list[list.length - 1].seqId;
-          }
-          hasMore = data.data.hasMore;
-          page++;
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
+            },
+            stop: stopAt?.weapon,
+          },
+        );
+        return { records, poolId: String(poolId), error: null as unknown };
+      } catch (e) {
+        if (isAuthError(e)) throw e;
+        return { records, poolId: String(poolId), error: e };
+      }
+    }),
+  );
 
-        return records;
-      }),
-    );
-
-    for (const records of weaponResults) {
-      weaponList.push(...records);
+  for (const { records, poolId, error } of weaponResults) {
+    weaponList.push(...records);
+    if (error) {
+      incomplete.push({
+        poolType: "WeaponPool",
+        poolId,
+        reason: describeFetchError(error),
+      });
     }
+  }
+
+  if (onProgress && incomplete.length > 0) {
+    incompleteByProgress.set(onProgress, incomplete);
   }
 
   return {
@@ -235,6 +490,7 @@ export async function fetchRawGachaFromUrl(
     inferredUid,
     characterList,
     weaponList,
+    incomplete,
   };
 }
 
@@ -259,7 +515,7 @@ export async function getEndfieldU8Token(
   const oauthRes = await axios.post(
     `https://as.${provider}.com/user/oauth2/v2/grant`,
     { type: 1, appCode, token: accountToken },
-    { headers: { "Content-Type": "application/json" } },
+    { ...HTTP_OPTIONS, headers: { "Content-Type": "application/json" } },
   );
   if (oauthRes.data?.status !== 0) {
     throw new GachaApiError(
@@ -274,7 +530,7 @@ export async function getEndfieldU8Token(
   const u8Res = await axios.post(
     `https://binding-api-account-prod.${provider}.com/account/binding/v1/u8_token_by_uid`,
     { uid, token: oauthToken },
-    { headers: { "Content-Type": "application/json" } },
+    { ...HTTP_OPTIONS, headers: { "Content-Type": "application/json" } },
   );
   const u8Status = u8Res.data?.status ?? u8Res.data?.code;
   if (u8Status !== undefined && u8Status !== 0) {
@@ -319,7 +575,8 @@ export async function getPoolMetadata(
 
   try {
     const res = await axios.get(
-      `https://ef-webview.gryphline.com/api/content?lang=${resolvedLang}&pool_id=${poolId}&server_id=${resolvedServerId}`,
+      `https://${GACHA_GLOBAL_HOST}/api/content?lang=${resolvedLang}&pool_id=${poolId}&server_id=${resolvedServerId}`,
+      HTTP_OPTIONS,
     );
     if (res.data?.code === 0 && res.data?.data?.pool) {
       const poolData = res.data.data.pool;
@@ -334,4 +591,4 @@ export async function getPoolMetadata(
   }
 
   return null;
-}
+}
