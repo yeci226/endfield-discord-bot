@@ -3,10 +3,17 @@ import {
   deliverCardMessage,
 } from "../utils/cardNotification";
 import { ExtendedClient } from "../structures/Client";
-import { formatSkGameRole, getGamePlayerBinding } from "../utils/skportApi";
+import {
+  formatSkGameRole,
+  getGamePlayerBinding,
+  isTransientFailure,
+  RequestFailure,
+} from "../utils/skportApi";
 import {
   ensureAccountBinding,
   getAccounts,
+  normalizeBindingEntries,
+  wasRefreshInconclusive,
   withAutoRefresh,
 } from "../utils/accountUtils";
 import { accountId, patchAccount } from "../utils/accountData";
@@ -28,11 +35,15 @@ import {
   AttendanceKind,
   AutoDailyState,
   classifyAttendance,
+  isExpiryConfirmed,
   isTokenExpiredError,
+  isTransientError,
+  MAX_EXPIRED_DMS_PER_TICK,
   nextAutoDailyState,
   nextHourStart,
   planAutoDaily,
   RunSummary,
+  shouldStartAnotherUser,
   taipeiDate,
   taipeiHour,
 } from "./autoDailyPlan";
@@ -92,6 +103,11 @@ export class AutoDailyService {
   private cardCache = new Map<string, { buffer: Buffer; expireAt: number }>();
   private readonly CARD_CACHE_TTL_MS = 10 * 60 * 1000;
   private readonly CARD_CACHE_MAX_SIZE = 50;
+  /** Clock seam (tests replace it). */
+  public now: () => number = () => Date.now();
+  /** "Login expired" DMs of the current tick (see MAX_EXPIRED_DMS_PER_TICK). */
+  private tickExpiredSent = 0;
+  private tickExpiredDeferred = 0;
 
   private parseHourCandidates(value: unknown): number[] {
     const toHour = (raw: unknown): number | null => {
@@ -196,11 +212,12 @@ export class AutoDailyService {
   public async start() {
     if (this.interval) return;
 
-    // Immediately run check for current hour to catch missed tasks during restart
-    await this.runHourlyCheck();
-
+    // Schedule the next tick first: a long start-up check must not push the hourly tick back.
     this.scheduleNextRun();
     this.logger.success("Service started.");
+
+    // Immediately run check for current hour to catch missed tasks during restart
+    await this.runHourlyCheck();
   }
 
   public stop() {
@@ -238,7 +255,10 @@ export class AutoDailyService {
     if (targetHour === undefined) this.isRunning = true;
 
     try {
-      const nowMs = Date.now();
+      const tickStartedAt = this.now();
+      this.tickExpiredSent = 0;
+      this.tickExpiredDeferred = 0;
+      const nowMs = tickStartedAt;
       const today = taipeiDate(nowMs);
       const currentHour =
         targetHour !== undefined ? targetHour : taipeiHour(nowMs);
@@ -299,9 +319,26 @@ export class AutoDailyService {
 
       this.logger.info(`Found ${eligibleUsers.length} users for this hour.`);
 
-      for (const { userId, config } of eligibleUsers) {
-        await this.processUser(userId, config, currentHour);
+      for (let idx = 0; idx < eligibleUsers.length; idx++) {
+        // A regular tick stops starting users after its budget; the `>=` catch-up rule of the
+        // planner hands the rest to the next tick.
+        if (
+          targetHour === undefined &&
+          !shouldStartAnotherUser(tickStartedAt, this.now())
+        ) {
+          this.logger.warn(
+            `Tick budget used up: ${eligibleUsers.length - idx} of ${eligibleUsers.length} users left for the next tick.`,
+          );
+          break;
+        }
+        const { userId, config } = eligibleUsers[idx];
+        // No hour for a regular tick: processUser reads the Taipei hour when it actually runs,
+        // not the one this tick started in. Only a manual range names its hour.
+        await this.processUser(userId, config, targetHour);
       }
+      this.logger.info(
+        `Expired-login DMs this tick: ${this.tickExpiredSent} sent, ${this.tickExpiredDeferred} deferred (cap ${MAX_EXPIRED_DMS_PER_TICK}).`,
+      );
 
       // 簽到任務完成後手動觸發垃圾回收 (GC)
       if (typeof global.gc === "function") {
@@ -376,8 +413,9 @@ export class AutoDailyService {
   ) {
     const db = this.client.db;
     try {
-      const nowMs = Date.now();
+      const nowMs = this.now();
       const today = taipeiDate(nowMs);
+      // Read now, when this user's turn actually comes (a tick can run for most of an hour).
       const hr = hour ?? taipeiHour(nowMs);
       // One run per user per hour, even if two primaries overlap (graceful recluster can
       // briefly run two cluster-0s). Whether today is finished is tracked separately in
@@ -410,6 +448,14 @@ export class AutoDailyService {
         attempts,
         nextAttemptAt: nextHourStart(nowMs),
         ...(prev?.lastError ? { lastError: prev.lastError } : {}),
+        ...(prev?.expiredSeen
+          ? {
+              expiredSeen: prev.expiredSeen,
+              ...(typeof prev.expiredSeenAt === "number"
+                ? { expiredSeenAt: prev.expiredSeenAt }
+                : {}),
+            }
+          : {}),
       } satisfies AutoDailyState);
 
       const accounts = await getAccounts(db, userId);
@@ -422,6 +468,7 @@ export class AutoDailyService {
         signed: 0,
         already: 0,
         error: 0,
+        permanentError: 0,
         tokenExpiredPending: 0,
         tokenExpiredConfirmed: 0,
       };
@@ -435,44 +482,66 @@ export class AutoDailyService {
       const userLang = (await db.get(`${userId}.locale`)) || "tw";
       const tr = createTranslator(userLang);
 
-      const markExpired = (account: any, wasInvalid: boolean) => {
-        // Seen dead on entry and still dead: confirmed. A first sighting could be an SKPort
-        // outage (all recovery steps fail on network errors too), so confirm next hour.
-        if (wasInvalid) {
+      // A dead login is confirmed only when it is seen dead again at least 30 minutes after
+      // the first sighting of this run chain (`expiredSeen` in autoDailyState). The stored
+      // `invalid` flag is NOT a confirmation: another command may have set it during an outage.
+      const prevSeen: Record<string, number> = prev?.expiredSeen ?? {};
+      const seenNow: Record<string, number> = {};
+      const expiredHandled = new Set<any>();
+      const unknownHandled = new Set<any>();
+      const markExpired = (account: any) => {
+        if (expiredHandled.has(account)) return;
+        expiredHandled.add(account);
+        const id = accountId(account) || String(accounts.indexOf(account));
+        const seenAt = prevSeen[id];
+        if (isExpiryConfirmed(seenAt, this.now())) {
           summary.tokenExpiredConfirmed++;
           if (!confirmedExpired.includes(account)) confirmedExpired.push(account);
         } else {
           summary.tokenExpiredPending++;
+          seenNow[id] = seenAt ?? this.now();
         }
+      };
+      /**
+       * The login of this account is not usable. If the refresh could not tell (network error,
+       * timeout, 5xx/429), that is a transient error: no sighting, retry next hour.
+       */
+      const loginFailure = (account: any, i: number, name: string) => {
+        if (wasRefreshInconclusive(account)) {
+          results.push({
+            ...this.makeErrorResult(name, tr("Error")),
+            kind: "error",
+            accountIdx: i,
+          });
+          if (!unknownHandled.has(account)) {
+            unknownHandled.add(account);
+            summary.error++;
+            lastError = "login check inconclusive (SKPort unreachable?)";
+          }
+          return;
+        }
+        this.logger.warn(
+          `Unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
+        );
+        results.push({
+          ...this.makeErrorResult(name, tr("TokenExpired")),
+          kind: "token_expired",
+          accountIdx: i,
+        });
+        markExpired(account);
       };
 
       for (let i = 0; i < accounts.length; i++) {
         const account = accounts[i];
-        const wasInvalid = !!account.invalid;
 
         try {
           // Always attempt account validation/recovery, even if previously marked invalid.
           // ensureAccountBinding will try all 3 refresh steps and clear the invalid flag if successful.
           await ensureAccountBinding(account, userId, db, tr.lang);
 
-          const expiredResult = () => {
-            this.logger.warn(
-              `Unrecoverable account for user ${userId}: ${account.info?.nickname} (${account.info?.id})`,
-            );
-            results.push({
-              ...this.makeErrorResult(
-                account.info?.nickname || "Unknown",
-                tr("TokenExpired"),
-              ),
-              kind: "token_expired",
-              accountIdx: i,
-            });
-            markExpired(account, wasInvalid);
-          };
-
           if (account.invalid) {
-            // Still invalid after recovery attempt — token is truly expired
-            expiredResult();
+            // Still invalid after the recovery attempt: dead, or (outage) not known.
+            loginFailure(account, i, account.info?.nickname || "Unknown");
             continue;
           }
 
@@ -513,19 +582,28 @@ export class AutoDailyService {
           // Re-check invalid flag: the getGamePlayerBinding onStale may have
           // exhausted all refresh steps and marked the account invalid.
           if (account.invalid) {
-            expiredResult();
+            loginFailure(account, i, account.info?.nickname || "Unknown");
             continue;
           }
 
-          // Fallback: if the configured scope filtered out all roles (e.g. user has
-          // only Endfield chars but scope was saved as "arknights"), retry with "both".
+          // Fallback: the scope was saved wrong (e.g. user has only Endfield chars but scope
+          // is "arknights"): widen to "both", but only when the account has no binding at all
+          // for the scoped game. A binding without a role (176 Endfield bindings in production)
+          // is "no role", not a reason to sign another game the user did not ask for.
           if (roles.length === 0 && gameScope !== "both") {
-            const bothIds = gameIdsForScope("both");
-            const fallbackLive = normalizeBindingRoles(liveBindings, bothIds);
-            roles =
-              fallbackLive.length > 0
-                ? fallbackLive
-                : normalizeBindingRoles(account.roles, bothIds);
+            const scopeIds = gameIdsForScope(gameScope);
+            const hasScopedBinding = [
+              ...normalizeBindingEntries(account.roles),
+              ...normalizeBindingEntries(liveBindings),
+            ].some((b) => scopeIds.includes(Number(b?.gameId)));
+            if (!hasScopedBinding) {
+              const bothIds = gameIdsForScope("both");
+              const fallbackLive = normalizeBindingRoles(liveBindings, bothIds);
+              roles =
+                fallbackLive.length > 0
+                  ? fallbackLive
+                  : normalizeBindingRoles(account.roles, bothIds);
+            }
           }
 
           if (roles.length === 0) {
@@ -550,6 +628,12 @@ export class AutoDailyService {
             if (processedRoles.has(gameRoleStr)) continue;
             processedRoles.add(gameRoleStr);
 
+            // Every failed request of this role, to tell a transient failure (network, timeout,
+            // 5xx, 429: retry) from a permanent one (anything else).
+            const failures: RequestFailure[] = [];
+            const onError = (failure: RequestFailure) => {
+              failures.push(failure);
+            };
             try {
               const res: any = await withAutoRefresh(
                 this.client,
@@ -565,13 +649,17 @@ export class AutoDailyService {
                     s,
                     true,
                     tr,
-                    opt,
+                    { ...opt, onError },
                   ),
                 tr.lang,
               );
 
               if (res) {
-                const kind = classifyAttendance(res);
+                let kind = classifyAttendance(res);
+                // A 401 whose recovery could not be judged (outage) is not a dead login.
+                const loginUnknown =
+                  kind === "token_expired" && wasRefreshInconclusive(account);
+                if (loginUnknown) kind = "error";
                 const isArknights = Number(gameId) === 1;
                 const roleName = `${res.nickname ?? role.nickname}`;
                 const roleMeta = isArknights
@@ -586,10 +674,14 @@ export class AutoDailyService {
                   summary.already++;
                   status = tr("daily_StatusAlready");
                 } else if (kind === "token_expired") {
-                  markExpired(account, wasInvalid);
+                  markExpired(account);
                   status = tr("TokenExpired");
                 } else {
-                  summary.error++;
+                  if (loginUnknown || failures.some(isTransientFailure)) {
+                    summary.error++;
+                  } else {
+                    summary.permanentError = (summary.permanentError ?? 0) + 1;
+                  }
                   // The real reason, never "already signed".
                   status = String(res.message || tr("Error"));
                   lastError = status.slice(0, 200);
@@ -628,7 +720,9 @@ export class AutoDailyService {
               this.logger.error(
                 `Error processing role ${gameRoleStr} for user ${userId}: ${roleError}`,
               );
-              const dead = isTokenExpiredError(roleError);
+              const tokenError = isTokenExpiredError(roleError);
+              // An outage during recovery is not a dead login.
+              const dead = tokenError && !wasRefreshInconclusive(account);
               results.push({
                 ...this.makeErrorResult(
                   role.nickname || "Unknown",
@@ -638,9 +732,17 @@ export class AutoDailyService {
                 accountIdx: i,
               });
               if (dead) {
-                markExpired(account, wasInvalid);
+                markExpired(account);
               } else {
-                summary.error++;
+                if (
+                  tokenError ||
+                  failures.some(isTransientFailure) ||
+                  isTransientError(roleError)
+                ) {
+                  summary.error++;
+                } else {
+                  summary.permanentError = (summary.permanentError ?? 0) + 1;
+                }
                 lastError =
                   roleError instanceof Error
                     ? roleError.message.slice(0, 200)
@@ -669,16 +771,17 @@ export class AutoDailyService {
       }
 
       this.logger.info(
-        `Finished auto-daily for user ${userId} (attempt ${attempts}). Result: ${summary.signed} success, ${summary.already} already signed, ${summary.error} failed, ${summary.tokenExpiredPending + summary.tokenExpiredConfirmed} token expired.`,
+        `Finished auto-daily for user ${userId} (attempt ${attempts}). Result: ${summary.signed} success, ${summary.already} already signed, ${summary.error + (summary.permanentError ?? 0)} failed, ${summary.tokenExpiredPending + summary.tokenExpiredConfirmed} token expired.`,
       );
 
       // Today is marked done only after every role signed or was already signed.
       const finalState = nextAutoDailyState(
         today,
-        Date.now(),
+        this.now(),
         attempts,
         summary,
         lastError,
+        seenNow,
       );
       await db.set(stateKey, finalState);
       if (finalState.status === "done") {
@@ -688,12 +791,22 @@ export class AutoDailyService {
       const terminal = finalState.status !== "retry";
 
       // Dead tokens: tell the user once per expiry, whatever `notify` says.
+      // At most MAX_EXPIRED_DMS_PER_TICK per tick (day one has hundreds of such accounts). Over
+      // the cap nothing is sent and the flag stays unset: the day ends quietly as failed and
+      // the account is picked up again on a later day.
       const toldAboutExpiry = new Set<any>();
+      const quietExpired = new Set<any>();
       for (const account of confirmedExpired) {
         if (account.tokenExpiredNotified) {
           toldAboutExpiry.add(account);
           continue;
         }
+        if (this.tickExpiredSent >= MAX_EXPIRED_DMS_PER_TICK) {
+          this.tickExpiredDeferred++;
+          quietExpired.add(account);
+          continue;
+        }
+        this.tickExpiredSent++;
         if (await this.notifyTokenExpired(userId, account, tr))
           toldAboutExpiry.add(account);
       }
@@ -715,12 +828,21 @@ export class AutoDailyService {
               accountGroups.set(accountIdx, []);
             accountGroups.get(accountIdx)!.push({ res, idx });
           } else {
-            if (attempts > 1 && !terminal) continue;
-            if (
-              res.kind === "token_expired" &&
-              toldAboutExpiry.has(accounts[accountIdx])
-            )
+            if (res.kind === "token_expired") {
+              // The one-time DM covers it; a line only when that DM could not be sent
+              // (never for a deferred account: that is quiet on purpose).
+              const acc = accounts[accountIdx];
+              if (
+                !confirmedExpired.includes(acc) ||
+                toldAboutExpiry.has(acc) ||
+                quietExpired.has(acc)
+              )
+                continue;
+            } else if (!terminal) {
+              // A failure that will be retried stays quiet: users hear about success, or
+              // about a failure once the day's outcome is final.
               continue;
+            }
             errorLines.push(`- ${res.roleName}: ${res.status}`);
           }
         }

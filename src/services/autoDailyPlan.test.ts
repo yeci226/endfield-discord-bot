@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import {
   AutoDailyState,
   classifyAttendance,
+  EXPIRED_CONFIRM_MS,
+  isExpiryConfirmed,
+  isRolloverCatchUp,
   isTokenExpiredError,
+  isTransientError,
   MAX_AUTO_DAILY_ATTEMPTS,
+  MAX_EXPIRED_DMS_PER_TICK,
+  shouldStartAnotherUser,
+  TICK_BUDGET_MS,
   nextAutoDailyState,
   nextHourStart,
   planAutoDaily,
@@ -97,16 +104,70 @@ const cases: Array<[string, string, number, AutoDailyState | null, "run" | "skip
     "skip",
   ],
   [
-    "23:00 user failed late, after midnight the new day takes over (not a retry of yesterday)",
+    "23:00 user failed late: yesterday is unfinished, one catch-up attempt for the new day at once",
     "2026-11-20 00:00",
     23,
     st({ attempts: 1, nextAttemptAt: tpe("2026-11-20 00:00") }),
-    "skip", // hour 0 < 23: nothing until 23:00 on the new day
+    "run",
   ],
+  // day rollover catch-up
+  ["hour-23 user not reached yesterday (state two days old) runs at 00:xx", "2026-11-20 00:10", 23, st({ date: "2026-11-18", status: "done" }), "run"],
+  ["hour-23 user done yesterday waits for 23:00 today", "2026-11-20 00:10", 23, st({ date: "2026-11-19", status: "done" }), "skip"],
+  ["hour-23 user failed yesterday (final) waits too", "2026-11-20 00:10", 23, st({ date: "2026-11-19", status: "failed" }), "skip"],
+  ["hour-23 user done yesterday runs at 23:00 today", "2026-11-20 23:00", 23, st({ date: "2026-11-19", status: "done" }), "run"],
+  ["no state at all is not a catch-up (new user / first tick after rollout)", "2026-11-20 00:10", 23, null, "skip"],
+  ["catch-up window is the first hours only", "2026-11-20 03:00", 23, st({ date: "2026-11-18", status: "done" }), "skip"],
+  ["last hour of the window", "2026-11-20 02:59", 23, st({ date: "2026-11-18", status: "done" }), "run"],
+  [
+    "after a catch-up that failed, the normal hour gate applies (next at 23:00)",
+    "2026-11-20 01:00",
+    23,
+    st({ date: "2026-11-20", attempts: 1, nextAttemptAt: tpe("2026-11-20 01:00") }),
+    "skip",
+  ],
+  [
+    "...and at 23:00 it retries as attempt 2",
+    "2026-11-20 23:00",
+    23,
+    st({ date: "2026-11-20", attempts: 1, nextAttemptAt: tpe("2026-11-20 01:00") }),
+    "run",
+  ],
+  ["a catch-up that succeeded counts as done: no second sign at 23:00", "2026-11-20 23:00", 23, st({ date: "2026-11-20", status: "done" }), "skip"],
+  ["any hour: unfinished yesterday runs at 00:xx", "2026-11-20 00:10", 13, st({ date: "2026-11-19", status: "retry" }), "run"],
+  ["hour 0 user is not affected", "2026-11-20 00:10", 0, st({ date: "2026-11-19", status: "done" }), "run"],
 ];
 for (const [name, now, time, state, expected] of cases) {
   assert.equal(planAutoDaily(tpe(now), { time }, state), expected, name);
 }
+
+assert.equal(isRolloverCatchUp(tpe("2026-11-20 00:10"), st({ date: "2026-11-19", status: "retry" })), true);
+assert.equal(isRolloverCatchUp(tpe("2026-11-20 00:10"), undefined), false);
+
+// constants named by the requirements
+assert.equal(MAX_EXPIRED_DMS_PER_TICK, 40);
+assert.equal(EXPIRED_CONFIRM_MS, 30 * 60 * 1000);
+assert.equal(TICK_BUDGET_MS, 50 * 60 * 1000);
+
+// expiry confirmation needs a first sighting at least 30 minutes old
+assert.equal(isExpiryConfirmed(undefined, tpe("2026-11-19 14:00")), false);
+assert.equal(isExpiryConfirmed(tpe("2026-11-19 13:31"), tpe("2026-11-19 14:00")), false);
+assert.equal(isExpiryConfirmed(tpe("2026-11-19 13:30"), tpe("2026-11-19 14:00")), true);
+
+// tick budget
+assert.equal(shouldStartAnotherUser(tpe("2026-11-19 13:00"), tpe("2026-11-19 13:49")), true);
+assert.equal(shouldStartAnotherUser(tpe("2026-11-19 13:00"), tpe("2026-11-19 13:50")), false);
+
+// transient vs permanent thrown errors
+for (const e of [
+  Object.assign(new Error("x"), { code: "ECONNABORTED" }),
+  Object.assign(new Error("x"), { code: "ECONNRESET" }),
+  new Error("timeout of 15000ms exceeded"),
+  { response: { status: 503 } },
+  { response: { status: 429 } },
+])
+  assert.equal(isTransientError(e), true, JSON.stringify(e));
+for (const e of [new Error("boom"), { response: { status: 400 } }, { response: { status: 403 } }, null, undefined])
+  assert.equal(isTransientError(e), false);
 
 // classifyAttendance
 assert.equal(classifyAttendance({ signedNow: true, hasToday: true }), "signed");
@@ -167,5 +228,40 @@ assert.equal(
   "retry",
   "a real error alongside a dead token still retries",
 );
+
+// permanent errors are not retried
+assert.deepEqual(
+  nextAutoDailyState("2026-11-19", now, 1, { ...zero, permanentError: 1 }, "HTTP 400"),
+  { date: "2026-11-19", status: "failed", attempts: 1, lastError: "HTTP 400" },
+);
+assert.equal(
+  nextAutoDailyState("2026-11-19", now, 1, { ...zero, signed: 1, permanentError: 1 }, "x").status,
+  "failed",
+  "a permanent error with nothing left to retry ends the day",
+);
+assert.equal(
+  nextAutoDailyState("2026-11-19", now, 1, { ...zero, permanentError: 1, error: 1 }, "x").status,
+  "retry",
+  "a transient error next to a permanent one still gets its retry",
+);
+
+// a pending dead login is re-checked after >= 30 minutes; a transient error at the next hour
+{
+  const seen = { a1: tpe("2026-11-19 13:10") };
+  const p = nextAutoDailyState("2026-11-19", tpe("2026-11-19 13:10"), 1, { ...zero, tokenExpiredPending: 1 }, undefined, seen);
+  assert.equal(p.nextAttemptAt, tpe("2026-11-19 14:00"));
+  assert.deepEqual(p.expiredSeen, seen);
+  assert.equal(p.expiredSeenAt, tpe("2026-11-19 13:10"));
+  const late = nextAutoDailyState("2026-11-19", tpe("2026-11-19 13:45"), 1, { ...zero, tokenExpiredPending: 1 }, undefined, { a1: tpe("2026-11-19 13:45") });
+  assert.equal(late.nextAttemptAt, tpe("2026-11-19 15:00"), "never closer than 30 minutes to the first sighting");
+  const mixed = nextAutoDailyState("2026-11-19", tpe("2026-11-19 13:45"), 1, { ...zero, tokenExpiredPending: 1, error: 1 }, "x", { a1: tpe("2026-11-19 13:45") });
+  assert.equal(mixed.nextAttemptAt, tpe("2026-11-19 14:00"), "a transient error does not wait");
+  assert.equal(nextAutoDailyState("2026-11-19", now, 1, { ...zero, error: 1 }, "x").expiredSeen, undefined);
+  assert.equal(
+    nextAutoDailyState("2026-11-19", now, 2, { ...zero, tokenExpiredConfirmed: 1 }, undefined, seen).expiredSeen,
+    undefined,
+    "a finished day keeps no sighting",
+  );
+}
 
 console.log("autoDailyPlan checks passed");
