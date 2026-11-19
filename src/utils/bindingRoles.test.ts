@@ -6,6 +6,10 @@ import {
   resolveEndfieldTarget,
   getPrimaryBindingRoleForGame,
   normalizeBindingRoles,
+  findRoleByKey,
+  listEndfieldRoles,
+  roleKey,
+  roleSelectOptions,
 } from "./bindingRoles";
 
 assert.equal(ENDFIELD_GAME_ID, 3);
@@ -72,29 +76,43 @@ function legacyArknightsRole(entry: any) {
   assert.deepEqual(normalizeBindingRoles([onlyNick], [1]), []);
 }
 
-// --- Endfield: roles [] + defaultRole null -> synthesized from the binding -----
+// --- Endfield: roles [] + defaultRole null -> NO role (2026-11-19 production measurement:
+// binding.uid !== roles[0].roleId in all 7,216 role-bearing bindings, so a role built from
+// the binding would send a wrong roleId/serverId).
 {
-  const ef = normalizeBindingRoles(productionBindings, [3]);
-  assert.equal(ef.length, 1);
-  assert.equal(ef[0].gameId, 3);
-  assert.equal(ef[0].roleId, "837903459");
-  assert.equal(ef[0].serverId, "6");
-  assert.equal(ef[0].nickname, "837903459", "falls back to uid when nickName is empty");
-  assert.equal(ef[0].channelMasterId, "6");
-  assert.equal(ef[0].synthesized, true);
-  assert.equal((ef[0].raw as any).serverName, "官服");
-  assert.equal((ef[0].raw as any).level, 0);
+  assert.deepEqual(normalizeBindingRoles(productionBindings, [3]), []);
+  assert.equal(getPrimaryBindingRoleForGame(productionBindings, 3), null);
+  // nickName present does not change that
+  assert.deepEqual(
+    normalizeBindingRoles([{ ...productionBindings[1], nickName: "Someone" }], [3]),
+    [],
+  );
+  // a defaultRole is still honoured
+  assert.equal(
+    getPrimaryBindingRoleForGame([{ ...productionBindings[1], defaultRole: { roleId: "d", serverId: "2" } }], 3)?.roleId,
+    "d",
+  );
 }
+
+// Mixed AK-first account whose Endfield binding has a real role.
+const efRole = { roleId: "6600112233", serverId: "2", nickname: "Endmin", level: 30, serverName: "Asia" };
+const mixedBindings = [productionBindings[0], { ...productionBindings[1], roles: [efRole] }];
 
 // --- Mixed AK-first account: gameId filter decides ---------------------------
 {
-  assert.equal(getPrimaryBindingRoleForGame(productionBindings, 3)?.gameId, 3);
-  assert.equal(getPrimaryBindingRoleForGame(productionBindings, 3)?.roleId, "837903459");
-  assert.equal(getPrimaryBindingRoleForGame(productionBindings, 1)?.roleId, "515336528");
+  assert.equal(getPrimaryBindingRoleForGame(mixedBindings, 3)?.gameId, 3);
+  assert.equal(getPrimaryBindingRoleForGame(mixedBindings, 3)?.roleId, "6600112233");
+  assert.equal(getPrimaryBindingRoleForGame(mixedBindings, 3)?.bindingUid, "837903459");
+  assert.equal(getPrimaryBindingRoleForGame(mixedBindings, 1)?.roleId, "515336528");
   // order of output follows the order of the bindings, not of gameIds
   assert.deepEqual(
-    normalizeBindingRoles(productionBindings, [3, 1]).map((r) => r.gameId),
+    normalizeBindingRoles(mixedBindings, [3, 1]).map((r) => r.gameId),
     [1, 3],
+  );
+  // `both` with only the Arknights role present yields just that one
+  assert.deepEqual(
+    normalizeBindingRoles(productionBindings, [1, 3]).map((r) => r.gameId),
+    [1],
   );
 }
 
@@ -171,8 +189,8 @@ function legacyArknightsRole(entry: any) {
 
 // --- SKPort app wrapper (bindingList) is flattened ---------------------------
 {
-  const wrapped = [{ appCode: "skport", bindingList: productionBindings }];
-  assert.equal(getPrimaryBindingRoleForGame(wrapped, 3)?.roleId, "837903459");
+  const wrapped = [{ appCode: "skport", bindingList: mixedBindings }];
+  assert.equal(getPrimaryBindingRoleForGame(wrapped, 3)?.roleId, "6600112233");
   assert.equal(getPrimaryBindingRoleForGame(wrapped, 1)?.roleId, "515336528");
 }
 
@@ -192,7 +210,8 @@ assert.deepEqual(gameIdsForScope("both"), [1, 3]);
 // --- resolveEndfieldTarget: zero accounts, Arknights-only, picker -----------------
 {
   const akOnly = { info: { id: "ak" }, roles: [productionBindings[0]] };
-  const both = { info: { id: "both" }, roles: productionBindings };
+  const both = { info: { id: "both" }, roles: mixedBindings };
+  const efNoRole = { info: { id: "efnr" }, roles: [productionBindings[1]] };
   assert.deepEqual(resolveEndfieldTarget([]), { ok: false, reason: "no_account" });
   assert.deepEqual(resolveEndfieldTarget(null), { ok: false, reason: "no_account" });
   assert.deepEqual(resolveEndfieldTarget([akOnly]), { ok: false, reason: "no_endfield_role" });
@@ -201,10 +220,71 @@ assert.deepEqual(gameIdsForScope("both"), [1, 3]);
   assert.deepEqual(resolveEndfieldTarget([akOnly, both], -1), { ok: false, reason: "account_not_found" });
   assert.deepEqual(resolveEndfieldTarget([akOnly, both], 1.5), { ok: false, reason: "account_not_found" });
   const auto = resolveEndfieldTarget([akOnly, both]);
-  assert.ok(auto.ok && auto.accountIndex === 1 && auto.role.roleId === "837903459");
+  assert.ok(auto.ok && auto.accountIndex === 1 && auto.role.roleId === "6600112233");
+  // an account bound to Endfield without any role has no Endfield role
+  assert.deepEqual(resolveEndfieldTarget([efNoRole]), { ok: false, reason: "no_endfield_role" });
   const explicit = resolveEndfieldTarget([both, akOnly], 0);
   assert.ok(explicit.ok && explicit.accountIndex === 0);
   assert.deepEqual(resolveEndfieldTarget([both, akOnly], 1), { ok: false, reason: "no_endfield_role" });
+}
+
+// --- listEndfieldRoles / role picker helpers (moved from the removed endfieldRole.ts) ---
+const role = (id: string, server = "1", extra: any = {}) => ({ roleId: id, serverId: server, nickname: `N${id}`, level: 5, serverName: "Asia", ...extra });
+
+// Normal bindings, flat and nested bindingList shapes.
+{
+  const accounts = [
+    { info: { id: "100", nickname: "main" }, roles: [{ gameId: 3, uid: "u1", roles: [role("r1"), role("r2", "2")] }] },
+    { info: { id: "200" }, roles: [{ bindingList: [{ gameId: 3, roles: [role("r3")] }] }] },
+  ];
+  const list = listEndfieldRoles(accounts);
+  assert.deepEqual(list.map((r) => [r.accountIndex, r.roleId, r.serverId]), [[0, "r1", "1"], [0, "r2", "2"], [1, "r3", "1"]]);
+  assert.equal(list[0].accountLabel, "main");
+  assert.equal(list[2].accountLabel, "200");
+  assert.equal(list[0].skUserId, "100", "the userId sent to the API stays the SKPORT account id");
+  assert.equal(list[0].level, 5);
+  assert.equal(list[0].serverName, "Asia");
+}
+
+// skUserId falls back to the binding uid only when the account has no id (old behaviour).
+assert.equal(listEndfieldRoles([{ info: {}, roles: [{ gameId: 3, uid: "bu", roles: [role("r")] }] }])[0].skUserId, "bu");
+
+// Arknights (gameId 1) is ignored; AK-first account still yields the Endfield role.
+{
+  const accounts = [{ info: { id: "1" }, roles: [{ gameId: 1, uid: "ak", roles: [role("ak1")] }, { gameId: 3, roles: [role("ef1")] }] }];
+  assert.deepEqual(listEndfieldRoles(accounts).map((r) => r.roleId), ["ef1"]);
+  assert.deepEqual(listEndfieldRoles([{ info: { id: "1" }, roles: [{ gameId: 1, uid: "ak", nickName: "x", roles: [] }] }]), []);
+}
+
+// roles: [] + defaultRole null -> no role (never synthesized for Endfield).
+assert.deepEqual(
+  listEndfieldRoles([{ info: { id: "9" }, roles: [{ gameId: 3, uid: "7777", nickName: "Synth", channelMasterId: "1", roles: [], defaultRole: null }] }]),
+  [],
+);
+
+// defaultRole only.
+assert.equal(listEndfieldRoles([{ info: { id: "9" }, roles: [{ gameId: 3, defaultRole: role("d1") }] }])[0].roleId, "d1");
+
+// Empty / broken input never throws.
+assert.deepEqual(listEndfieldRoles([]), []);
+assert.deepEqual(listEndfieldRoles(null), []);
+assert.deepEqual(listEndfieldRoles([{ info: {}, roles: undefined }, null as any]), []);
+
+// Duplicates inside one account collapse.
+assert.equal(listEndfieldRoles([{ info: { id: "1" }, roles: [{ gameId: 3, roles: [role("a")] }, { gameId: 3, roles: [role("a")] }] }]).length, 1);
+
+// Keys and select options.
+{
+  const list = listEndfieldRoles([{ info: { id: "1", nickname: "acc" }, roles: [{ gameId: 3, roles: [role("a"), role("b")] }] }]);
+  assert.equal(findRoleByKey(list, roleKey(list[1]))?.roleId, "b");
+  assert.equal(findRoleByKey(list, "nope"), undefined);
+  const opts = roleSelectOptions(list, roleKey(list[1]));
+  assert.deepEqual(opts.map((o) => o.default), [false, true]);
+  assert.equal(opts[0].emoji, "1️⃣");
+  assert.equal(opts[0].label, "Na");
+  assert.equal(opts[0].description, "Asia · acc");
+  const many = Array.from({ length: 40 }, (_, i) => ({ ...list[0], roleId: `r${i}` }));
+  assert.equal(roleSelectOptions(many, "").length, 25);
 }
 
 console.log("bindingRoles checks passed");

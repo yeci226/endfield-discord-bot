@@ -8,6 +8,84 @@ import { maskSecret } from "./cryptoUtils";
 
 const logger = new Logger("SkportAPI");
 
+/** Upper bound for any single HTTP request; a hung connection must not stall a whole tick. */
+export const REQUEST_TIMEOUT_MS = 15000;
+
+export type RequestFailureKind =
+  | "timeout"
+  | "network"
+  | "server"
+  | "rate_limited"
+  | "auth"
+  | "other";
+
+/** What went wrong with one request, reported through the optional `onError` option. */
+export interface RequestFailure {
+  kind: RequestFailureKind;
+  status?: number;
+  code?: number;
+  message?: string;
+}
+
+/**
+ * Classifies an axios error. Timeouts, connection errors, HTTP 5xx and 429 are transient (the
+ * same request may well work later); HTTP 401/403 are an explicit auth rejection; the rest is
+ * "other". A 401 carrying API code 10003 is a clock-skew rejection, not a login rejection.
+ * `tokenEndpoint`: the endpoint only takes the account token, so HTTP 400 means the token is bad.
+ */
+export function classifyRequestError(
+  error: any,
+  opts: { tokenEndpoint?: boolean } = {},
+): RequestFailure {
+  const resp = error?.response;
+  const message = String(error?.message || "").slice(0, 200);
+  if (!resp) {
+    const code = String(error?.code || "");
+    if (code === "ECONNABORTED" || code === "ETIMEDOUT" || /timeout/i.test(message)) {
+      return { kind: "timeout", message };
+    }
+    return { kind: "network", message };
+  }
+  const status = Number(resp.status);
+  const code = typeof resp.data?.code === "number" ? resp.data.code : undefined;
+  const base = { status, ...(code !== undefined ? { code } : {}), message };
+  if (status === 429) return { kind: "rate_limited", ...base };
+  if (status >= 500) return { kind: "server", ...base };
+  if (status === 401) return { kind: code === 10003 ? "other" : "auth", ...base };
+  if (status === 403) return { kind: "auth", ...base };
+  if (status === 400 && opts.tokenEndpoint) return { kind: "auth", ...base };
+  return { kind: "other", ...base };
+}
+
+/** Network error, timeout, HTTP 5xx or 429: worth retrying later, and proves nothing about the login. */
+export function isTransientFailure(failure: RequestFailure | null | undefined): boolean {
+  const kind = failure?.kind;
+  return (
+    kind === "timeout" ||
+    kind === "network" ||
+    kind === "server" ||
+    kind === "rate_limited"
+  );
+}
+
+/** API codes / HTTP statuses that say "this login is not valid" (not clock skew). */
+export function isAuthRejectionCode(code?: number, status?: number): boolean {
+  if (code === 10003) return false;
+  if (code === 10000 || code === 10002) return true;
+  return status === 401 || status === 403;
+}
+
+type OnRequestError = (failure: RequestFailure) => void;
+
+function report(onError: OnRequestError | undefined, failure: RequestFailure) {
+  if (!onError) return;
+  try {
+    onError(failure);
+  } catch {
+    // a faulty observer must not change the request's outcome
+  }
+}
+
 
 const OFFSET_CACHE_PATH = path.join(process.cwd(), ".cache", "server-time-offset.json");
 
@@ -420,12 +498,14 @@ export async function getUserInfo(
   cred: string,
   locale?: string,
   salt?: string,
+  onError?: OnRequestError,
 ): Promise<UserInfoResponse | null> {
   const url = "https://zonai.skport.com/web/v2/user";
   return makeRequest<UserInfoResponse>("GET", url, {
     cred,
     locale,
     salt,
+    onError,
   });
 }
 
@@ -516,16 +596,21 @@ export async function refreshSkToken(
   cred: string,
   platform: string = "3",
   salt?: string,
+  onError?: OnRequestError,
 ): Promise<string | null> {
   const url = "https://zonai.skport.com/web/v1/auth/refresh";
   const res = await makeRequest<any>("GET", url, {
     cred,
     salt,
     params: { platform },
+    onError,
   });
 
   if (res && (res.code === 0 || res.status === 0) && res.data?.token) {
     return res.data.token;
+  }
+  if (res && isAuthRejectionCode(res.code, res.status)) {
+    report(onError, { kind: "auth", status: res.status, code: res.code });
   }
   return null;
 }
@@ -535,6 +620,7 @@ export async function refreshSkToken(
  */
 export async function refreshAccountToken(
   cookie: string,
+  onError?: OnRequestError,
 ): Promise<string | null> {
   const url = "https://web-api.skport.com/cookie_store/account_token";
   try {
@@ -551,14 +637,18 @@ export async function refreshAccountToken(
         "sec-fetch-mode": "cors",
         "sec-fetch-dest": "empty",
       },
+      timeout: REQUEST_TIMEOUT_MS,
     });
 
     if (response.data?.code === 0 && response.data?.data?.content) {
       return response.data.data.content;
     }
+    // HTTP 200 but the cookie store did not hand out a token: it rejected the cookie.
+    report(onError, { kind: "auth", code: response.data?.code });
     return null;
   } catch (error: any) {
     console.error("[Skport] refreshAccountToken failed:", error.message);
+    report(onError, classifyRequestError(error, { tokenEndpoint: true }));
     return null;
   }
 }
@@ -632,6 +722,8 @@ export async function makeRequest<T>(
     cred?: string;
     salt?: string;
     onStale?: (options: any) => Promise<boolean>;
+    /** Called with the kind of every failed HTTP request; the return value is unaffected. */
+    onError?: (failure: RequestFailure) => void;
   } = {},
 ): Promise<T | null> {
   const execute = async () => {
@@ -700,10 +792,12 @@ export async function makeRequest<T>(
         headers,
         params: options.params,
         data: options.data,
+        timeout: REQUEST_TIMEOUT_MS,
       };
       const response = await axios(config);
       return response.data;
     } catch (error: any) {
+      report(options.onError, classifyRequestError(error));
       const resp = error.response;
       if (resp?.status !== 404) {
         if (resp?.status === 401) {
@@ -811,10 +905,12 @@ export async function grantOAuthCode(
   appCode: string = "6eb76d4e13aa36e6",
   type: number = 0,
   locale?: string,
+  onError?: OnRequestError,
 ) {
   const url = "https://as.gryphline.com/user/oauth2/v2/grant";
   return makeRequest<any>("POST", url, {
     locale,
+    onError,
     headers: {
       "sec-fetch-site": "cross-site",
       referrer: "https://www.skport.com/",
@@ -830,10 +926,15 @@ export async function grantOAuthCode(
 /**
  * Skport Credential Generation using OAuth code
  */
-async function generateCredByCode(code: string, locale?: string) {
+async function generateCredByCode(
+  code: string,
+  locale?: string,
+  onError?: OnRequestError,
+) {
   const url = "https://zonai.skport.com/web/v1/user/auth/generate_cred_by_code";
   const res = await makeRequest<any>("POST", url, {
     locale,
+    onError,
     headers: {
       platform: "3",
       referrer: "https://www.skport.com/",
@@ -852,7 +953,11 @@ async function generateCredByCode(code: string, locale?: string) {
   return res;
 }
 
-export async function verifyToken(cookie: string, locale?: string) {
+export async function verifyToken(
+  cookie: string,
+  locale?: string,
+  onError?: OnRequestError,
+) {
   // 1. Extract raw token value regardless of input format (raw value or full cookie)
   let cleanToken = cookie.trim();
 
@@ -900,10 +1005,12 @@ export async function verifyToken(cookie: string, locale?: string) {
           Accept: "application/json",
           "sec-fetch-site": "cross-site",
         },
+        timeout: REQUEST_TIMEOUT_MS,
       });
       return response.data;
     } catch (error: any) {
       console.error(`Error requesting ${basicUrl}:`, error.message);
+      report(onError, classifyRequestError(error, { tokenEndpoint: true }));
       return null;
     }
   })();
@@ -915,16 +1022,20 @@ export async function verifyToken(cookie: string, locale?: string) {
         `Gryphline API 400 for token: ${cleanToken.substring(0, 10)}...`,
       );
     }
+    if (basicResult) {
+      // The account service answered and said no.
+      report(onError, { kind: "auth", code: basicResult.status });
+    }
     return basicResult; // Error or null
   }
 
   // 2. Grant OAuth Code
-  const grantResult = await grantOAuthCode(cleanToken, undefined, 0, locale);
+  const grantResult = await grantOAuthCode(cleanToken, undefined, 0, locale, onError);
   if (grantResult && grantResult.status === 0 && grantResult.data?.code) {
     const code = grantResult.data.code;
 
     // 3. Generate Skport Cred
-    const credResult = await generateCredByCode(code, locale);
+    const credResult = await generateCredByCode(code, locale, onError);
     if (credResult && credResult.code === 0 && credResult.data?.cred) {
       return {
         ...basicResult,
@@ -1246,6 +1357,7 @@ export async function loginByEmailPassword(
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
         "x-language": "zh-tw",
       },
+      timeout: REQUEST_TIMEOUT_MS,
     });
 
     const aigisHeader = response.headers["x-rpc-aigis"];

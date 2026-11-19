@@ -38,6 +38,19 @@ export function writeAccounts(
 }
 
 /**
+ * Merges a successful login into the stored account: the new credentials replace the old
+ * ones, and the "login expired" markers (`invalid`, `tokenExpiredNotified`) are removed, so
+ * auto sign-in treats the account as healthy and a later expiry can be announced again.
+ * Returns the same object.
+ */
+export function applySuccessfulLogin(existing: any, fresh: any): any {
+  Object.assign(existing, fresh);
+  delete existing.invalid;
+  delete existing.tokenExpiredNotified;
+  return existing;
+}
+
+/**
  * Patches ONE account of `<userId>.accounts` in a single transaction. The list is re-read
  * inside the transaction, so a stale in-memory account cannot overwrite fields written by
  * somebody else meanwhile; only the keys in `patch` change. Secret fields (cookie / cred /

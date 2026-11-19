@@ -44,3 +44,15 @@
 - **不改任何 API 的 `userId` 來源。** 本 lane 的 `indieHard` 維持 `binding.uid || account.info.id`（原樣）；`profile`／`MonitorService`／`WebManager` 不在本 lane，**不動它們送的 id**，之後換呼叫點時也只換「選角色」那一步。這點我無法驗證哪個 id 才對，列入「需要線上驗證」。
 - **舊函式保留**：`getPrimaryBindingRole(bindings)` 簽名不變、標 `@deprecated`，其他 lane 不受影響；回歸測試把 `2dd055e` 的生產形狀 fixture（AK 在前、終末地 `roles: []` 且 `defaultRole: null`）原樣收入。
 - **分層提交**：先只加工具與測試，再換呼叫點，每一步獨立 commit，將來要撤回可以只撤一層。
+
+## D. 2026-11-19 production measurement（正式資料庫唯讀查詢）
+
+- 終末地（gameId 3）有角色的綁定共 7,216 筆。**每一筆**都是 `binding.uid !== roles[0].roleId` 且 `binding.channelMasterId !== roles[0].serverId`。
+- 終末地綁定但 `roles: []` 的有 176 筆（其中 106 筆屬於自動簽到使用者），沒有任何一筆有 `defaultRole`。這些是「綁了終末地、但沒有可用角色」的帳號。
+- 明日方舟（gameId 1）綁定 2,436 筆，**全部** `roles: []` 且帶有 `uid` + `channelMasterId`；用綁定合成角色是那邊長年正常運作的行為。
+- 已被標成 `invalid: true` 的帳號 782 個（526 個屬於自動簽到使用者）。
+- 自動簽到範圍：arknights 2,096／endfield 1,805／both 1,174。
+
+**結論：** 終末地的 roleId／serverId 不能由綁定的 `uid`／`channelMasterId` 合成；那樣會把錯的 roleId／serverId 送給 API。第 C 節（以及 `2dd055e`、`90001a8`）曾假設「`roles: []` 的終末地綁定可以用 uid 合成角色」，這個假設被上述數字否定。這**很可能**就是先前兩個修正被撤回的原因之一（仍是推論：commit 沒有記錄原因）。
+
+因此 `bindingRoles.ts` 現在只對 gameId 1 合成角色；gameId 3 且 `roles: []`、沒有 `defaultRole` 時回傳「沒有角色」。自動簽到遇到「範圍內完全沒有角色」的帳號：不算錯誤、不重試、不 DM，只留一行 debug log（`both` 且只有明日方舟有角色時，只簽明日方舟並收為 done）。手動 `/daily game:終末地` 則回覆「這個帳號沒有綁定終末地角色」。`endfieldRole.ts` 已刪除，`/stamina`、`/crisis-contract` 改用 `bindingRoles.ts`（它們送給 API 的 `userId` 仍是 SKPORT 帳號 id，沒有改）。

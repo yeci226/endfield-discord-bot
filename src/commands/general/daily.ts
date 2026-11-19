@@ -270,6 +270,10 @@ const command: Command = {
     }
 
     const isClaim = subcommand === "claim";
+    // The user named Endfield themselves (not the "both" default): a missing role is reported.
+    const explicitEndfield =
+      (subcommand === "check" || subcommand === "claim") &&
+      interaction.options.getString("game") === "endfield";
     let hasResult = false;
     const errorLines: string[] = [];
     const files: AttachmentBuilder[] = [];
@@ -288,7 +292,15 @@ const command: Command = {
         gameIdsForScope(gameScope),
       );
 
-      if (roles.length === 0) continue;
+      if (roles.length === 0) {
+        if (explicitEndfield) {
+          const label = account.info?.nickname || account.info?.id || "?";
+          errorLines.push(
+            `❌ ${label}: ${String(t("daily_NoEndfieldRole")).replace(/^❌\s*/, "")}`,
+          );
+        }
+        continue;
+      }
 
       for (const normalized of roles) {
         {
@@ -398,7 +410,9 @@ const command: Command = {
 
     if (!hasResult) {
       await interaction.editReply({
-        content: t("daily_RoleNotFound"),
+        content: explicitEndfield
+          ? t("daily_NoEndfieldRole")
+          : t("daily_RoleNotFound"),
       });
       return;
     }

@@ -27,7 +27,7 @@ import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { VerificationClient } from "../../web/VerificationClient";
 import { getAccounts } from "../../utils/accountUtils";
-import { writeAccounts } from "../../utils/accountData";
+import { applySuccessfulLogin, writeAccounts } from "../../utils/accountData";
 import {
   promptAccountUnbind,
   handleAccountUnbind,
@@ -738,9 +738,8 @@ const command: Command = {
           };
 
           if (exists) {
-            // Update existing
-            Object.assign(exists, accountData);
-            exists.invalid = false;
+            // Update existing; a fresh login also clears the "login expired" markers
+            applySuccessfulLogin(exists, accountData);
           } else {
             if (accounts.length >= 5) {
               const limitContainer =
@@ -895,8 +894,7 @@ async function handleLoginSuccess(
     };
 
     if (exists) {
-      Object.assign(exists, accountData);
-      exists.invalid = false;
+      applySuccessfulLogin(exists, accountData);
     } else {
       if (accounts.length >= 5) {
         const container = new ContainerBuilder().addTextDisplayComponents(

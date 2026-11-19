@@ -18,7 +18,7 @@ import { ExtendedClient } from "../../structures/Client";
 import { CustomDatabase } from "../../utils/Database";
 import { ensureAccountBinding, getAccounts, withAutoRefresh } from "../../utils/accountUtils";
 import { getCardDetail } from "../../utils/skportApi";
-import { EndfieldRoleEntry, findRoleByKey, listEndfieldRoles, roleKey, roleSelectOptions } from "../../utils/endfieldRole";
+import { EndfieldRoleEntry, findRoleByKey, listEndfieldRoles, roleKey, roleSelectOptions } from "../../utils/bindingRoles";
 import { buildStaminaView, staminaMessageText, StaminaView } from "../../utils/staminaView";
 import { buildStaminaCard } from "../../utils/staminaCanvasUtils";
 
