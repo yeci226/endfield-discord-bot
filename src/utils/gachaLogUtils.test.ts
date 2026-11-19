@@ -85,7 +85,7 @@ async function main() {
 
     await db.set("GACHA_LOG_test", data);
     await updateLeaderboard(db, "test", data);
-    const entry = (await db.get("GACHA_LEADERBOARD_ENTRIES")).test;
+    const entry = await db.get("GACHA_LB.test");
     assert.equal(entry.total, 140);
     assert.equal(entry.stats.TOTAL.total, 130);
     assert.equal(entry.stats.SpecialShared.total, 130);
@@ -169,8 +169,8 @@ async function main() {
     await db.delete("GACHA_LOG_test");
     await updateLeaderboard(db, "test", result.data);
     assert.equal(
-      (await db.get("GACHA_LEADERBOARD_ENTRIES")).test,
-      undefined,
+      await db.get("GACHA_LB.test"),
+      null,
       "An in-flight leaderboard refresh must not restore a deleted account",
     );
     console.log(

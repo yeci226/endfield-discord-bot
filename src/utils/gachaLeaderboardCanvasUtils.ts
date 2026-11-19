@@ -8,6 +8,12 @@ import {
 import path from "path";
 import fs from "fs"; // Add this import for fs.readFileSync
 import { GachaLeaderboardEntry } from "./gachaLogUtils";
+import {
+  LeaderboardScope,
+  LeaderboardView,
+  MIN_PULLS_FOR_LUCK_RANK,
+  buildLeaderboardView,
+} from "../features/gacha/gachaLeaderboard";
 import { fetchImage } from "./canvasUtils";
 
 const star6Path = path.join(__dirname, "../assets/6star.png");
@@ -123,6 +129,13 @@ export async function drawGachaLeaderboard(
   sortType: "pulls" | "luck",
   tr: any,
   poolNames: Record<string, string> = {},
+  options: {
+    page?: number;
+    scope?: LeaderboardScope;
+    guildId?: string | null;
+    /** Precomputed by the caller (so the buttons and the picture agree on the page). */
+    view?: LeaderboardView;
+  } = {},
 ): Promise<Buffer> {
   const width = 1170;
   const padding = 60;
@@ -130,56 +143,40 @@ export async function drawGachaLeaderboard(
   const headerH = 500;
   const footerPadding = 100;
 
-  // Deduplicate before filtering
-  const seen = new Set<string>();
-  const deduplicatedEntries = entries.filter((e) => {
-    const stat = e.stats[poolId];
-    if (!stat) return true;
-    const hash = `${stat.total}_${stat.sixStarCount}_${stat.fiveStarCount}_${e.nickname}_${e.displayName}_${e.avatarUrl}`;
-    if (seen.has(hash)) return false;
-    seen.add(hash);
-    return true;
-  });
-
-  // Filter and Sort Entries for this poolId
-  const validEntries = deduplicatedEntries
-    .filter((e) => e.stats[poolId] && e.stats[poolId].total > 0)
-    .map((e) => ({
-      ...e,
-      currentStat: e.stats[poolId],
-    }));
-
-  if (sortType === "pulls") {
-    validEntries.sort((a, b) => b.currentStat.total - a.currentStat.total);
-  } else {
-    validEntries.sort(
-      (a, b) => b.currentStat.probability - a.currentStat.probability,
-    );
-  }
-
-  const topUsersCount = 10;
-  const topUsers = validEntries.slice(0, topUsersCount);
-  const myEntries = validEntries
-    .map((e, idx) => ({ entry: e, rankIdx: idx }))
-    .filter((e) => currentUserIds.includes(e.entry.uid));
-
-  const myEntriesOutsideTop10 = myEntries.filter(
-    (e) => e.rankIdx >= topUsersCount,
-  );
+  const view =
+    options.view ??
+    buildLeaderboardView(entries, {
+      poolId,
+      sortType,
+      scope: options.scope,
+      guildId: options.guildId,
+      page: options.page,
+      myUids: currentUserIds,
+    });
+  const topUsers = view.rows.map((r) => ({ ...r.entry, currentStat: r.stat }));
+  const myEntriesOutsidePage = view.myOutside;
 
   // Dynamic Height calculation
   let listCount = topUsers.length;
-  if (myEntriesOutsideTop10.length > 0) {
-    listCount += 0.5 + myEntriesOutsideTop10.length; // Space for separator and self ranks
+  if (myEntriesOutsidePage.length > 0) {
+    listCount += 0.5 + myEntriesOutsidePage.length; // Space for separator and self ranks
   }
+  const unrankedNote =
+    sortType === "luck" && view.myUnranked.length > 0
+      ? tr("gacha_log_leaderboard_luck_min", {
+          min: MIN_PULLS_FOR_LUCK_RANK,
+          count: Math.max(...view.myUnranked.map((u) => Number(u.stat.total || 0))),
+        })
+      : "";
+  const noteH = unrankedNote ? 70 : 0;
   const minHeight = 1143;
-  const calculatedHeight = headerH + listCount * itemH + footerPadding;
+  const calculatedHeight = headerH + listCount * itemH + footerPadding + noteH;
   const height = Math.max(minHeight, calculatedHeight);
 
   // Find all displayNames that appear more than once to decide whether to show Account #index
   const nameCounts: Record<string, number> = {};
-  validEntries.forEach((e) => {
-    if (e.displayName) {
+  entries.forEach((e) => {
+    if (e.displayName && Number(e.stats?.[poolId]?.total || 0) > 0) {
       nameCounts[e.displayName] = (nameCounts[e.displayName] || 0) + 1;
     }
   });
@@ -257,7 +254,15 @@ export async function drawGachaLeaderboard(
     sortType === "pulls"
       ? tr("gacha_log_leaderboard_sort_pulls")
       : tr("gacha_log_leaderboard_sort_luck");
-  const fullSubtitle = `${poolName} | ${sortName}`;
+  const scopeName =
+    view.scope === "guild"
+      ? tr("gacha_log_leaderboard_scope_guild")
+      : tr("gacha_log_leaderboard_scope_global");
+  const pageName =
+    view.pageCount > 1
+      ? ` | ${tr("gacha_log_leaderboard_page", { page: view.page + 1, pages: view.pageCount })}`
+      : "";
+  const fullSubtitle = `${poolName} | ${sortName} | ${scopeName}${pageName}`;
   await fillTextWithStar(
     ctx,
     fullSubtitle,
@@ -267,19 +272,9 @@ export async function drawGachaLeaderboard(
     "rgba(255, 255, 255, 0.6)",
   );
 
-  // Global Stats Box
-  const globalTotalPulls = entries.reduce(
-    (acc, e) => acc + (e.stats[poolId]?.total || 0),
-    0,
-  );
-  const globalTotalSixCount = entries.reduce(
-    (acc, e) => acc + (e.stats[poolId]?.sixStarCount || 0),
-    0,
-  );
-  const avgRate =
-    globalTotalPulls > 0
-      ? ((globalTotalSixCount / globalTotalPulls) * 100).toFixed(2)
-      : "0.00";
+  // Global Stats Box (over the entries of the selected scope)
+  const globalTotalPulls = view.totalPulls;
+  const avgRate = (view.avgRate * 100).toFixed(2);
 
   const statBoxSpacing = 25;
   const statBoxW = (width - padding * 2 - 100 - statBoxSpacing * 2) / 3;
@@ -307,7 +302,7 @@ export async function drawGachaLeaderboard(
 
   await drawGlobalStat(
     tr("gacha_log_leaderboard_total_players"),
-    String(entries.length),
+    String(view.totalPlayers),
     padding + 50,
   );
   await drawGlobalStat(
@@ -327,7 +322,7 @@ export async function drawGachaLeaderboard(
     await drawRankItem(
       ctx,
       topUsers[i],
-      i + 1,
+      view.rows[i].rank,
       padding,
       listY + i * itemH,
       width - padding * 2,
@@ -339,7 +334,8 @@ export async function drawGachaLeaderboard(
   }
 
   // Draw Separator and Self Ranks if needed
-  if (myEntriesOutsideTop10.length > 0) {
+  let listBottom = listY + topUsers.length * itemH;
+  if (myEntriesOutsidePage.length > 0) {
     const sepY = listY + topUsers.length * itemH + 20;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
     ctx.setLineDash([15, 10]);
@@ -349,12 +345,12 @@ export async function drawGachaLeaderboard(
     ctx.stroke();
     ctx.setLineDash([]);
 
-    for (let i = 0; i < myEntriesOutsideTop10.length; i++) {
-      const myItem = myEntriesOutsideTop10[i];
+    for (let i = 0; i < myEntriesOutsidePage.length; i++) {
+      const myItem = myEntriesOutsidePage[i];
       await drawRankItem(
         ctx,
-        myItem.entry,
-        myItem.rankIdx + 1,
+        { ...myItem.entry, currentStat: myItem.stat },
+        myItem.rank,
         padding,
         sepY + 20 + i * itemH,
         width - padding * 2,
@@ -364,6 +360,15 @@ export async function drawGachaLeaderboard(
         nameCounts,
       );
     }
+    listBottom = sepY + 20 + myEntriesOutsidePage.length * itemH;
+  }
+
+  if (unrankedNote) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255, 204, 0, 0.8)";
+    ctx.font = "26px NotoSans";
+    ctx.fillText(unrankedNote, width / 2, listBottom + 45);
+    ctx.textAlign = "left";
   }
 
   return canvas.toBuffer("image/webp", 90);

@@ -522,6 +522,17 @@ const langs: Record<string, any> = {
   gacha_import_part_weapon_list: "武器池清單",
 
   // --- G2 (gacha leaderboard & storage) ---
+  gacha_log_leaderboard_scope_global: "全球",
+  gacha_log_leaderboard_scope_guild: "本伺服器",
+  gacha_log_leaderboard_scope_placeholder: "選擇範圍",
+  gacha_log_leaderboard_scope_empty:
+    "此伺服器還沒有人上榜。成員在這裡載入或查看自己的紀錄後，排行榜就會出現。",
+  gacha_log_leaderboard_page: "第 <page>/<pages> 頁",
+  gacha_log_leaderboard_my_rank: "我的排名",
+  gacha_log_leaderboard_no_rank: "你還沒有上榜。",
+  gacha_log_leaderboard_luck_min:
+    "幸運度排名需在此分類至少 <min> 抽（目前 <count> 抽）。",
+  gacha_log_leaderboard_close: "關閉",
 
   // --- G3 (gacha stats) ---
   gacha_log_view_AccountNotOwned:

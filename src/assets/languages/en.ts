@@ -544,6 +544,17 @@ const langs: Record<string, any> = {
   gacha_import_part_weapon_list: "Weapon banner list",
 
   // --- G2 (gacha leaderboard & storage) ---
+  gacha_log_leaderboard_scope_global: "Global",
+  gacha_log_leaderboard_scope_guild: "This server",
+  gacha_log_leaderboard_scope_placeholder: "Choose a scope",
+  gacha_log_leaderboard_scope_empty:
+    "No one from this server is listed yet. The board fills in as members load or view their records here.",
+  gacha_log_leaderboard_page: "Page <page>/<pages>",
+  gacha_log_leaderboard_my_rank: "My rank",
+  gacha_log_leaderboard_no_rank: "You are not on this board yet.",
+  gacha_log_leaderboard_luck_min:
+    "Luck ranking needs at least <min> pulls in this category (you have <count>).",
+  gacha_log_leaderboard_close: "Close",
 
   // --- G3 (gacha stats) ---
   gacha_log_view_AccountNotOwned:
