@@ -9,6 +9,7 @@ import {
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { CustomDatabase } from "../../utils/Database";
+import { invalidateLocaleCache } from "../../events/interactionCreate";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -46,6 +47,7 @@ const command: Command = {
     if (!interaction.isChatInputCommand()) return;
     const lang = interaction.options.getString("lang", true);
     await db.set(`${interaction.user.id}.locale`, lang);
+    invalidateLocaleCache(interaction.user.id);
 
     // Re-create translator for the response to reflect the change immediately
     const { createTranslator } = require("../../utils/i18n");

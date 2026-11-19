@@ -11,6 +11,7 @@ import {
   EmbedBuilder,
 } from "discord.js";
 import { Event } from "../interfaces/Event";
+import type { ExtendedClient } from "../structures/Client";
 import { Logger } from "../utils/Logger";
 import { createTranslator, toI18nLang } from "../utils/i18n";
 import {
@@ -19,13 +20,44 @@ import {
   replyOrFollowUp,
   TtlCache,
   fireAndForget,
+  isDeadInteractionError,
+  sendInteractionError,
 } from "../utils/shared";
+import { createRateLimiter } from "../utils/rateLimit";
 
 const webhook = process.env.CMDWEBHOOK
   ? new WebhookClient({ url: process.env.CMDWEBHOOK })
   : null;
 const logger = new Logger("Interaction");
 const localeCache = new TtlCache<string, string>(120000, 10000);
+
+/**
+ * Forget a user's cached language so the next interaction re-reads it. Only
+ * affects this process; other clusters pick the change up when their cache
+ * entry (2 minutes) expires.
+ */
+export function invalidateLocaleCache(userId: string): void {
+  localeCache.delete(userId);
+}
+
+// 20 interactions per 10 s per user; autocomplete (one per keystroke) has its
+// own, larger bucket so typing never locks a user out of submitting a command.
+const interactionLimiter = createRateLimiter({
+  limit: 20,
+  windowMs: 10_000,
+  maxKeys: 20_000,
+});
+const autocompleteLimiter = createRateLimiter({
+  limit: 60,
+  windowMs: 10_000,
+  maxKeys: 20_000,
+});
+// At most one "slow down" notice per user per window.
+const noticeLimiter = createRateLimiter({
+  limit: 1,
+  windowMs: 10_000,
+  maxKeys: 20_000,
+});
 
 const event: Event = {
   name: Events.InteractionCreate,
@@ -37,6 +69,11 @@ const event: Event = {
       return;
     }
 
+    const limited = !(interaction.isAutocomplete()
+      ? autocompleteLimiter
+      : interactionLimiter
+    ).check(interaction.user.id).allowed;
+
     const cachedLocale = await localeCache.getOrSetAsync(
       interaction.user.id,
       async () => (await client.db.get(`${interaction.user.id}.locale`)) || "",
@@ -45,6 +82,31 @@ const event: Event = {
     localeCache.set(interaction.user.id, userLang);
     const tr = createTranslator(userLang);
 
+    if (limited) {
+      if (interaction.isAutocomplete()) {
+        await interaction.respond([]).catch(() => {});
+      } else if (noticeLimiter.check(interaction.user.id).allowed) {
+        await sendInteractionError(interaction, tr("RateLimited"));
+      }
+      return;
+    }
+
+    try {
+      await handleInteraction(client, interaction, tr);
+    } catch (error: any) {
+      if (isDeadInteractionError(error)) return;
+      logger.error(`Unhandled interaction error: ${error?.stack || error}`);
+      await sendInteractionError(interaction, tr("Error"));
+    }
+  },
+};
+
+async function handleInteraction(
+  client: ExtendedClient,
+  interaction: any,
+  tr: any,
+): Promise<void> {
+  {
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
       if (!command) return;
@@ -179,7 +241,8 @@ const event: Event = {
           await trackCommand(interaction, async () => command.execute(client, interaction, tr, client.db));
         } catch (error: any) {
           if (error.code === 10062 || error.code === 40060) return;
-          console.error("Error handling modal submit:", error);
+          logger.error(`Error handling modal submit: ${error?.stack || error}`);
+          await sendInteractionError(interaction, tr("Error"));
         }
       }
     } else if (interaction.isChannelSelectMenu()) {
@@ -368,7 +431,8 @@ const event: Event = {
             await trackCommand(interaction, async () => command.execute(client, interaction as any, tr, client.db));
           } catch (error: any) {
             if (error.code === 10062 || error.code === 40060) return;
-            logger.error(`Error handling button interaction: ${error.message}`);
+            logger.error(`Error handling button interaction: ${error?.stack || error}`);
+            await sendInteractionError(interaction, tr("Error"));
           }
         }
       }
@@ -378,12 +442,13 @@ const event: Event = {
         try {
           await command.autocomplete(client, interaction, client.db);
         } catch (error) {
-          console.error("Error handling autocomplete interaction:", error);
+          if (!isDeadInteractionError(error))
+            logger.error(`Error handling autocomplete interaction: ${(error as any)?.stack || error}`);
           await interaction.respond([]).catch(() => {});
         }
       }
     }
-  },
-};
+  }
+}
 
 export default event;

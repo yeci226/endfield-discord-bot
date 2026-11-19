@@ -11,7 +11,6 @@ import { WebManager } from "./web/WebManager";
 import dotenv from "dotenv";
 import { WebhookClient } from "discord.js";
 import { Logger } from "./utils/Logger";
-import OptimizationManager from "./optimizations/index";
 
 dotenv.config();
 
@@ -26,13 +25,6 @@ dotenv.config();
   await loadCommands(client);
   await loadEvents(client);
   client.start();
-
-  // ====================================
-  // 初始化優化功能
-  // ====================================
-  const optimizations = new OptimizationManager(client, client.db);
-  await optimizations.initialize();
-  (client as any).optimizations = optimizations.getManager();
 
   // Initialize WebManager and VerificationClient (will start later based on cluster)
   const webManager = new WebManager(client);

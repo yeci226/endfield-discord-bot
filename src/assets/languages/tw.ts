@@ -439,6 +439,7 @@ const langs: Record<string, any> = {
   // --- L3 (daily & account) ---
 
   // --- L4 (news, reminders, core) ---
+  RateLimited: "⏳ 操作太頻繁，請稍等幾秒再試。",
 
   // --- L5 (new commands A) ---
 

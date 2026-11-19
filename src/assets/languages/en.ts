@@ -459,6 +459,7 @@ const langs: Record<string, any> = {
   // --- L3 (daily & account) ---
 
   // --- L4 (news, reminders, core) ---
+  RateLimited: "⏳ You're doing that too fast. Please wait a few seconds.",
 
   // --- L5 (new commands A) ---
 
