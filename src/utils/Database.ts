@@ -214,4 +214,91 @@ export class CustomDatabase {
       .all(`${prefix}%`) as Array<{ ID: string }>;
     return rows.map((row) => row.ID);
   }
+
+  /** Store a value that expires ttlMs from now. Read it back with getFresh(). */
+  public setWithTtl(key: string, value: unknown, ttlMs: number): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO json (ID, json) VALUES (?, ?)")
+      .run(key, JSON.stringify({ v: value, exp: Date.now() + ttlMs }));
+  }
+
+  /**
+   * Read a value stored by setWithTtl. Returns null (and deletes the row) once
+   * expired. Rows that are not in the { v, exp } shape return null untouched.
+   */
+  public getFresh<T = any>(key: string): T | null {
+    const row = this.db
+      .prepare("SELECT json FROM json WHERE ID = ?")
+      .get(key) as { json: string } | undefined;
+    if (!row) return null;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(row.json);
+    } catch {
+      return null;
+    }
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.exp !== "number" ||
+      !("v" in parsed)
+    ) {
+      return null;
+    }
+    if (parsed.exp > Date.now()) return parsed.v as T;
+    this.db.prepare("DELETE FROM json WHERE ID = ?").run(key);
+    return null;
+  }
+
+  /**
+   * Delete every row whose ID starts with the literal prefix (no LIKE
+   * wildcards). Returns the number of rows deleted.
+   */
+  public deleteByPrefix(prefix: string): number {
+    if (!prefix) throw new Error("Prefix must not be empty.");
+    return this.db
+      .prepare("DELETE FROM json WHERE ID >= ? AND ID < ?")
+      .run(prefix, prefix + "￿").changes;
+  }
+
+  /**
+   * Atomic read-modify-write of one key in an IMMEDIATE transaction.
+   * Returning null from fn deletes the row. fn must be synchronous; if it
+   * throws, nothing is written and the error is rethrown.
+   */
+  public update<T = any>(
+    key: string,
+    fn: (current: T | null) => T | null,
+  ): T | null {
+    return this.transaction((store) => {
+      const next = fn(store.get<T>(key));
+      if (next && typeof (next as any).then === "function")
+        throw new Error("Database update callbacks must be synchronous");
+      if (next === null) store.delete(key);
+      else store.set(key, next);
+      return next;
+    });
+  }
+
+  private keyLocks = new Map<string, Promise<unknown>>();
+
+  /** In-process mutex per key. Different keys never wait for each other. */
+  public withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.keyLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.keyLocks.set(key, tail);
+    tail.then(() => {
+      if (this.keyLocks.get(key) === tail) this.keyLocks.delete(key);
+    });
+    return run;
+  }
+
+  /** Close the underlying connection. */
+  public close(): void {
+    this.db.close();
+  }
 }
