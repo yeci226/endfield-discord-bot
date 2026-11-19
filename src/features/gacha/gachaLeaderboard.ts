@@ -111,7 +111,7 @@ export const LB_MIGRATION_MARKER = "GACHA_LB_MIGRATED";
 /** Bump when the meaning of the stored numbers changes; older rows are recomputed in the background. */
 export const LEADERBOARD_METRICS_VERSION = 2;
 export const MAX_GUILDS_PER_ENTRY = 50;
-export const LB_MIGRATION_BATCH = 500;
+export const LB_MIGRATION_BATCH = 200; // <= 500 per the plan; 200 keeps one batch near 30 ms
 
 export const lbKey = (uid: string) => `${LB_PREFIX}${uid}`;
 

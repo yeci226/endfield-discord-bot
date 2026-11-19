@@ -7,6 +7,7 @@ import {
   lbKey,
   migrateLeaderboardBlob,
   readLeaderboardEntries,
+  refreshLegacyLeaderboardEntries,
 } from "./gachaLeaderboard";
 import { GachaLeaderboardEntry, GachaLogData, GachaRecord } from "./gachaTypes";
 
@@ -260,6 +261,56 @@ async function testAliasDedup() {
   db.close();
 }
 
+/** Rows that came from the blob carry free-inclusive numbers until the background job recomputes them. */
+async function testRefreshLegacyRows() {
+  const db = new CustomDatabase(":memory:");
+  await db.set("GACHA_POOL_METADATA_p1", { data: {} });
+  const chars: GachaRecord[] = [];
+  for (let i = 1; i <= 120; i++) {
+    chars.push({
+      seqId: String(i),
+      gachaTs: String(1700000000000 + i),
+      poolId: "p1",
+      poolName: "P1",
+      poolType: "E_CharacterGachaPoolType_Special",
+      isFree: i <= 10, // ten free pulls, all 6-star
+      rarity: i <= 10 || i === 60 ? 6 : 4,
+      charId: "chr_x",
+      kind: "draw",
+    });
+  }
+  const log: GachaLogData = {
+    characterList: chars.reverse(),
+    weaponList: [],
+    info: { uid: "EF_1", lang: "en-us", export_timestamp: 0 },
+  };
+  await db.set("GACHA_LOG_EF_1", log);
+  await db.set(LB_BLOB_KEY, {
+    EF_1: { ...entry("EF_1", 110), stats: { TOTAL: { total: 110, sixStarCount: 11, fiveStarCount: 0, probability: 0.1 } } },
+  });
+  await db.set(lbKey("EF_2"), { ...entry("EF_2"), uid: "EF_2" }); // legacy row whose log is gone
+  await migrateLeaderboardBlob(db);
+  assert.equal((await db.get<any>(lbKey("EF_1")))!.stats.TOTAL.sixStarCount, 11, "legacy number before the refresh");
+
+  const originalGet = (await import("axios")).default.get;
+  (await import("axios")).default.get = (async () => {
+    throw new Error("no network");
+  }) as any;
+  try {
+    assert.equal(await refreshLegacyLeaderboardEntries(db, { max: 5 }), 2);
+    const row = (await db.get<any>(lbKey("EF_1")))!;
+    assert.equal(row.metricsVersion, 2);
+    assert.equal(row.stats.TOTAL.total, 110);
+    assert.equal(row.stats.TOTAL.sixStarCount, 1, "free 6-stars no longer counted");
+    assert.equal(row.stats.TOTAL.probability, 1 / 110);
+    assert.equal(await db.get(lbKey("EF_2")), null, "row without a log is dropped");
+    assert.equal(await refreshLegacyLeaderboardEntries(db, { max: 5 }), 0, "nothing left to do");
+  } finally {
+    (await import("axios")).default.get = originalGet;
+    db.close();
+  }
+}
+
 async function main() {
   await testMigration();
   await testInterruptedResume();
@@ -267,6 +318,7 @@ async function main() {
   await testEmptyAndConcurrentRuns();
   await testPrefixLookalikes();
   await testAliasDedup();
+  await testRefreshLegacyRows();
   console.log("Gacha leaderboard storage tests passed");
 }
 
