@@ -7,6 +7,27 @@ export interface DatabaseTransaction {
   keys(prefix: string): string[];
 }
 
+/**
+ * Exclusive upper bound for "every ID that starts with prefix" under SQLite's
+ * BINARY collation (UTF-8 byte order == code point order): the prefix with its
+ * last code point incremented. Returns null for the empty prefix (no bound).
+ * Unlike prefix + "￿" this also covers IDs whose next character is outside
+ * the BMP (emoji), which sort above U+FFFF.
+ */
+export function prefixUpperBound(prefix: string): string | null {
+  const points = Array.from(prefix);
+  while (points.length) {
+    let cp = points.pop()!.codePointAt(0)!;
+    if (cp < 0x10ffff) {
+      cp++;
+      if (cp >= 0xd800 && cp <= 0xdfff) cp = 0xe000; // lone surrogates cannot be stored
+      return points.join("") + String.fromCodePoint(cp);
+    }
+    // last code point is already the maximum: carry into the previous one
+  }
+  return null;
+}
+
 export class CustomDatabase {
   private db: Database.Database;
 
@@ -33,7 +54,9 @@ export class CustomDatabase {
             (
               this.db
                 .prepare("SELECT ID FROM json WHERE ID >= ? AND ID < ?")
-                .all(prefix, prefix + "\uffff") as { ID: string }[]
+                .all(prefix, prefixUpperBound(prefix) ?? "\u{10FFFF}") as {
+                ID: string;
+              }[]
             ).map((row) => row.ID),
         });
         if (result && typeof (result as any).then === "function")
@@ -114,9 +137,7 @@ export class CustomDatabase {
   public async findByPrefix<T = any>(
     prefix: string,
   ): Promise<Array<{ id: string; value: T }>> {
-    const rows = this.db
-      .prepare("SELECT * FROM json WHERE ID LIKE ?")
-      .all(`${prefix}%`) as Array<{
+    const rows = this.selectByPrefix("SELECT *", prefix) as Array<{
       ID: string;
       json: string;
     }>;
@@ -132,9 +153,9 @@ export class CustomDatabase {
    * @param prefix The prefix to search for
    */
   public findKeysByPrefix(prefix: string): string[] {
-    const rows = this.db
-      .prepare("SELECT ID FROM json WHERE ID LIKE ?")
-      .all(`${prefix}%`) as Array<{ ID: string }>;
+    const rows = this.selectByPrefix("SELECT ID", prefix) as Array<{
+      ID: string;
+    }>;
     return rows.map((row) => row.ID);
   }
 
@@ -148,11 +169,11 @@ export class CustomDatabase {
     prefix: string,
     jsonPath: string,
   ): Array<{ id: string; field: string | null }> {
-    const rows = this.db
-      .prepare(
-        `SELECT ID, json_extract(json, ?) as field FROM json WHERE ID LIKE ?`,
-      )
-      .all(jsonPath, `${prefix}%`) as Array<{
+    const rows = this.selectByPrefix(
+      "SELECT ID, json_extract(json, ?) as field",
+      prefix,
+      [jsonPath],
+    ) as Array<{
       ID: string;
       field: string | null;
     }>;
@@ -209,9 +230,9 @@ export class CustomDatabase {
    * @param prefix The prefix to search for
    */
   public async findIdsByPrefix(prefix: string): Promise<string[]> {
-    const rows = this.db
-      .prepare("SELECT ID FROM json WHERE ID LIKE ?")
-      .all(`${prefix}%`) as Array<{ ID: string }>;
+    const rows = this.selectByPrefix("SELECT ID", prefix) as Array<{
+      ID: string;
+    }>;
     return rows.map((row) => row.ID);
   }
 
@@ -258,7 +279,62 @@ export class CustomDatabase {
     if (!prefix) throw new Error("Prefix must not be empty.");
     return this.db
       .prepare("DELETE FROM json WHERE ID >= ? AND ID < ?")
-      .run(prefix, prefix + "￿").changes;
+      .run(prefix, prefixUpperBound(prefix) as string).changes;
+  }
+
+  /**
+   * Cursor scan over one literal prefix, in primary-key order, extracting JSON
+   * fields in SQL (rows are never parsed in JS). Use for bounded sweeps over
+   * very large prefixes: pass the last id of the previous page as afterId.
+   */
+  public scanFieldsByPrefix(
+    prefix: string,
+    jsonPaths: string[],
+    afterId: string | null,
+    limit: number,
+  ): Array<{ id: string; fields: Array<unknown> }> {
+    const cols = jsonPaths.map((_, i) => `json_extract(json, ?) AS f${i}`);
+    const hi = prefixUpperBound(prefix);
+    const rows = this.db
+      .prepare(
+        `SELECT ID${cols.length ? ", " + cols.join(", ") : ""} FROM json WHERE ID > ? AND ID >= ?${hi === null ? "" : " AND ID < ?"} ORDER BY ID LIMIT ?`,
+      )
+      .all(
+        ...jsonPaths,
+        afterId ?? "",
+        prefix,
+        ...(hi === null ? [] : [hi]),
+        limit,
+      ) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.ID as string,
+      fields: jsonPaths.map((_, i) => row[`f${i}`] ?? null),
+    }));
+  }
+
+  /** Delete exact ids in one transaction. Returns the number of rows deleted. */
+  public deleteIds(ids: string[]): number {
+    if (!ids.length) return 0;
+    const stmt = this.db.prepare("DELETE FROM json WHERE ID = ?");
+    return this.db.transaction(() => {
+      let n = 0;
+      for (const id of ids) n += stmt.run(id).changes;
+      return n;
+    })();
+  }
+
+  /** Runs `<selectClause> FROM json WHERE ID in [prefix, upper bound)` on the primary-key index. */
+  private selectByPrefix(
+    selectClause: string,
+    prefix: string,
+    leadingParams: unknown[] = [],
+  ): unknown[] {
+    const hi = prefixUpperBound(prefix);
+    return this.db
+      .prepare(
+        `${selectClause} FROM json WHERE ID >= ?${hi === null ? "" : " AND ID < ?"}`,
+      )
+      .all(...leadingParams, prefix, ...(hi === null ? [] : [hi]));
   }
 
   /**
