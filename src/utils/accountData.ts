@@ -37,6 +37,38 @@ export function writeAccounts(
   });
 }
 
+/**
+ * Patches ONE account of `<userId>.accounts` in a single transaction. The list is re-read
+ * inside the transaction, so a stale in-memory account cannot overwrite fields written by
+ * somebody else meanwhile; only the keys in `patch` change. Secret fields (cookie / cred /
+ * salt) in the patch are encrypted. A key whose value is `undefined` is removed.
+ * Returns false (and writes nothing) if the user or the account no longer exists.
+ */
+export function patchAccount(
+  db: CustomDatabase,
+  userId: string,
+  id: string,
+  patch: Record<string, unknown>,
+): boolean {
+  if (!id) return false;
+  const encrypted = encryptAccount({ ...patch });
+  return db.transaction((store) => {
+    const key = `${userId}.accounts`;
+    const current = store.get<any[]>(key);
+    if (!Array.isArray(current)) return false;
+    const index = current.findIndex((item) => accountId(item) === id);
+    if (index < 0) return false;
+    const next = { ...current[index] };
+    for (const [field, value] of Object.entries(encrypted)) {
+      if (value === undefined) delete next[field];
+      else next[field] = value;
+    }
+    current[index] = next;
+    store.set(key, current);
+    return true;
+  });
+}
+
 function gameIds(account: any): Set<string> {
   const ids = new Set<string>();
   const entries = Array.isArray(account?.roles)
@@ -112,6 +144,8 @@ export function deleteAccountData(
       for (const entry of [
         `autoDaily.${userId}`,
         `${userId}.lastAutoDaily`,
+        `autoDailyState.${userId}`,
+        `${userId}.autoDailyHour`,
         `profile.${userId}.template`,
       ])
         store.delete(entry);

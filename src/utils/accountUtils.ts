@@ -1,5 +1,5 @@
 import { CustomDatabase } from "./Database";
-import { writeAccounts } from "./accountData";
+import { accountId, patchAccount, writeAccounts } from "./accountData";
 import {
   getGamePlayerBinding,
   getGamePlayerBindingResponse,
@@ -11,6 +11,11 @@ import {
 import { extractAccountToken } from "../commands/account/login";
 import { decryptAccount, encryptAccount } from "./cryptoUtils";
 import { Logger } from "./Logger";
+import {
+  ARKNIGHTS_GAME_ID,
+  ENDFIELD_GAME_ID,
+  getPrimaryBindingRoleForGame,
+} from "./bindingRoles";
 
 const logger = new Logger("AccountUtils");
 
@@ -41,6 +46,11 @@ export function normalizeBindingEntries(
   return out;
 }
 
+/**
+ * @deprecated Returns the first role of ANY game, so on a mixed account the Arknights role
+ * can come back where an Endfield role is expected. Use getPrimaryBindingRoleForGame from
+ * ./bindingRoles. Kept only for callers outside lane L3.
+ */
 export function getPrimaryBindingRole(
   bindings: any[] | null | undefined,
 ): { binding: any; role: any } | null {
@@ -121,6 +131,69 @@ export async function ensureAccountBinding(
   lang: string,
   forceRefresh: boolean = false,
 ): Promise<boolean> {
+  const startedAt = Date.now();
+  const isRecent = startedAt - (account.lastRefresh || 0) < 2 * 60 * 60 * 1000;
+
+  if (
+    !forceRefresh &&
+    !account.invalid &&
+    isRecent &&
+    (getPrimaryBindingRoleForGame(account.roles, ENDFIELD_GAME_ID) ||
+      getPrimaryBindingRoleForGame(account.roles, ARKNIGHTS_GAME_ID))
+  ) {
+    return false;
+  }
+
+  // One refresh at a time per user, so a daily run and a reminder poll cannot refresh the
+  // same tokens concurrently and overwrite each other. The lock is not reentrant: nothing
+  // inside refreshAccountBinding may call ensureAccountBinding / withAutoRefresh again.
+  return db.withKeyLock("acct:" + userId, () =>
+    refreshAccountBinding(account, userId, db, lang, forceRefresh, startedAt),
+  );
+}
+
+function readStoredAccount(
+  db: CustomDatabase,
+  userId: string,
+  id: string,
+): any | null {
+  const list = db.transaction((store) =>
+    store.get<any[]>(`${userId}.accounts`),
+  );
+  const found = Array.isArray(list)
+    ? list.find((item) => accountId(item) === id)
+    : null;
+  return found ? decryptAccount(found) : null;
+}
+
+async function refreshAccountBinding(
+  account: any,
+  userId: string,
+  db: CustomDatabase,
+  lang: string,
+  forceRefresh: boolean,
+  startedAt: number,
+): Promise<boolean> {
+  const id = accountId(account);
+
+  // Somebody else refreshed this account while we waited for the lock: use their result.
+  const stored = id ? readStoredAccount(db, userId, id) : null;
+  if (
+    stored &&
+    !stored.invalid &&
+    stored.cred &&
+    (stored.lastRefresh || 0) >= startedAt
+  ) {
+    account.cred = stored.cred;
+    account.salt = stored.salt;
+    account.cookie = stored.cookie;
+    account.roles = stored.roles;
+    account.lastRefresh = stored.lastRefresh;
+    account.invalid = false;
+    delete account.tokenExpiredNotified;
+    return true;
+  }
+
   // 只驗證 cred/cookie 是否有效，並可正常呼叫 getAttendanceList
   let modified = false;
   let newCred = account.cred;
@@ -129,19 +202,7 @@ export async function ensureAccountBinding(
   const now = Date.now();
   const oldLastRefresh = account.lastRefresh || 0;
   const isRecent = now - oldLastRefresh < 2 * 60 * 60 * 1000;
-
-  if (
-    !forceRefresh &&
-    !account.invalid &&
-    isRecent &&
-    (getPrimaryBindingRole(account.roles) ||
-      normalizeBindingEntries(account.roles).some(
-        (binding: any) =>
-          Number(binding?.gameId) === 1 && (binding?.uid || binding?.nickName),
-      ))
-  ) {
-    return false;
-  }
+  const wasInvalid = !!account.invalid;
 
   // Step 1: 嘗試用現有 cred/salt 呼叫 getUserInfo
   let valid = false;
@@ -224,8 +285,8 @@ export async function ensureAccountBinding(
     if (!account.invalid) {
       account.invalid = true;
       modified = true;
-      // Save back to DB
-      await saveAccounts(db, userId, [account]);
+      // Save back to DB (patch only this flag; the in-memory account may be stale)
+      patchAccount(db, userId, id, { invalid: true });
     }
     return modified;
   }
@@ -309,15 +370,27 @@ export async function ensureAccountBinding(
   const rolesChanged =
     JSON.stringify(account.roles || []) !==
     JSON.stringify(latestBindings || []);
-  if (credsChanged || cookieChanged || rolesChanged || !isRecent) {
+  if (credsChanged || cookieChanged || rolesChanged || !isRecent || wasInvalid) {
     account.cred = newCred;
     account.salt = newSalt;
     account.cookie = newCookie;
     account.roles = latestBindings;
-    account.lastRefresh = now;
+    // Completion time: a caller that waited on the lock started before it and can adopt it.
+    const savedAt = Date.now();
+    account.lastRefresh = savedAt;
+    // A working token again: the "please /login" notice may be sent again next time.
+    delete account.tokenExpiredNotified;
     modified = true;
-    // Save back to DB
-    await saveAccounts(db, userId, [account]);
+    // Save back to DB: patch only what a refresh owns, re-reading the list in the transaction
+    patchAccount(db, userId, id, {
+      invalid: false,
+      cred: newCred,
+      salt: newSalt,
+      cookie: newCookie,
+      roles: latestBindings,
+      lastRefresh: savedAt,
+      tokenExpiredNotified: undefined,
+    });
   }
 
   return modified;

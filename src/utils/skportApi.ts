@@ -7,6 +7,12 @@ import { Logger } from "./Logger";
 
 const logger = new Logger("SkportAPI");
 
+// Private copy of cryptoUtils.maskSecret (lane L2 adds the shared one; switch after merge).
+function maskSecret(value: string): string {
+  if (typeof value !== "string" || value.length <= 8) return "****";
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
 const OFFSET_CACHE_PATH = path.join(process.cwd(), ".cache", "server-time-offset.json");
 
 function loadCachedOffset(): number {
@@ -870,7 +876,7 @@ export async function verifyToken(cookie: string, locale?: string) {
     // For safety, if it looks like a full cookie but lacks ACCOUNT_TOKEN, we log it
     if (cleanToken.includes(";")) {
       logger.warn(
-        `Potential invalid cookie provided to verifyToken: ${cleanToken}`,
+        `Potential invalid cookie provided to verifyToken: ${maskSecret(cleanToken)}`,
       );
       // Try to take the first part if it's not a known WAF cookie
       const firstPart = cleanToken.split(";")[0];

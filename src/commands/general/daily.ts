@@ -18,16 +18,22 @@ import {
   ensureAccountBinding,
   getAccounts,
   normalizeBindingEntries,
-  saveAccounts,
   withAutoRefresh,
 } from "../../utils/accountUtils";
+import { accountId, patchAccount } from "../../utils/accountData";
+import {
+  DailyGameScope,
+  ENDFIELD_GAME_ID,
+  ARKNIGHTS_GAME_ID,
+  gameIdsForScope,
+  normalizeBindingRoles,
+  toAttendanceRole,
+} from "../../utils/bindingRoles";
 import { formatSkGameRole, getGamePlayerBinding } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { processRoleAttendance } from "../../utils/attendanceUtils";
+import { classifyAttendance } from "../../services/autoDailyPlan";
 import { buildDailyAttendanceCard } from "../../utils/dailyCanvasUtils";
-
-type DailyGameScope = "endfield" | "arknights" | "both";
-const DAILY_SUPPORTED_GAME_IDS = new Set([1, 3]);
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -265,7 +271,7 @@ const command: Command = {
 
     const isClaim = subcommand === "claim";
     let hasResult = false;
-    const outputLines: string[] = [];
+    const errorLines: string[] = [];
     const files: AttachmentBuilder[] = [];
     const fileNames: string[] = [];
 
@@ -277,14 +283,19 @@ const command: Command = {
       await ensureAccountBinding(account, userId, db, t.lang);
 
       // ensureAccountBinding 已同步最新 roles，直接使用儲存的資料
-      const roles = normalizeAttendanceBindings(account.roles, gameScope);
+      const roles = normalizeBindingRoles(
+        account.roles,
+        gameIdsForScope(gameScope),
+      );
 
-      if (!roles || roles.length === 0) continue;
+      if (roles.length === 0) continue;
 
-      for (const binding of roles) {
-        for (const role of binding.roles) {
+      for (const normalized of roles) {
+        {
+          const binding = { gameId: normalized.gameId };
+          const role = toAttendanceRole(normalized);
           const gameRoleStr = formatSkGameRole(
-            binding.gameId || 3, // Fallback to 3 (Endfield)
+            binding.gameId,
             role.roleId,
             role.serverId,
           );
@@ -303,7 +314,7 @@ const command: Command = {
               (c: string, s: string, options: any) =>
                 processRoleAttendance(
                   role,
-                  binding.gameId || 3,
+                  binding.gameId,
                   account.cookie,
                   t.lang,
                   c,
@@ -318,6 +329,7 @@ const command: Command = {
             if (e.message === "TokenExpired") {
               res = {
                 error: true,
+                errorKind: "token_expired",
                 message: t("TokenExpired"),
               };
             } else {
@@ -326,6 +338,17 @@ const command: Command = {
           }
 
           if (!res) continue;
+
+          if (res.error) {
+            // Never draw a card that reads "already signed" for a failed request.
+            const kind = classifyAttendance(res);
+            const reason =
+              kind === "token_expired"
+                ? t("TokenExpired")
+                : res.message || t("Error");
+            errorLines.push(`❌ ${role.nickname}: ${reason}`);
+            continue;
+          }
 
           {
             const isArknights = Number(binding.gameId || 3) === 1;
@@ -380,7 +403,12 @@ const command: Command = {
       return;
     }
 
-    const messages = buildCardMessages([{ files }], `<@${userId}>`, true);
+    const textBlock = errorLines.length ? `\n${errorLines.join("\n")}` : "";
+    const messages = buildCardMessages(
+      [{ files }],
+      `<@${userId}>${textBlock}`,
+      true,
+    );
     await interaction.editReply(messages[0]);
     for (const payload of messages.slice(1)) await interaction.followUp(payload);
 
@@ -568,57 +596,6 @@ function normalizeDailyHour(value: unknown, fallback: number): number {
   return one === null ? fallback : one;
 }
 
-function normalizeAttendanceBindings(
-  raw: any,
-  scope: DailyGameScope,
-): Array<{ gameId: number; roles: any[] }> {
-  const normalized: Array<{ gameId: number; roles: any[] }> = [];
-
-  const pushBinding = (entry: any) => {
-    const gameId = Number(entry?.gameId || 0);
-    if (!DAILY_SUPPORTED_GAME_IDS.has(gameId)) return;
-    if (!isGameInScope(gameId, scope)) return;
-
-    let roles = Array.isArray(entry?.roles)
-      ? entry.roles
-      : entry?.defaultRole
-        ? [entry.defaultRole]
-        : [];
-
-    if (roles.length === 0 && gameId === 1 && (entry?.uid || entry?.nickName)) {
-      roles = [
-        {
-          roleId: String(entry?.uid || ""),
-          serverId: String(entry?.channelMasterId || ""),
-          nickname: String(entry?.nickName || entry?.uid || "Arknights"),
-          level: 0,
-          serverName: String(entry?.channelName || entry?.gameName || "-"),
-        },
-      ];
-    }
-
-    if (roles.length > 0) {
-      normalized.push({ gameId, roles });
-    }
-  };
-
-  if (!Array.isArray(raw)) {
-    return normalized;
-  }
-
-  for (const item of raw) {
-    if (Array.isArray(item?.bindingList)) {
-      for (const binding of item.bindingList) {
-        pushBinding(binding);
-      }
-      continue;
-    }
-    pushBinding(item);
-  }
-
-  return normalized;
-}
-
 function normalizeGameScope(
   value: unknown,
   fallback: DailyGameScope,
@@ -627,12 +604,6 @@ function normalizeGameScope(
     return value;
   }
   return fallback;
-}
-
-function isGameInScope(gameId: number, scope: DailyGameScope): boolean {
-  if (scope === "both") return gameId === 1 || gameId === 3;
-  if (scope === "arknights") return gameId === 1;
-  return gameId === 3;
 }
 
 function toGameScopeLabel(tr: any, scope: DailyGameScope): string {
@@ -660,7 +631,7 @@ command.autocomplete = async (client, interaction, db) => {
     const query = String(focused.value || "").toLowerCase();
     const isZh = interaction.locale === "zh-TW";
     const TWO_HOURS = 2 * 60 * 60 * 1000;
-    let hasRoleUpdates = false;
+    const updatedAccounts: any[] = [];
     const accountLabels = await Promise.all(
       accounts.map(async (acc: any, index: number) => {
         const isRecent = Date.now() - (acc.lastRefresh || 0) < TWO_HOURS;
@@ -668,21 +639,28 @@ command.autocomplete = async (client, interaction, db) => {
         // 若 roles 已在 2 小時內同步過，直接用快取，不重打 API
         if (!isRecent || !Array.isArray(acc.roles) || acc.roles.length === 0) {
           try {
-            const liveBindings = await withAutoRefresh(
-              client,
-              interaction.user.id,
-              acc,
-              (c: string, s: string, options: any) =>
-                getGamePlayerBinding(
-                  acc.cookie,
-                  interaction.locale,
-                  c,
-                  s,
-                  options,
-                  acc.info?.id,
-                ),
-              interaction.locale,
-            );
+            // Autocomplete must answer within 3 s: bound the live lookup.
+            let timer: NodeJS.Timeout | undefined;
+            const liveBindings: any = await Promise.race([
+              withAutoRefresh(
+                client,
+                interaction.user.id,
+                acc,
+                (c: string, s: string, options: any) =>
+                  getGamePlayerBinding(
+                    acc.cookie,
+                    interaction.locale,
+                    c,
+                    s,
+                    options,
+                    acc.info?.id,
+                  ),
+                interaction.locale,
+              ),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error("timeout")), 2000);
+              }),
+            ]).finally(() => clearTimeout(timer));
 
             const normalizedBindings = normalizeBindingEntries(liveBindings);
 
@@ -692,7 +670,7 @@ command.autocomplete = async (client, interaction, db) => {
               if (oldValue !== newValue) {
                 acc.roles = normalizedBindings;
                 acc.lastRefresh = Date.now();
-                hasRoleUpdates = true;
+                updatedAccounts.push(acc);
               }
             }
           } catch {
@@ -707,8 +685,12 @@ command.autocomplete = async (client, interaction, db) => {
       }),
     );
 
-    if (hasRoleUpdates) {
-      await saveAccounts(db, interaction.user.id, accounts);
+    // Patch only roles/lastRefresh: the in-memory accounts may be stale by now.
+    for (const acc of updatedAccounts) {
+      patchAccount(db, interaction.user.id, accountId(acc), {
+        roles: acc.roles,
+        lastRefresh: acc.lastRefresh,
+      });
     }
 
     const choices = accountLabels
@@ -810,53 +792,17 @@ function extractGameRolePreview(raw: any): {
   endfield?: { nickname: string; level?: number };
   arknights?: { nickname: string; level?: number };
 } {
-  const result: {
-    endfield?: { nickname: string; level?: number };
-    arknights?: { nickname: string; level?: number };
-  } = {};
-
-  if (!Array.isArray(raw)) return result;
-
-  const pushBinding = (entry: any) => {
-    const gameId = Number(entry?.gameId || 0);
-    const roles = Array.isArray(entry?.roles)
-      ? entry.roles
-      : entry?.defaultRole
-        ? [entry.defaultRole]
-        : [];
-    const role = roles[0];
-    const roleInfo = role
-      ? {
-          nickname: `${role?.nickname || role?.nickName || entry?.nickName || "Unknown"}`,
-          level: Number.isFinite(Number(role?.level))
-            ? Number(role?.level)
-            : undefined,
-        }
-      : entry?.nickName
-        ? {
-            nickname: `${entry.nickName}`,
-            level: undefined,
-          }
-        : null;
-    if (!roleInfo) return;
-
-    if (gameId === 3 && !result.endfield) {
-      result.endfield = roleInfo;
-    }
-    if (gameId === 1 && !result.arknights) {
-      result.arknights = roleInfo;
-    }
+  const preview = (gameId: number) => {
+    const role = normalizeBindingRoles(raw, [gameId])[0];
+    if (!role) return undefined;
+    const level = Number(role.raw?.level);
+    return {
+      nickname: role.nickname || "Unknown",
+      level: Number.isFinite(level) ? level : undefined,
+    };
   };
-
-  for (const item of raw) {
-    if (Array.isArray(item?.bindingList)) {
-      for (const binding of item.bindingList) {
-        pushBinding(binding);
-      }
-      continue;
-    }
-    pushBinding(item);
-  }
-
-  return result;
+  return {
+    endfield: preview(ENDFIELD_GAME_ID),
+    arknights: preview(ARKNIGHTS_GAME_ID),
+  };
 }
