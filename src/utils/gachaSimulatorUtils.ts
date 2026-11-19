@@ -1,6 +1,6 @@
 import { createCanvas } from "@napi-rs/canvas";
 import { CustomDatabase } from "./Database";
-import { fetchImage } from "./canvasUtils";
+import { fetchImageTimed } from "../features/gacha/iconLoader";
 import { SkPoolItem } from "./skportApi";
 import axios from "axios";
 
@@ -717,29 +717,31 @@ export async function drawSimulationImage(
   let silhouetteImg: any = null;
   let starImg: any = null;
   const [flouRes, silRes, starRes] = await Promise.allSettled([
-    fetchImage(FLOU_URL, "sim_flou"),
-    fetchImage(SILHOUETTE_URL, "sim_silouette"),
-    fetchImage(STAR_URL, "sim_star"),
+    fetchImageTimed(FLOU_URL, "sim_flou"),
+    fetchImageTimed(SILHOUETTE_URL, "sim_silouette"),
+    fetchImageTimed(STAR_URL, "sim_star"),
   ]);
   if (flouRes.status === "fulfilled") flouImg = flouRes.value;
   if (silRes.status === "fulfilled") silhouetteImg = silRes.value;
   if (starRes.status === "fulfilled") starImg = starRes.value;
 
-  // Pre-load unique character images
+  // Pre-load unique character images in parallel (8 s ceiling each; a failed
+  // one falls back to the silhouette).
   const charImages = new Map<string, any>();
+  const charUrls = new Map<string, string>();
   for (const r of results) {
     const url = r.character.iconUrl;
-    if (url && !charImages.has(url)) {
+    if (url && !charUrls.has(url)) charUrls.set(url, r.character.id);
+  }
+  await Promise.all(
+    Array.from(charUrls, async ([url, id]) => {
       try {
-        charImages.set(
-          url,
-          await fetchImage(url, `sim_char_${r.character.id}`),
-        );
+        charImages.set(url, await fetchImageTimed(url, `sim_char_${id}`));
       } catch {
         /* fall back to silhouette */
       }
-    }
-  }
+    }),
+  );
 
   for (let i = 0; i < count; i++) {
     const result = results[i];

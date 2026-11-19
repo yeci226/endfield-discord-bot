@@ -30,6 +30,8 @@ function main() {
     getGachaIconUrlCandidates(true, "chr_0034_typhoea"),
     [
       "https://bbs.hycdn.cn/image/common/20260902/221109/6a9772282e39b624e0143815_3eac6ad0.png",
+      "https://endfieldtools.dev/assets/images/endfield/charicon/icon_chr_0034_typhoea.png",
+      "https://endfield.ooo.run/ake/operators/icon_chr_0034_typhoea.webp",
     ],
   );
 
@@ -37,10 +39,18 @@ function main() {
     getGachaIconUrlCandidates(true, "icon_chr_0009_azrila"),
     [
       "https://bbs.hycdn.cn/image/common/20260217/2054140/69940065223662a892b01da4_db193eac.png",
+      "https://endfieldtools.dev/assets/images/endfield/charicon/icon_chr_0009_azrila.png",
+      "https://endfield.ooo.run/ake/operators/icon_chr_0009_azrila.webp",
     ],
   );
 
-  assert.deepEqual(getGachaIconUrlCandidates(true, "chr_9999_unknown"), []);
+  // Operators missing from the official table still get the two mirrors, in
+  // this order (official CDN first, then endfieldtools.dev, then ooo.run).
+  assert.deepEqual(getGachaIconUrlCandidates(true, "chr_9999_unknown"), [
+    "https://endfieldtools.dev/assets/images/endfield/charicon/icon_chr_9999_unknown.png",
+    "https://endfield.ooo.run/ake/operators/icon_chr_9999_unknown.webp",
+  ]);
+  assert.deepEqual(getGachaIconUrlCandidates(true, ""), []);
 }
 
 main();

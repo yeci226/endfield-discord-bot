@@ -28,6 +28,48 @@ export function getDisplayedRemainingPulls(cap: number, pity: number): number {
   return Math.max(1, cap - pity);
 }
 
+/**
+ * The reply text for one simulation result. Used by both the slash command and
+ * the "pull again" buttons so the same state always reads the same.
+ */
+export function buildSimResultContent(
+  tr: any,
+  poolCfg: { poolName: string; sixStarUp?: unknown; isSpecial: boolean },
+  state: {
+    sixStarPity: number;
+    fiveStarPity: number;
+    isGuaranteed: boolean;
+    pullsWithoutCurrentUp: number;
+  },
+): string {
+  const currentUpRemain = CURRENT_UP_HARD_PITY_CAP - state.pullsWithoutCurrentUp;
+  const hardPityNote = poolCfg.sixStarUp
+    ? currentUpRemain <= 1
+      ? `\n${tr("gacha_sim_current_up_guarantee_next")}`
+      : `\n${tr("gacha_sim_current_up_guarantee_remaining", { remaining: currentUpRemain })}`
+    : "";
+  const note =
+    tr("gacha_sim_note_summary", {
+      pity: state.sixStarPity,
+      sixRemaining: getDisplayedRemainingPulls(
+        SIX_STAR_PITY_CAP,
+        state.sixStarPity,
+      ),
+      fiveRemaining: getDisplayedRemainingPulls(
+        FIVE_STAR_PITY_CAP,
+        state.fiveStarPity,
+      ),
+    }) +
+    hardPityNote +
+    (poolCfg.isSpecial && state.isGuaranteed
+      ? `\n${tr("gacha_sim_next_six_rate_up")}`
+      : "");
+  return tr("gacha_sim_result_content", {
+    poolName: poolCfg.poolName,
+    note,
+  });
+}
+
 function isBeginnerSimPool(pool: any): boolean {
   const id = String(pool?.poolId || pool?.id || "").toLowerCase();
   const name = String(pool?.poolName || pool?.name || "").toLowerCase();
@@ -123,34 +165,8 @@ export async function handleSimulate(
   const attachment = new AttachmentBuilder(imageBuffer, {
     name: "gacha_simulate.webp",
   });
-  const currentUpRemain =
-    CURRENT_UP_HARD_PITY_CAP - pityState.pullsWithoutCurrentUp;
-  const hardPityNote = poolCfg.sixStarUp
-    ? currentUpRemain <= 1
-      ? `\n${tr("gacha_sim_current_up_guarantee_next")}`
-      : `\n${tr("gacha_sim_current_up_guarantee_remaining", { remaining: currentUpRemain })}`
-    : "";
-  const note =
-    tr("gacha_sim_note_summary", {
-      pity: pityState.sixStarPity,
-      sixRemaining: getDisplayedRemainingPulls(
-        SIX_STAR_PITY_CAP,
-        pityState.sixStarPity,
-      ),
-      fiveRemaining: getDisplayedRemainingPulls(
-        FIVE_STAR_PITY_CAP,
-        pityState.fiveStarPity,
-      ),
-    }) +
-    hardPityNote +
-    (poolCfg.isSpecial && pityState.isGuaranteed
-      ? `\n${tr("gacha_sim_next_six_rate_up")}`
-      : "");
   await interaction.editReply({
-    content: tr("gacha_sim_result_content", {
-      poolName: poolCfg.poolName,
-      note,
-    }),
+    content: buildSimResultContent(tr, poolCfg, pityState),
     files: [attachment],
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -232,34 +248,8 @@ export async function handleSimPullButton(
   const simFile = new AttachmentBuilder(simImg, {
     name: "gacha_simulate.webp",
   });
-  const simCurrentUpRemain =
-    CURRENT_UP_HARD_PITY_CAP - simState.pullsWithoutCurrentUp;
-  const simHardPityNote = simCfg.sixStarUp
-    ? simCurrentUpRemain <= 1
-      ? `\n${tr("gacha_sim_current_up_guarantee_next")}`
-      : `\n${tr("gacha_sim_current_up_guarantee_remaining", { remaining: simCurrentUpRemain })}`
-    : "";
-  const simNote =
-    tr("gacha_sim_note_summary", {
-      pity: simState.sixStarPity,
-      sixRemaining: getDisplayedRemainingPulls(
-        SIX_STAR_PITY_CAP,
-        simState.sixStarPity,
-      ),
-      fiveRemaining: getDisplayedRemainingPulls(
-        FIVE_STAR_PITY_CAP,
-        simState.fiveStarPity,
-      ),
-    }) +
-    simHardPityNote +
-    (simCfg.isSpecial && simState.isGuaranteed
-      ? `\n${tr("gacha_sim_next_six_limited")}`
-      : "");
   await btnInteraction.editReply({
-    content: tr("gacha_sim_result_content", {
-      poolName: simCfg.poolName,
-      note: simNote,
-    }),
+    content: buildSimResultContent(tr, simCfg, simState),
     files: [simFile],
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(

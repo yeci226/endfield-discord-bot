@@ -13,16 +13,29 @@ const baseline = JSON.parse(
   ),
 );
 
-const res = spawnSync(
-  process.execPath,
-  ["-r", "ts-node/register", path.join(root, "scripts", "render-gacha-fixture.ts")],
-  {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 120000,
-    maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1", NODE_ENV: "test" },
-  },
-);
-assert.equal(res.status, 0, res.stderr);
-assert.deepEqual(JSON.parse(res.stdout), baseline);
+// Render once with the card cache on (the fixture also checks a repeat render
+// returns the identical buffer) and once with it bypassed: same pixels.
+for (const noCardCache of ["0", "1"]) {
+  const res = spawnSync(
+    process.execPath,
+    [
+      "-r",
+      "ts-node/register",
+      path.join(root, "scripts", "render-gacha-fixture.ts"),
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 120000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: {
+        ...process.env,
+        TS_NODE_TRANSPILE_ONLY: "1",
+        NODE_ENV: "test",
+        RENDER_FIXTURE_NO_CARD_CACHE: noCardCache,
+      },
+    },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout), baseline);
+}

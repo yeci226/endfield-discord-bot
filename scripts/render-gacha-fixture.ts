@@ -30,6 +30,7 @@ import {
   SimPullResult,
 } from "../src/utils/gachaSimulatorUtils";
 import { createTranslator } from "../src/utils/i18n";
+import { renderedCardCache } from "../src/features/gacha/statsCanvas/cardCache";
 
 // ---------------------------------------------------------------- seeded rng
 function mulberry32(seed: number) {
@@ -370,6 +371,13 @@ function installStubs() {
     if (/\/assets\/(remote_cache|cache)(\/|$)/.test(s)) return false;
     return realExists(p);
   };
+  // The icon loader indexes those directories with readdirSync instead of probing.
+  const realReaddir = fs.readdirSync;
+  (fs as any).readdirSync = (p: any, ...rest: any[]) => {
+    const s = String(p).replace(/\\/g, "/");
+    if (/\/assets\/(remote_cache|cache)\/?$/.test(s)) return [];
+    return (realReaddir as any)(p, ...rest);
+  };
 
   // Any leftover randomness (avatar fallback picks a random profile image).
   Math.random = mulberry32(1);
@@ -388,16 +396,30 @@ async function rgbaHash(buf: Buffer): Promise<string> {
   return hash.digest("hex");
 }
 
-export async function renderGachaFixture(
-  dumpDir?: string,
-): Promise<Record<string, string>> {
+/** Stubs installed, seeded db, fake log and its stats: shared with scripts/bench-gacha-render.ts. */
+export async function prepareFixture() {
   installStubs();
   const db = new CustomDatabase(":memory:");
   await seedPoolMetadata(db);
   const data = buildLog();
   const stats = await getGachaStats(db, data);
-  const tr = createTranslator("tw");
-  const trEn = createTranslator("en");
+  return {
+    db,
+    data,
+    stats,
+    tr: createTranslator("tw"),
+    trEn: createTranslator("en"),
+  };
+}
+
+export async function renderGachaFixture(
+  dumpDir?: string,
+): Promise<Record<string, string>> {
+  // RENDER_FIXTURE_NO_CARD_CACHE=1 reproduces the pre-cache path.
+  if (process.env.RENDER_FIXTURE_NO_CARD_CACHE === "1") {
+    renderedCardCache.enabled = false;
+  }
+  const { db, data, stats, tr, trEn } = await prepareFixture();
   const out: Record<string, string> = {};
   const record = async (name: string, buf: Buffer) => {
     out[name] = await rgbaHash(buf);
@@ -416,6 +438,11 @@ export async function renderGachaFixture(
   ) => {
     const buf = await drawGachaStats(data, stats, t, type, poolId, page, db);
     await record(name, buf);
+    if (renderedCardCache.enabled) {
+      // The card cache must hand back the very same buffer for the same inputs.
+      const again = await drawGachaStats(data, stats, t, type, poolId, page, db);
+      if (again !== buf) throw new Error(`card cache miss for ${name}`);
+    }
   };
 
   await stat("overview_limited", "limited_char");
@@ -429,6 +456,7 @@ export async function renderGachaFixture(
   await stat("detail_weapon", "weapon", "weaponbox_1_0_1", 0);
   await stat("detail_standard", "standard_char", "c_standard_1", 0);
   await stat("overview_limited_en", "limited_char", undefined, 0, trEn);
+  await stat("detail_special_page1_en", "limited_char", "c_special_1_0_1", 0, trEn);
 
   const entries = buildLeaderboardEntries();
   const lbPulls = await drawGachaLeaderboard(
