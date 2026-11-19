@@ -23,9 +23,13 @@ import {
 } from "../../../utils/gachaCanvasUtils";
 import moment from "moment";
 import {
+  findPoolPage,
   getGachaPityGroupId,
   isGachaPoolInCategory,
+  pagePoolOptions,
   paginateGachaOverviewPools,
+  parsePoolPageValue,
+  poolPageValue,
 } from "../../../utils/gachaPoolUtils";
 import { GachaContext } from "./context";
 import {
@@ -134,6 +138,11 @@ export async function showGachaStats(
 
   const stats = cached.stats;
 
+  // The pool select's "older / newer" entries re-render the overview with
+  // another page of pool options.
+  let poolSelectPage = parsePoolPageValue(poolId);
+  if (poolSelectPage !== null) poolId = "";
+
   // Auto-correct pageType based on poolId if a specific pool is selected
   if (poolId && poolId !== "all") {
     const isWeapon = stats.weapon.pools.some((p: any) => p.id === poolId);
@@ -179,6 +188,16 @@ export async function showGachaStats(
     isGachaPoolInCategory(p, pageType),
   );
 
+  if (poolSelectPage === null) {
+    poolSelectPage =
+      poolId && poolId !== "all" ? findPoolPage(filteredPools, poolId) : 0;
+  }
+  const poolOptionPage = pagePoolOptions(filteredPools, poolSelectPage);
+  const pageSuffix = {
+    page: String(poolOptionPage.page + 1),
+    total: String(poolOptionPage.totalPages),
+  };
+
   const poolRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
@@ -190,7 +209,7 @@ export async function showGachaStats(
             value: "all",
             default: !poolId,
           },
-          ...filteredPools.slice(0, 24).map((p) => {
+          ...poolOptionPage.items.map((p) => {
             let description = undefined;
             if (p.startTs && p.endTs) {
               const formatTs = (ts: string) => {
@@ -211,6 +230,24 @@ export async function showGachaStats(
               default: p.id === poolId,
             };
           }),
+          ...(poolOptionPage.hasNewer
+            ? [
+                {
+                  label: tr("gacha_log_view_PoolsNewer"),
+                  value: poolPageValue(poolOptionPage.page - 1),
+                  description: tr("gacha_log_view_PoolsPage", pageSuffix),
+                },
+              ]
+            : []),
+          ...(poolOptionPage.hasOlder
+            ? [
+                {
+                  label: tr("gacha_log_view_PoolsOlder"),
+                  value: poolPageValue(poolOptionPage.page + 1),
+                  description: tr("gacha_log_view_PoolsPage", pageSuffix),
+                },
+              ]
+            : []),
         ]),
     );
 

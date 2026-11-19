@@ -212,6 +212,52 @@ async function main() {
       assert.ok(replies[replies.length - 1].files?.length === 1);
     }
 
+    // --- more than 24 pools: the pool select pages, every pool stays reachable
+    {
+      const { db, ctx, replies } = await setup("羽冰");
+      const log: any = buildLog("羽冰");
+      log.characterList = Array.from({ length: 30 }, (_, i) => ({
+        seqId: String(500 - i),
+        charId: `chr_${i}`,
+        charName: `Char ${i}`,
+        rarity: 4,
+        gachaTs: String(1_760_000_000_000 + (30 - i) * 86_400_000),
+        poolId: `c_special_p${i}`,
+        poolName: `特選尋訪 ${i}`,
+        poolType: "E_CharacterGachaPoolType_Special",
+        isFree: false,
+      }));
+      await db.set(LOG_KEY, log);
+      for (let i = 0; i < 30; i++) {
+        await db.set(`GACHA_POOL_METADATA_c_special_p${i}`, { data: { all: [] }, lastFetch: 0 });
+      }
+      const selectOptions = (reply: any) =>
+        reply.components[0].toJSON().components[0].options as Array<{ value: string; label: string; default?: boolean }>;
+      await showGachaStats(ctx, UID, "limited_char");
+      let opts = selectOptions(replies[replies.length - 1]);
+      assert.ok(opts.length <= 25);
+      assert.equal(opts[0].value, "all");
+      assert.equal(opts[opts.length - 1].value, "__pp:1", "last option pages to older pools");
+      const shown = new Set(opts.map((o) => o.value));
+      // selecting the paging option shows the next page, still as an overview
+      await showGachaStats(ctx, UID, "limited_char", "__pp:1");
+      opts = selectOptions(replies[replies.length - 1]);
+      assert.equal(opts[0].value, "all");
+      assert.equal(opts[0].default, true, "the overview stays selected");
+      assert.equal(opts[opts.length - 1].value, "__pp:0", "last option pages back to newer pools");
+      for (const o of opts) if (!o.value.startsWith("__pp:") && o.value !== "all") shown.add(o.value);
+      assert.equal(
+        [...shown].filter((v) => v.startsWith("c_special_p")).length,
+        30,
+        "all 30 pools are reachable through the two pages",
+      );
+      // an old pool selected from page 1 keeps that page of the select
+      const oldest = opts.find((o) => o.value.startsWith("c_special_p"))!;
+      await showGachaStats(ctx, UID, "limited_char", oldest.value);
+      opts = selectOptions(replies[replies.length - 1]);
+      assert.equal(opts.find((o) => o.default && o.value !== "all")?.value, oldest.value);
+    }
+
     // --- pure helpers
     assert.equal(isGenericNickname(undefined, UID), true);
     assert.equal(isGenericNickname("Unknown", UID), true);

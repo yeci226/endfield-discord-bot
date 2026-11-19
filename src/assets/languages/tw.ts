@@ -511,6 +511,9 @@ const langs: Record<string, any> = {
   // --- G3 (gacha stats) ---
   gacha_log_view_AccountNotOwned:
     "該帳號不屬於 {user}，只能查看該使用者自己綁定或建立的帳號。",
+  gacha_log_view_PoolsNewer: "◀ 較新的卡池",
+  gacha_log_view_PoolsOlder: "較舊的卡池 ▶",
+  gacha_log_view_PoolsPage: "卡池清單第 {page} / {total} 頁",
 
   // --- G4 (gacha rendering) ---
 };
