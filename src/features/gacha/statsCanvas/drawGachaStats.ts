@@ -7,7 +7,11 @@ import {
   paginateGachaOverviewPools,
 } from "../../../utils/gachaPoolUtils";
 import { getPoolMetadata } from "../gachaApi";
-import { GACHA_IMAGE_TIMEOUT_MS, withTimeout } from "../iconLoader";
+import {
+  GACHA_IMAGE_TIMEOUT_MS,
+  refreshStoredIconUrls,
+  withTimeout,
+} from "../iconLoader";
 import { GachaLogData } from "../gachaTypes";
 import { drawSummary } from "./summary";
 import { drawOverview } from "./overview";
@@ -40,6 +44,9 @@ export async function drawGachaStats(
     console.error("[drawGachaStats] stats object is null or undefined");
     return Buffer.alloc(0);
   }
+
+  // Last-resort icon URLs learned from /gacha list (one cached read per minute).
+  if (db) await refreshStoredIconUrls(db);
 
   const baseType = type === "weapon" ? "weapon" : "char";
   const poolStats = stats[baseType];

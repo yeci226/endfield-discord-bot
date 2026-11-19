@@ -18,7 +18,11 @@ const pool = (name: string, key: "chars" | "weapons", pics: string[]) => ({
   weapons: key === "weapons" ? pics.map((pic) => ({ name: "w", pic })) : [],
 });
 
-async function render(char: any, weapon: any) {
+async function render(
+  char: any,
+  weapon: any,
+  db: CustomDatabase = new CustomDatabase(":memory:"),
+) {
   skport.getCharacterPool = async () => char;
   skport.getWeaponPool = async () => weapon;
   const replies: any[] = [];
@@ -35,7 +39,7 @@ async function render(char: any, weapon: any) {
     { lang: "tw" },
   );
   await handleGachaList(
-    { client: {} as any, interaction, tr, db: new CustomDatabase(":memory:") } as any,
+    { client: {} as any, interaction, tr, db } as any,
     interaction,
   );
   return JSON.stringify(replies[0].components[0].toJSON());
@@ -86,6 +90,24 @@ async function main() {
       },
     );
     assert.equal((json.match(/https:\/\/img\/w\d+\.png/g) || []).length, 10);
+
+    // the lists' pictures are remembered as icon fallbacks (ids come from the file names)
+    const iconDb = new CustomDatabase(":memory:");
+    const hy = "https://bbs.hycdn.cn/image/common/2026/icon_chr_0099_newguy.png";
+    await render(
+      { code: 0, data: { list: [pool("角色池", "chars", [hy, "https://img/other.png"])] } },
+      { code: 0, data: { list: [] } },
+      iconDb,
+    );
+    assert.deepEqual(await iconDb.get("GACHA_ICON_URLS"), { chr_0099_newguy: hy });
+    // a second call with nothing new leaves the row alone
+    const before = iconDb.getRowToken("GACHA_ICON_URLS")!.length;
+    await render(
+      { code: 0, data: { list: [pool("角色池", "chars", [hy])] } },
+      { code: 0, data: { list: [] } },
+      iconDb,
+    );
+    assert.equal(iconDb.getRowToken("GACHA_ICON_URLS")!.length, before);
 
     console.log("gacha list tests passed");
   } finally {

@@ -13,6 +13,7 @@ import {
   withAutoRefresh,
 } from "../../../utils/accountUtils";
 import { GachaContext } from "./context";
+import { extractPoolIconUrls, rememberIconUrls } from "../gachaIconUrls";
 
 /** One banner: title + both end times, then the picture gallery. */
 function addPoolBlock(
@@ -101,6 +102,20 @@ export async function handleGachaList(
       } else {
         throw e;
       }
+    }
+
+    // The pool lists carry every banner's pictures: remember their ids and URLs
+    // as the card renderer's last fallback for icons it has no table entry for.
+    try {
+      await rememberIconUrls(
+        db,
+        extractPoolIconUrls(
+          charPoolData?.code === 0 ? charPoolData.data?.list : undefined,
+          weaponPoolData?.code === 0 ? weaponPoolData.data?.list : undefined,
+        ),
+      );
+    } catch (e) {
+      console.error("[Gacha List] could not store icon URLs:", e);
     }
 
     const container = new ContainerBuilder();
