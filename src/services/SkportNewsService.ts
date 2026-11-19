@@ -14,6 +14,25 @@ import {
   MessageFlags,
 } from "discord.js";
 import { Logger } from "../utils/Logger";
+import {
+  DispatchRecord,
+  FeedItem,
+  ItemWork,
+  MAX_ITEMS_PER_POLL,
+  NEWS_DISPATCH_PREFIX,
+  NewsSub,
+  dispatchKey,
+  dispatchSuffix,
+  failedDispatchRecord,
+  isPermanentSendError,
+  listNewsSubs,
+  migrateNewsSubscriptions,
+  nextSubscriptionState,
+  selectItemsToDispatch,
+  shouldBaselineSkip,
+  subKeyOf,
+  sweepNewsDispatch,
+} from "../utils/newsSubscriptions";
 
 import {
   formatAcceptLanguage,
@@ -47,9 +66,9 @@ interface SkportNewsItem {
   };
 }
 
-export function selectTraditionalNews<T extends { item?: { resourceLocale?: string } }>(items: T[], force = false): T[] {
+export function selectTraditionalNews<T extends { item?: { resourceLocale?: string } }>(items: T[], force = false, limit = 3): T[] {
   return items.filter((news) => news?.item?.resourceLocale === "zh_Hant")
-    .slice(0, force ? 1 : 3).reverse();
+    .slice(0, force ? 1 : limit).reverse();
 }
 
 export function cleanNewsTitle(title: string): string {
@@ -59,21 +78,137 @@ export function cleanNewsTitle(title: string): string {
   return clean.replace(/[\\\[\]*_`~]/g, "\\$&");
 }
 
+/** One unit of guild delivery handed to a cluster (plain data: it crosses processes). */
+export interface ClusterNewsWork {
+  suffix: string;
+  guildId: string;
+  channelId: string;
+  action: "send" | "edit";
+  messageId?: string;
+}
+
+export interface ClusterNewsResult {
+  suffix: string;
+  ok: boolean;
+  messageId?: string;
+  code?: number;
+  message?: string;
+  /** The broadcast itself failed: nothing is known about this delivery, so it must not use up a retry. */
+  skip?: boolean;
+}
+
+/**
+ * Runs inside broadcastEval on every cluster, so it must be self-contained
+ * (no imports, no module-level helpers). Promise chains are used on purpose, as
+ * in cardNotification: the ES6 build target compiles async functions to a
+ * helper that may not exist in the evaluated context. A test runs the
+ * stringified function in a bare vm context to keep this true.
+ * Each cluster only answers for guilds it owns.
+ */
+export function deliverNewsOnCluster(
+  c: any,
+  ctx: { payload: any; work: ClusterNewsWork[] },
+): Promise<ClusterNewsResult[]> {
+  const out: ClusterNewsResult[] = [];
+  return ctx.work
+    .reduce(
+      (chain: Promise<unknown>, w: ClusterNewsWork) =>
+        chain.then(() => {
+          if (!c.guilds.cache.has(w.guildId)) return undefined;
+          const channel = c.channels.cache.get(w.channelId);
+          if (!channel || typeof channel.send !== "function") {
+            out.push({ suffix: w.suffix, ok: false, code: 10003 });
+            return undefined;
+          }
+          const op: Promise<string> =
+            w.action === "edit"
+              ? Promise.resolve(channel.messages.fetch(w.messageId)).then(
+                  (m: any) => Promise.resolve(m.edit(ctx.payload)).then(() => String(w.messageId)),
+                )
+              : Promise.resolve(channel.send(ctx.payload)).then((m: any) => String(m.id));
+          return op.then(
+            (messageId) => {
+              out.push({ suffix: w.suffix, ok: true, messageId });
+            },
+            (e: any) => {
+              out.push({
+                suffix: w.suffix,
+                ok: false,
+                code: e && e.code ? Number(e.code) : undefined,
+                message: String((e && e.message) || e),
+              });
+            },
+          );
+        }),
+      Promise.resolve(),
+    )
+    .then(() => out);
+}
+
+const BASELINE_MARKER = "news.baseline.v1";
+const GUILD_CHUNK = 50;
+
+export function newsItemHash(news: SkportNewsItem): string {
+  const contentString =
+    JSON.stringify(news.item.caption) +
+    (news.item.title || "") +
+    (news.item.cover?.url || "");
+  return crypto.createHash("md5").update(contentString).digest("hex");
+}
+
+function newsItemTitle(news: SkportNewsItem): string {
+  const title = news.item.title;
+  if (title && title.trim() !== "") return title;
+  const firstText = (news.item.caption || []).find(
+    (b) => b.kind === "text" && b.text && b.text.text.trim().length > 0,
+  );
+  return firstText
+    ? firstText.text!.text.substring(0, 50) +
+        (firstText.text!.text.length > 50 ? "..." : "")
+    : "Endfield News";
+}
+
 export class SkportNewsService {
   private client: ExtendedClient;
   private interval: NodeJS.Timeout | null = null;
   private isReady: boolean = false;
+  private isPolling = false;
   private logger: Logger;
+  /** Ids of the last successfully fetched, non-empty feed; null until then. */
+  private lastFeedIds: Set<string> | null = null;
+  private sweepCursor: string | null = null;
 
   constructor(client: ExtendedClient) {
     this.client = client;
     this.logger = new Logger("SkportNews");
   }
 
+  /**
+   * Primary cluster only: migrate the legacy subscription array first, then
+   * start polling (so the first poll already sees the subscription rows), and
+   * keep the dispatch table trimmed.
+   */
+  public register() {
+    this.client.startup.onPrimary("news-service", async () => {
+      try {
+        const r = await migrateNewsSubscriptions(this.client.db);
+        if (!r.skipped)
+          this.logger.info(`Migrated ${r.migrated} news subscriptions to rows.`);
+      } catch (error: any) {
+        this.logger.error(`News subscription migration failed: ${error.message}`);
+      }
+      this.start();
+    });
+    this.client.startup.every("news-dispatch-retention", 60 * 60 * 1000, () =>
+      this.pruneDispatch(),
+    );
+  }
+
   public start() {
+    if (this.interval) return;
     this.logger.info("Skport News Service Started");
-    this.manualCheckNews();
-    this.interval = setInterval(() => this.manualCheckNews(), POLL_INTERVAL);
+    void this.manualCheckNews();
+    this.interval = setInterval(() => void this.manualCheckNews(), POLL_INTERVAL);
     this.isReady = true;
   }
 
@@ -84,7 +219,24 @@ export class SkportNewsService {
     }
   }
 
+  /** Hourly: bounded batch of old `news_dispatch.*` rows. */
+  public async pruneDispatch() {
+    const r = await sweepNewsDispatch(this.client.db, {
+      feedIds: this.lastFeedIds,
+      cursor: this.sweepCursor,
+      maxDelete: 2000,
+      maxScan: 10_000,
+    });
+    this.sweepCursor = r.cursor;
+    if (r.deleted > 0)
+      this.logger.info(
+        `Pruned ${r.deleted} old news_dispatch rows (scanned ${r.scanned}).`,
+      );
+  }
+
   public async manualCheckNews(force: boolean = false) {
+    if (this.isPolling) return;
+    this.isPolling = true;
     try {
       this.logger.info(
         `${force ? "Force checking" : "Checking"} for new Skport news...`,
@@ -114,10 +266,15 @@ export class SkportNewsService {
         );
         return;
       }
+      if (newsList.length > 0)
+        this.lastFeedIds = new Set(
+          newsList.map((n) => String(n?.item?.id)).filter(Boolean),
+        );
 
-      for (const news of selectTraditionalNews(newsList, force)) {
-        await this.processNews(news, force);
-      }
+      await this.processFeed(
+        selectTraditionalNews(newsList, force, MAX_ITEMS_PER_POLL),
+        force,
+      );
 
       // 新聞處理完成後手動觸發垃圾回收 (GC)
       if (typeof global.gc === "function") {
@@ -126,172 +283,240 @@ export class SkportNewsService {
       }
     } catch (error: any) {
       this.logger.error(`Error checking Skport news: ${error.message}`);
+    } finally {
+      this.isPolling = false;
     }
   }
 
-  private async processNews(news: SkportNewsItem, force: boolean = false) {
-    const newsId = news.item.id;
-    const captionBlocks = news.item.caption || [];
+  /** `items` are the feed's Traditional Chinese items, oldest first. */
+  private async processFeed(items: SkportNewsItem[], force: boolean) {
+    const db = this.client.db;
+    const now = Date.now();
+    const firstPoll = !(await db.get(BASELINE_MARKER));
+    const subs = await listNewsSubs(db);
 
-    // 1. Determine Title (Fallback if empty)
-    let title = news.item.title;
-    if (!title || title.trim() === "") {
-      // Find first text
-      const firstText = captionBlocks.find(
-        (b) => b.kind === "text" && b.text && b.text.text.trim().length > 0,
-      );
-      title = firstText
-        ? firstText.text!.text.substring(0, 50) +
-          (firstText.text!.text.length > 50 ? "..." : "")
-        : "Endfield News";
+    const byId = new Map<string, SkportNewsItem>();
+    const histories = new Map<string, any>();
+    const records = new Map<string, DispatchRecord>();
+    const feedItems: FeedItem[] = [];
+    for (const news of items) {
+      const id = String(news.item.id);
+      const item: FeedItem = {
+        id,
+        timestampMs: parseInt(news.item.timestamp) * 1000,
+        hash: newsItemHash(news),
+      };
+      const history = await db.get<any>(`news_history.${id}`);
+      if (
+        shouldBaselineSkip({ item, hasHistory: !!history, firstPoll, now })
+      ) {
+        // Never processed by the old code and already old: record it, do not post it.
+        await db.set(`news_history.${id}`, {
+          id,
+          title: newsItemTitle(news),
+          hash: item.hash,
+          timestamp: now,
+          complete: true,
+        });
+        continue;
+      }
+      if (!force && history?.complete && history.hash === item.hash) continue;
+      byId.set(id, news);
+      histories.set(id, history);
+      feedItems.push(item);
+      if (subs.length) {
+        for (const row of await db.findByPrefix<DispatchRecord>(
+          `${NEWS_DISPATCH_PREFIX}${id}.`,
+        ))
+          records.set(row.id, row.value);
+      }
     }
 
-    // 2. Generate Content Hash (to detect updates)
-    const contentString =
-      JSON.stringify(news.item.caption) +
-      (news.item.title || "") +
-      (news.item.cover?.url || "");
-    const currentHash = crypto
-      .createHash("md5")
-      .update(contentString)
-      .digest("hex");
-
-    // 3. Check DB
-    const historyKey = `news_history.${newsId}`;
-    const storedNews = await this.client.db.get(historyKey);
-
-    const isNew = !storedNews;
-    const isUpdated = storedNews && storedNews.hash !== currentHash;
-
-    if (!isNew && !isUpdated && !force) return; // No change
-
-    if (force) {
-      this.logger.info(`Force Resending News: ${title} (${newsId})`);
-    } else if (isUpdated) {
-      this.logger.info(`News Updated: ${title} (${newsId})`);
-    } else {
-      this.logger.info(`New News Found: ${title} (${newsId})`);
-    }
-
-    // 4. Update History
-    await this.client.db.set(historyKey, {
-      id: newsId,
-      title,
-      hash: currentHash,
-      timestamp: Date.now(),
+    const picked = selectItemsToDispatch({
+      items: feedItems,
+      subs,
+      getRecord: (item, sub) => records.get(dispatchKey(item.id, sub)) ?? null,
+      historyChanged: (item) => {
+        const h = histories.get(item.id);
+        return !!h && h.hash !== item.hash;
+      },
+      force,
     });
+    const pickedIds = new Set(picked.map((p) => p.item.id));
 
-    // 5. Dispatch
-    await this.dispatch(news, title, currentHash, isUpdated, force);
+    for (const { item, work } of picked) {
+      const news = byId.get(item.id)!;
+      const title = newsItemTitle(news);
+      this.logger.info(
+        `${force ? "Force resending" : histories.get(item.id) ? "Delivering" : "New news found"}: ${title} (${item.id}) to ${work.length} subscription(s)`,
+      );
+      const outcomes = await this.deliver(this.buildPayload(news, title), work);
+      let allOk = true;
+      let sent = 0;
+      for (const w of work) {
+        const ok = await this.recordOutcome(item, w, outcomes.get(dispatchSuffix(w.sub)));
+        allOk = allOk && ok;
+        if (ok) sent++;
+      }
+      this.logger.info(`News ${item.id}: ${sent}/${work.length} delivered.`);
+      await db.set(`news_history.${item.id}`, {
+        id: item.id,
+        title,
+        hash: item.hash,
+        timestamp: now,
+        complete: allOk && !force,
+      });
+    }
+
+    // Items that needed nothing are settled: later polls skip them without touching dispatch rows.
+    if (!force) {
+      for (const item of feedItems) {
+        if (pickedIds.has(item.id)) continue;
+        const news = byId.get(item.id)!;
+        await db.set(`news_history.${item.id}`, {
+          id: item.id,
+          title: newsItemTitle(news),
+          hash: item.hash,
+          timestamp: histories.get(item.id)?.timestamp ?? now,
+          complete: true,
+        });
+      }
+    }
+    if (firstPoll) await db.set(BASELINE_MARKER, { at: now });
   }
 
-  private async dispatch(
-    news: SkportNewsItem,
-    title: string,
-    currentHash: string,
-    isUpdate: boolean,
-    force: boolean = false,
-  ) {
-    const subscriptions =
-      ((await this.client.db.get("news_subscriptions")) as Array<{
-        guildId: string;
-        channelId: string;
-        boundAt: number;
-      }>) || [];
-
-    const payload = this.buildPayload(news, title);
-
-    // Prepare subscription data for broadcast
-    const subData = await Promise.all(
-      subscriptions.map(async (sub) => {
-        const dispatchKey = `news_dispatch.${news.item.id}.${sub.channelId}`;
-        const dispatchRecord = await this.client.db.get(dispatchKey);
-        const newsTime = parseInt(news.item.timestamp) * 1000;
-        const skip = !force && sub.boundAt && newsTime < sub.boundAt;
-
-        return {
-          ...sub,
-          dispatchRecord,
-          skip,
-        };
-      }),
-    );
-
-    const eligibleSubs = subData.filter((s) => !s.skip && s.guildId !== "DM");
-
-    // Broadcast ONCE to all clusters
-    const broadcastResults = await this.client.cluster.broadcastEval(
-      async (c: any, context: any) => {
-        const results: Array<{
-          channelId: string;
-          messageId: string;
-          isNew: boolean;
-        }> = [];
-
-        for (const sub of context.eligibleSubs) {
-          try {
-            // Check if this cluster owns the channel
-            const channel = c.channels.cache.get(sub.channelId);
-            if (!channel) continue;
-
-            if (sub.dispatchRecord && !context.force) {
-              if (
-                context.isUpdate &&
-                sub.dispatchRecord.hash !== context.currentHash
-              ) {
-                // Update existing
-                const message = await channel.messages.fetch(
-                  sub.dispatchRecord.messageId,
-                );
-                if (message) {
-                  await message.edit(context.payload);
-                  results.push({
-                    channelId: sub.channelId,
-                    messageId: sub.dispatchRecord.messageId,
-                    isNew: false,
-                  });
-                }
-              }
-            } else {
-              // New send
-              const msg = await channel.send(context.payload);
-              results.push({
-                channelId: sub.channelId,
-                messageId: msg.id,
-                isNew: true,
-              });
-            }
-          } catch (e) {}
-        }
-        return results;
-      },
-      {
-        context: {
-          eligibleSubs,
-          payload,
-          isUpdate,
-          currentHash,
-          force,
-        },
-      },
-    );
-
-    // Flatten results and update DB
-    const allResults = broadcastResults.flat();
-    for (const res of allResults) {
-      const dispatchKey = `news_dispatch.${news.item.id}.${res.channelId}`;
-      const existing = (await this.client.db.get(dispatchKey)) || {};
-      await this.client.db.set(dispatchKey, {
-        newsId: news.item.id,
-        channelId: res.channelId,
-        messageId: res.messageId,
-        hash: currentHash,
-        ...existing, // Keep guildId etc if exists
-      });
-      this.logger.success(
-        `${res.isNew ? "Sent" : "Updated"} message to Channel(${res.channelId})`,
-      );
+  /** Sends or edits `payload` for every work entry. Returns the outcome per dispatch suffix. */
+  private async deliver(
+    payload: any,
+    work: ItemWork["work"],
+  ): Promise<Map<string, ClusterNewsResult>> {
+    const outcomes = new Map<string, ClusterNewsResult>();
+    const guildWork: ClusterNewsWork[] = [];
+    const dmWork: ItemWork["work"] = [];
+    for (const w of work) {
+      if (w.sub.guildId === "DM") dmWork.push(w);
+      else
+        guildWork.push({
+          suffix: dispatchSuffix(w.sub),
+          guildId: w.sub.guildId,
+          channelId: w.sub.channelId,
+          action: w.action,
+          messageId: w.record?.messageId,
+        });
     }
+
+    for (let i = 0; i < guildWork.length; i += GUILD_CHUNK) {
+      const chunk = guildWork.slice(i, i + GUILD_CHUNK);
+      let perCluster: ClusterNewsResult[][] = [];
+      let broadcastFailed = false;
+      try {
+        perCluster = await this.client.cluster.broadcastEval(deliverNewsOnCluster, {
+          context: { payload, work: chunk },
+        });
+      } catch (error: any) {
+        broadcastFailed = true;
+        this.logger.error(`News broadcast failed: ${error.message}`);
+      }
+      for (const results of perCluster) {
+        for (const r of results || []) outcomes.set(r.suffix, r);
+      }
+      for (const w of chunk) {
+        // No cluster owns the guild/channel (or the broadcast failed): retry later, not a permanent error.
+        if (!outcomes.has(w.suffix))
+          outcomes.set(w.suffix, {
+            suffix: w.suffix,
+            ok: false,
+            message: broadcastFailed ? "broadcast failed" : "no owner",
+            // A failed broadcast says nothing about the channel: leave the item pending, free of charge.
+            // "No owner" after a successful broadcast does count, so orphaned guilds settle.
+            skip: broadcastFailed,
+          });
+      }
+    }
+
+    for (const w of dmWork) {
+      const suffix = dispatchSuffix(w.sub);
+      try {
+        let messageId: string;
+        if (w.action === "edit") {
+          const channel: any = await this.client.channels.fetch(w.sub.channelId);
+          const message = await channel.messages.fetch(w.record!.messageId!);
+          await message.edit(payload);
+          messageId = message.id;
+        } else if (w.sub.userId) {
+          messageId = (await this.client.users.send(w.sub.userId, payload)).id;
+        } else {
+          // Legacy row: only the DM channel id is known.
+          const channel: any = await this.client.channels.fetch(w.sub.channelId);
+          if (!channel || typeof channel.send !== "function")
+            throw Object.assign(new Error("Unknown channel"), { code: 10003 });
+          messageId = (await channel.send(payload)).id;
+        }
+        outcomes.set(suffix, { suffix, ok: true, messageId });
+      } catch (e: any) {
+        outcomes.set(suffix, {
+          suffix,
+          ok: false,
+          code: e?.code ? Number(e.code) : undefined,
+          message: String(e?.message || e),
+        });
+      }
+    }
+    return outcomes;
+  }
+
+  /** Persists one delivery outcome (dispatch row + subscription health). Returns true when delivered. */
+  private async recordOutcome(
+    item: FeedItem,
+    w: ItemWork["work"][number],
+    outcome: ClusterNewsResult | undefined,
+  ): Promise<boolean> {
+    const db = this.client.db;
+    const now = Date.now();
+    const key = dispatchKey(item.id, w.sub);
+    const subKey = subKeyOf(w.sub);
+    const base = {
+      newsId: item.id,
+      channelId: w.sub.channelId,
+      guildId: w.sub.guildId,
+      hash: item.hash,
+    };
+    if (outcome?.ok) {
+      await db.set(key, {
+        ...base,
+        messageId: outcome.messageId,
+        createdAt: w.record?.createdAt ?? now,
+        delivered: true,
+      } satisfies DispatchRecord);
+      if (w.sub.failCount)
+        db.update<NewsSub>(subKey, (cur) =>
+          cur ? nextSubscriptionState(cur, null).sub : null,
+        );
+      return true;
+    }
+
+    if (outcome?.skip) return false;
+    const code = outcome?.code;
+    this.logger.warn(
+      `News ${item.id} -> ${subKeyOf(w.sub)} failed (${code ?? "no code"}): ${outcome?.message ?? "unknown"}`,
+    );
+    if (isPermanentSendError(code)) {
+      let removed = false;
+      db.update<NewsSub>(subKey, (cur) => {
+        if (!cur) return null;
+        const next = nextSubscriptionState(cur, code);
+        removed = next.remove;
+        return next.remove ? null : next.sub;
+      });
+      if (removed)
+        this.logger.warn(`Removed news subscription ${subKey} after repeated permanent errors.`);
+    } else if (w.action === "edit") {
+      // Editing is best effort: remember the new hash so it is not retried forever.
+      await db.set(key, { ...(w.record || {}), hash: item.hash } as DispatchRecord);
+    } else {
+      await db.set(key, failedDispatchRecord(w.record, base, now));
+    }
+    return false;
   }
 
   private buildPayload(news: SkportNewsItem, title: string): any {

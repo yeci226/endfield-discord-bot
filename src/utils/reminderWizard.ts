@@ -32,6 +32,7 @@ import {
   ReminderState,
   reminderStateKey,
   reminderTargets,
+  resolveLegacyThreshold,
   validateReminder,
 } from "./reminders";
 import { drawPlayerCard, playerText } from "./playerCards";
@@ -207,7 +208,7 @@ async function render(
     );
     heading(
       t("理智與每日任務提醒", "Sanity & daily reminders"),
-      `${status.join("\n") || t("尚未啟用提醒", "No active reminders")}\n\n${t("每個帳號、角色分別設定。每 15 分鐘檢查，圖片含理智與每日任務。", "Configure each account and role separately. Checked every 15 minutes, with one status image.")}${s.legacy ? "\n" + t("已找到舊設定；選擇角色後可帶入草稿，儲存才會啟用。", "Legacy settings found. Imported as a draft; save to activate.") : ""}`,
+      `${status.join("\n") || t("尚未啟用提醒", "No active reminders")}\n\n${t("每個帳號、角色分別設定。每 15 分鐘檢查，圖片含理智與每日任務。", "Configure each account and role separately. Checked every 15 minutes, with one status image.")}${s.legacy && !saved.length ? "\n" + t("已找到舊設定；選擇角色後可帶入草稿，儲存才會啟用。", "Legacy settings found. Imported as a draft; save to activate.") : ""}`,
     );
     const accounts = [...new Map(s.targets.map((r) => [r.uid, r])).values()];
     const shown = accounts.slice(s.accountPage * 25, (s.accountPage + 1) * 25);
@@ -535,6 +536,8 @@ export async function reminderWizard(
         );
         s.detail = detail;
         s.config = saved || defaultReminder(s.owner, target, detail, s.legacy);
+        // A rule migrated from the old monitor still has a placeholder threshold: show the real one.
+        s.config = resolveLegacyThreshold(s.config, detail) ?? s.config;
         s.imported = !saved && !!s.legacy;
         s.page = "destination";
       } else if (s.config) {
@@ -629,6 +632,7 @@ export async function reminderWizard(
               const previousState = store.get<ReminderState>(
                 reminderStateKey(c),
               );
+              delete c.legacyOffset; // saved by the user: the threshold is theirs now
               c.enabled = c.sanity !== "off" || c.daily;
               c.revision = randomUUID();
               store.set(reminderKey(c), c);

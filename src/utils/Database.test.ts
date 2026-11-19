@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CustomDatabase } from "./Database";
+import { CustomDatabase, prefixUpperBound } from "./Database";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let counter = 0;
@@ -89,6 +89,96 @@ async function main() {
     assert.equal(await next, 7);
     await other;
     assert.deepEqual(order, ["c", "a", "b"]);
+  });
+
+  await withDb(async (db) => {
+    // prefix queries use an ID range: literal, case-sensitive, unicode-safe
+    for (const id of [
+      "a_1",
+      "a_2",
+      "axb",
+      "a%1",
+      "A_9",
+      "a_\u{1F600}x",
+      "a_￿",
+      "a_中",
+      "b_1",
+      "中文.1",
+      "中文.2",
+      "中文\u{1F600}",
+    ]) {
+      await db.set(id, { id });
+    }
+    const ids = async (p: string) => (await db.findIdsByPrefix(p)).sort();
+    assert.deepEqual(
+      await ids("a_"),
+      ["a_1", "a_2", "a_中", "a_￿", "a_\u{1F600}x"].sort(),
+    );
+    assert.deepEqual(await ids("a%"), ["a%1"]);
+    assert.deepEqual(await ids("A_"), ["A_9"]);
+    assert.deepEqual(await ids("zzz"), []);
+    assert.deepEqual(await ids("中文"), [
+      "中文.1",
+      "中文.2",
+      "中文\u{1F600}",
+    ]);
+    assert.deepEqual(await ids("a_\u{1F600}"), ["a_\u{1F600}x"]);
+    assert.equal((await ids("")).length, 12); // empty prefix = everything
+    assert.deepEqual(db.findKeysByPrefix("b_"), ["b_1"]);
+    assert.deepEqual(
+      (await db.findByPrefix<{ id: string }>("a%")).map((r) => r.value.id),
+      ["a%1"],
+    );
+    assert.deepEqual(db.findFieldByPrefix("b_", "$.id"), [
+      { id: "b_1", field: "b_1" },
+    ]);
+    db.transaction((store) => {
+      assert.deepEqual(store.keys("a_\u{1F600}"), ["a_\u{1F600}x"]);
+      assert.equal(store.keys("a_").length, 5);
+    });
+    assert.equal(db.deleteByPrefix("a_"), 5);
+    assert.deepEqual(await ids("a_"), []);
+    assert.equal(db.deleteByPrefix("中文"), 3);
+  });
+
+  await withDb(async (db) => {
+    // upper bound edge cases
+    assert.equal(prefixUpperBound(""), null);
+    assert.equal(prefixUpperBound("ab"), "ac");
+    assert.equal(prefixUpperBound("a\u{10FFFF}"), "b");
+    assert.equal(prefixUpperBound("\u{10FFFF}"), null);
+    assert.equal(prefixUpperBound("퟿"), "");
+
+    // scanFieldsByPrefix pages through a prefix in id order; deleteIds is exact
+    for (let i = 0; i < 7; i++)
+      await db.set(`s.${String(i).padStart(2, "0")}`, { n: i, c: i % 2 });
+    await db.set("t.00", { n: 99 });
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (;;) {
+      const page = db.scanFieldsByPrefix("s.", ["$.n", "$.missing"], cursor, 3);
+      if (!page.length) break;
+      assert.equal(page[0].fields[1], null);
+      seen.push(...page.map((r) => r.id));
+      cursor = page[page.length - 1].id;
+    }
+    assert.deepEqual(
+      seen,
+      [0, 1, 2, 3, 4, 5, 6].map((i) => `s.0${i}`),
+    );
+    assert.equal(
+      db.scanFieldsByPrefix("s.", ["$.n"], "s.03", 2)[0].fields[0],
+      4,
+    );
+    assert.equal(db.deleteIds(["s.00", "s.01", "nope", "t.00"]), 3);
+    assert.equal(db.deleteIds([]), 0);
+    assert.deepEqual(db.findKeysByPrefix("s."), [
+      "s.02",
+      "s.03",
+      "s.04",
+      "s.05",
+      "s.06",
+    ]);
   });
 
   console.log("Database tests passed");

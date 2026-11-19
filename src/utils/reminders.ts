@@ -8,8 +8,10 @@ export interface ReminderConfig extends NotificationDestination {
   version: 2; revision: string; userId: string; uid: string; roleId: string; serverId: string; name: string;
   enabled: boolean; mention: boolean; sanity: "off" | "time" | "amount"; value: number;
   daily: boolean; dailyHours: number; resetOffset?: 8 | -5;
+  /** Set on rules migrated from monitorConfig: sanity "amount" threshold is max stamina minus this, resolved on the first poll. */
+  legacyOffset?: number;
 }
-export interface ReminderState { revision?: string; sanitySent?: boolean; dailyCycle?: number; retryAt?: number; disabledReason?: string }
+export interface ReminderState { revision?: string; sanitySent?: boolean; dailyCycle?: number; retryAt?: number; disabledReason?: string; guildLookupFails?: number }
 export const reminderKey = (c: Pick<ReminderConfig, "userId" | "uid" | "serverId" | "roleId">) => `reminder.v2.${c.userId}.${c.uid}.${c.serverId}.${c.roleId}`;
 export const reminderStateKey = (c: ReminderConfig) => reminderKey(c).replace("reminder.v2.", "reminderState.v2.");
 export function reminderTargets(accounts: any[]): Array<{ uid: string; roleId: string; serverId: string; name: string; accountName: string }> {
@@ -75,4 +77,30 @@ export function reminderSections(c: ReminderConfig, detail: CardDetail, result: 
       { label: t("下次重置", "Next reset"), value: result.reset ? `${new Date(result.reset + (c.resetOffset || 0) * 3600000).toISOString().slice(0, 16).replace("T", " ")} UTC${c.resetOffset! >= 0 ? "+" : ""}${c.resetOffset}` : "—" },
     ] },
   ];
+}
+
+const MIN_RETRY_MS = 5 * 60000;
+const MAX_RETRY_MS = 60 * 60000;
+/** How far ahead of the event this rule notifies; undefined when it has no time-based lead (sanity "amount"). */
+export function reminderLeadMs(c: Pick<ReminderConfig, "sanity" | "value" | "daily" | "dailyHours">): number | undefined {
+  const leads: number[] = [];
+  if (c.sanity === "time" && c.value > 0) leads.push(c.value * 60000);
+  if (c.daily && c.dailyHours > 0) leads.push(c.dailyHours * 3600000);
+  return leads.length ? Math.min(...leads) : undefined;
+}
+/**
+ * Delay before retrying a failed check: half the lead time, kept between 5 minutes and 1 hour.
+ * The lead is at least 15 minutes, so the retry is never later than the lead itself.
+ */
+export function retryDelayMs(c: Pick<ReminderConfig, "sanity" | "value" | "daily" | "dailyHours">): number {
+  const lead = reminderLeadMs(c);
+  const half = lead === undefined ? MAX_RETRY_MS : lead / 2;
+  return Math.min(MAX_RETRY_MS, Math.max(MIN_RETRY_MS, half));
+}
+/** Resolves the legacy "distance to full" into an absolute sanity threshold once the real maximum is known. */
+export function resolveLegacyThreshold(c: ReminderConfig, detail: CardDetail): ReminderConfig | null {
+  if (c.legacyOffset == null || c.sanity !== "amount") return null;
+  const max = Number(detail.dungeon?.maxStamina);
+  if (!(max > 0)) return null;
+  return { ...c, value: Math.min(max, Math.max(1, Math.round(max - c.legacyOffset))), legacyOffset: undefined };
 }

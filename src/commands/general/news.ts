@@ -13,6 +13,12 @@ import {
   ButtonStyle,
 } from "discord.js";
 import { Command } from "../../interfaces/Command";
+import {
+  bindDmNews,
+  listGuildNewsSubs,
+  removeGuildNews,
+  unbindDmNews,
+} from "../../utils/newsSubscriptions";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -21,7 +27,10 @@ const command: Command = {
       "zh-TW": "新聞",
     })
     .setDescription("Manage news subscriptions")
-    .setContexts(InteractionContextType.Guild)
+    .setContexts(
+      InteractionContextType.Guild,
+      InteractionContextType.BotDM,
+    )
     .setDescriptionLocalizations({
       "zh-TW": "管理新聞訂閱",
     })
@@ -72,13 +81,6 @@ const command: Command = {
       }
     }
 
-    const subscriptions =
-      ((await db.get("news_subscriptions")) as Array<{
-        guildId: string;
-        channelId: string;
-        boundAt: number;
-      }>) || [];
-
     const isGuild = !!interaction.guildId;
     const currentGuildId = interaction.guildId || "DM";
     const subCommand = interaction.options.getSubcommand();
@@ -86,9 +88,7 @@ const command: Command = {
     if (subCommand === "bind") {
       if (isGuild) {
         // --- GUILD: Show Channel Selector ---
-        const guildSubscriptions = subscriptions.filter(
-          (s) => s.guildId === currentGuildId,
-        );
+        const guildSubscriptions = await listGuildNewsSubs(db, currentGuildId);
 
         const selectMenu = new ChannelSelectMenuBuilder()
           .setCustomId("notification_channel")
@@ -127,24 +127,13 @@ const command: Command = {
         });
       } else {
         // --- DM: Direct Bind ---
-        const existing = subscriptions.find(
-          (s) => s.channelId === interaction.channelId,
-        );
-
         const container = new ContainerBuilder();
 
-        if (existing) {
+        if (!bindDmNews(db, interaction.user.id, interaction.channelId)) {
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(tr("news_DmBound")),
           );
         } else {
-          subscriptions.push({
-            guildId: "DM",
-            channelId: interaction.channelId,
-            boundAt: Date.now(),
-          });
-          await db.set("news_subscriptions", subscriptions);
-
           container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(tr("news_DmSuccess")),
           );
@@ -157,24 +146,10 @@ const command: Command = {
         });
       }
     } else if (subCommand === "unbind") {
-      let newSubscriptions = [];
-      let removedCount = 0;
-
-      if (isGuild) {
-        // --- GUILD: Remove all guild subscriptions ---
-        newSubscriptions = subscriptions.filter(
-          (s) => s.guildId !== currentGuildId,
-        );
-        removedCount = subscriptions.length - newSubscriptions.length;
-      } else {
-        // --- DM: Remove only this channel ---
-        newSubscriptions = subscriptions.filter(
-          (s) => s.channelId !== interaction.channelId,
-        );
-        removedCount = subscriptions.length - newSubscriptions.length;
-      }
-
-      await db.set("news_subscriptions", newSubscriptions);
+      // Guild: remove every row of this guild. DM: remove this user's row.
+      const removedCount = isGuild
+        ? removeGuildNews(db, currentGuildId)
+        : unbindDmNews(db, interaction.user.id, interaction.channelId);
 
       const container = new ContainerBuilder().addTextDisplayComponents(
         new TextDisplayBuilder().setContent(tr("news_UnbindSuccess")),

@@ -183,3 +183,58 @@ export async function replyOrFollowUp(
 
   return interaction.reply(payload);
 }
+
+/** Discord codes meaning the interaction can no longer be answered. */
+const DEAD_INTERACTION_CODES = new Set([10062, 40060]);
+
+export function isDeadInteractionError(error: unknown): boolean {
+  return DEAD_INTERACTION_CODES.has(Number((error as any)?.code));
+}
+
+export type InteractionErrorPlan =
+  | "respondEmpty"
+  | "reply"
+  | "followUp";
+
+/**
+ * How to tell the user something went wrong, given what has already been sent.
+ * Autocomplete can only answer with a (possibly empty) choice list; everything
+ * else gets an ephemeral message. After a defer or reply, followUp is the one
+ * call that works for both deferReply (fills the pending reply) and
+ * deferUpdate (leaves the original message and its buttons untouched).
+ */
+export function planInteractionError(state: {
+  isAutocomplete: boolean;
+  deferred: boolean;
+  replied: boolean;
+}): InteractionErrorPlan {
+  if (state.isAutocomplete) return "respondEmpty";
+  return state.deferred || state.replied ? "followUp" : "reply";
+}
+
+/** Best effort: never throws. Returns true when something was sent. */
+export async function sendInteractionError(
+  interaction: any,
+  content: string,
+): Promise<boolean> {
+  try {
+    const plan = planInteractionError({
+      isAutocomplete:
+        typeof interaction.isAutocomplete === "function" &&
+        interaction.isAutocomplete(),
+      deferred: !!interaction.deferred,
+      replied: !!interaction.replied,
+    });
+    if (plan === "respondEmpty") {
+      if (interaction.responded) return false;
+      await interaction.respond([]);
+    } else if (plan === "followUp") {
+      await interaction.followUp({ content, flags: EPHEMERAL_FLAG });
+    } else {
+      await interaction.reply({ content, flags: EPHEMERAL_FLAG });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}

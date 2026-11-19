@@ -12,6 +12,7 @@ import {
 import { Command } from "../../interfaces/Command";
 import { ExtendedClient } from "../../structures/Client";
 import { CustomDatabase } from "../../utils/Database";
+import { moveDailyNotifyChannels } from "../../utils/moveDailyNotify";
 
 const command: Command = {
   data: new SlashCommandBuilder()
@@ -58,20 +59,12 @@ const command: Command = {
     const guildChannels = await guild.channels.fetch();
     const guildChannelIds = new Set(guildChannels.keys());
 
-    // Load autoDaily data using prefix
-    const dailyUsers = await db.findByPrefix<any>("autoDaily.");
-    let affectedCount = 0;
-
-    for (const { id, value: config } of dailyUsers) {
-      // If the user's current channelId is in this guild, move it
-      if (config.channelId && guildChannelIds.has(config.channelId)) {
-        if (config.channelId !== targetChannel.id) {
-          config.channelId = targetChannel.id;
-          await db.set(id, config);
-          affectedCount++;
-        }
-      }
-    }
+    // Row by row: only rows pointing at a channel of this guild are touched.
+    const affectedCount = moveDailyNotifyChannels(
+      db,
+      guildChannelIds,
+      targetChannel.id,
+    );
 
     const container = new ContainerBuilder();
     container.addTextDisplayComponents(
