@@ -34,7 +34,7 @@ export class VerificationClient {
 
   /** Creates a pending captcha session and returns its unguessable id. */
   public static createSession(userId?: string, db?: CustomDatabase): string {
-    const sid = crypto.randomBytes(18).toString("base64url");
+    const sid = crypto.randomBytes(24).toString("base64url");
     VerificationClient.getDb(db).setWithTtl(
       SESSION_KEY(sid),
       { userId: userId ?? null, createdAt: Date.now() },

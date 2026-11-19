@@ -67,7 +67,7 @@ async function main() {
       Array.from({ length: 50 }, () => VerificationClient.createSession("x", db)),
     );
     assert.equal(ids.size, 50);
-    for (const id of ids) assert.match(id, /^[A-Za-z0-9_-]{24}$/);
+    for (const id of ids) assert.match(id, /^[A-Za-z0-9_-]{32}$/);
 
     // no live timers left: the process must be able to exit (the test itself ending proves it)
     await sleep(10);

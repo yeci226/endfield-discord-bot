@@ -25,6 +25,7 @@ import {
   writeCached,
 } from "./imageProxy";
 import { VerificationClient } from "./VerificationClient";
+import { validateTemplateImages } from "./templateGuard";
 import {
   BoundedCache,
   createRateLimiter,
@@ -76,6 +77,8 @@ export class WebManager {
     );
     let n = 0;
     for (const row of rows) {
+      // LIKE treats "_" as a wildcard and ignores case: re-check the prefix
+      if (!row.id.startsWith("profile_edit_token:")) continue;
       const exp = Number(row.field);
       if (!Number.isFinite(exp) || exp < now) {
         void this.client.db.delete(row.id);
@@ -323,6 +326,9 @@ export class WebManager {
         return res.json({ success: true });
       }
       if (!template) return res.status(400).json({ error: "Missing template" });
+      if (!validateTemplateImages(template).ok) {
+        return res.status(400).json({ error: "Invalid image source" });
+      }
       await ProfileTemplateService.saveUserTemplate(
         this.client.db,
         session.userId,
@@ -354,6 +360,10 @@ export class WebManager {
       const { template: bodyTemplate } = req.body ?? {};
       if (!bodyTemplate) {
         return res.status(400).json({ error: "Missing template" });
+      }
+
+      if (!validateTemplateImages(bodyTemplate).ok) {
+        return res.status(400).json({ error: "Invalid image source" });
       }
 
       const detail = cached.detail;
