@@ -92,6 +92,8 @@ assert.equal(validateEncryptionKey("x".repeat(16)), null);
       NODE_ENV: nodeEnv,
       TS_NODE_TRANSPILE_ONLY: "1",
       DOTENV_CONFIG_QUIET: "true",
+      TS_NODE_PROJECT: path.join(__dirname, "..", "..", "tsconfig.json"),
+      TS_NODE_COMPILER: require.resolve("typescript"),
     };
     if (key === undefined) delete env.ENCRYPTION_KEY;
     else env.ENCRYPTION_KEY = key;
