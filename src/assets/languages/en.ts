@@ -461,6 +461,38 @@ const langs: Record<string, any> = {
   // --- L4 (news, reminders, core) ---
 
   // --- L5 (new commands A) ---
+  l5_NoRole: "❌ No Endfield role found on your linked accounts. Please log in again with `/login`.",
+  l5_NotOwner: "❌ This panel belongs to another user. Run the command yourself.",
+  l5_DataExpired: "❌ This panel is out of date. Please run the command again.",
+  l5_SelectRole: "Switch role",
+  l5_Close: "Close",
+  stamina_Title: "Sanity",
+  stamina_Sanity: "Sanity",
+  stamina_Daily: "Daily activity",
+  stamina_Weekly: "Weekly routine",
+  stamina_Pass: "Protocol Pass",
+  stamina_TimeToFull: "Time until full",
+  stamina_FullAt: "Full at",
+  stamina_Full: "Full",
+  stamina_Saved: "Game saved",
+  stamina_Queried: "Queried",
+  stamina_NoData: "❌ No real-time data is available for this role.",
+  stamina_MsgFull: "⚡ Sanity {cur_max} · full",
+  stamina_MsgRecovering: "⚡ Sanity {cur_max} · full at {clock} ({relative})",
+  stamina_MsgUnknown: "⚡ Sanity {cur_max} · time until full unavailable",
+  crisis_Title: "Crisis Contract",
+  crisis_NoContract: "❌ No Crisis Contract record found for this role.",
+  crisis_SeasonNotFound: "❌ That season was not found for this role.",
+  crisis_FetchFailed: "❌ Failed to fetch Crisis Contract data (code {code}).",
+  crisis_SelectSeason: "Select season",
+  crisis_Msg: "**{name}**\nRole: `{role}`\nHighest: `{highest}` | Challenges: `{challenges}`\nMissions: weekly `{weekly}`, indicator `{indicator}`, stage `{stage}`\nIndicators: `{indicators}` | Records: `{records}`",
+  crisis_Card_Result: "// Operation result",
+  crisis_Card_Success: "Operation Success",
+  crisis_Card_Total: "Total indicators",
+  crisis_Card_Time: "Duration",
+  crisis_Card_Milestone: "Milestone updated to the new rating",
+  crisis_Card_Challenges: "Challenges {challenges} / Records {records}",
+  crisis_Card_Weapon: "Weapon",
 
   // --- G1 (gacha security) ---
 
