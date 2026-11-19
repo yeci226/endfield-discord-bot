@@ -33,6 +33,15 @@ export interface ShowLeaderboardOptions {
   jumpToMe?: boolean;
 }
 
+/** Leaderboard customId with the invoker appended (7th part) for the click gate. */
+export function leaderboardCustomIdFor(
+  invokerId: string,
+  action: Parameters<typeof leaderboardCustomId>[0],
+  state: Parameters<typeof leaderboardCustomId>[1],
+): string {
+  return `${leaderboardCustomId(action, state)}:${invokerId}`;
+}
+
 export async function showGachaLeaderboard(
   ctx: GachaContext,
   poolId: string = "TOTAL",
@@ -41,6 +50,7 @@ export async function showGachaLeaderboard(
 ) {
   const { interaction, tr, db } = ctx;
   const guildId = interaction.guildId;
+  const invokerId = interaction.user.id;
   // One row per UID (GACHA_LB.<uid>); the old blob is migrated on first read.
   // An empty board is never "repaired" here: re-syncing every log inside an
   // interaction would parse hundreds of MB.
@@ -171,7 +181,7 @@ export async function showGachaLeaderboard(
   const categoryRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(leaderboardCustomId("lb_pool", idState()))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_pool", idState()))
         .setPlaceholder(tr("gacha_log_leaderboard_SelectCategory"))
         .addOptions(categoryOptions),
     );
@@ -203,7 +213,7 @@ export async function showGachaLeaderboard(
 
     if (filteredPools.length > 0) {
       const poolMenu = new StringSelectMenuBuilder()
-        .setCustomId(leaderboardCustomId("lb_subpool", idState()))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_subpool", idState()))
         .setPlaceholder(
           tr("gacha_log_leaderboard_SelectPoolPrecise", {
             category:
@@ -245,7 +255,7 @@ export async function showGachaLeaderboard(
   const sortRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(leaderboardCustomId("lb_sort", idState()))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_sort", idState()))
         .setPlaceholder(tr("gacha_log_leaderboard_SelectSort"))
         .addOptions([
           {
@@ -267,7 +277,7 @@ export async function showGachaLeaderboard(
     components.push(
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
-          .setCustomId(leaderboardCustomId("lb_scope", idState()))
+          .setCustomId(leaderboardCustomIdFor(invokerId, "lb_scope", idState()))
           .setPlaceholder(tr("gacha_log_leaderboard_scope_placeholder"))
           .addOptions([
             {
@@ -291,14 +301,13 @@ export async function showGachaLeaderboard(
   components.push(
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
-        .setCustomId(leaderboardCustomId("lb_page", idState(Math.max(0, view.page - 1))))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_page", idState(Math.max(0, view.page - 1))))
         .setEmoji("◀")
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(view.page <= 0),
       new ButtonBuilder()
         .setCustomId(
-          leaderboardCustomId(
-            "lb_page",
+          leaderboardCustomIdFor(invokerId, "lb_page",
             idState(Math.min(view.pageCount - 1, view.page + 1)),
           ),
         )
@@ -306,12 +315,12 @@ export async function showGachaLeaderboard(
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(view.page >= view.pageCount - 1),
       new ButtonBuilder()
-        .setCustomId(leaderboardCustomId("lb_me", idState()))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_me", idState()))
         .setEmoji("📍")
         .setLabel(tr("gacha_log_leaderboard_my_rank"))
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
-        .setCustomId(leaderboardCustomId("lb_close", idState()))
+        .setCustomId(leaderboardCustomIdFor(invokerId, "lb_close", idState()))
         .setEmoji("✖️")
         .setLabel(tr("gacha_log_leaderboard_close"))
         .setStyle(ButtonStyle.Secondary),

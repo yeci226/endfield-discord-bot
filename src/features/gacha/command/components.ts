@@ -13,7 +13,7 @@ import {
 } from "../../../utils/gachaCanvasUtils";
 import { GachaContext } from "./context";
 import { showGachaStats } from "./view";
-import { showGachaLeaderboard } from "./leaderboard";
+import { handleGachaLeaderboardComponent } from "./leaderboard";
 import { doFetchGachaLog } from "./load";
 import { handleLoadConfirmButton, handleLoadModal } from "./load";
 import {
@@ -65,6 +65,9 @@ export function getEmbeddedInvokerId(parts: string[]): string | null {
     v && /^\d{15,25}$/.test(v) ? v : null;
   if (parts[1] === "sim_pull") return pick(parts[2]);
   if (parts[1] === "log_load_confirm") return pick(parts[3]);
+  // gacha:lb_<action>:<pool>:<sort>:<scope>:<page>:<invoker>. Ids posted before
+  // the invoker was appended have no 7th part and fall back to Discord's record.
+  if (parts[1]?.startsWith("lb_")) return pick(parts[6]);
   return null;
 }
 
@@ -104,6 +107,10 @@ export async function handleGachaSelectMenu(
 
   if (!(await allowClicker(ctx, interaction, parts))) return;
 
+  if (action?.startsWith("lb_")) {
+    if (await handleGachaLeaderboardComponent(ctx, interaction)) return;
+  }
+
   if (action === "log_type") {
     await interaction.deferUpdate();
     const selectedType = interaction.values[0] as GachaType;
@@ -140,26 +147,6 @@ export async function handleGachaSelectMenu(
     );
 
     await interaction.showModal(modal);
-    return;
-  } else if (
-    action === "lb_type" ||
-    action === "lb_pool" ||
-    action === "lb_subpool" ||
-    action === "lb_sort"
-  ) {
-    await interaction.deferUpdate();
-    const currentPool = parts[2];
-    const currentSort = parts[3] as "pulls" | "luck";
-
-    let newPool = currentPool;
-    let newSort = currentSort;
-
-    if (action === "lb_pool" || action === "lb_subpool")
-      newPool = interaction.values[0];
-    if (action === "lb_sort")
-      newSort = interaction.values[0] as "pulls" | "luck";
-
-    await showGachaLeaderboard(ctx, newPool, newSort);
     return;
   } else if (action === "log_load_select_target") {
     const selectedUidRaw = interaction.values[0];
@@ -212,6 +199,10 @@ export async function handleGachaButton(
   const targetUid = parts[2];
 
   if (!(await allowClicker(ctx, btnInteraction, parts))) return;
+
+  if (action?.startsWith("lb_")) {
+    if (await handleGachaLeaderboardComponent(ctx, btnInteraction)) return;
+  }
 
   if (action === "log_page") {
     await btnInteraction.deferUpdate();
