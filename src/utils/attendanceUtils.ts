@@ -9,6 +9,20 @@ import { isTokenExpiredError } from "../services/autoDailyPlan";
 const logger = new Logger("AttendanceUtils");
 
 /**
+ * The claim endpoint answers a role that has already signed today with either
+ * API code 10001 or (seen on the Arknights endpoint in production) HTTP 403
+ * and the message "請勿重複簽到！". Both mean "already signed", not a failure.
+ */
+export function isDuplicateClaim(claimResult: any): boolean {
+  if (!claimResult) return false;
+  if (claimResult.code === 10001) return true;
+  if (claimResult.status !== 403) return false;
+  return /重[複复][簽签]到|alreadys+(signed|checked|claimed)|repeat/i.test(
+    String(claimResult.message || ""),
+  );
+}
+
+/**
  * Processes attendance for a single game role.
  * Consolidates status checking and execution.
  */
@@ -83,7 +97,7 @@ export async function processRoleAttendance(
 
       if (
         claimResult &&
-        (claimResult.code === 0 || claimResult.code === 10001)
+        (claimResult.code === 0 || isDuplicateClaim(claimResult))
       ) {
         signedNow = claimResult.code === 0;
 
@@ -113,6 +127,9 @@ export async function processRoleAttendance(
             options,
           );
           if (newStatus?.data) status = newStatus.data;
+          // The server refused the claim as a duplicate: today is signed,
+          // whatever the status list says.
+          status.hasToday = true;
         }
       }
     }
