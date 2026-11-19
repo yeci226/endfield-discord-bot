@@ -4,12 +4,15 @@ import bodyParser from "body-parser";
 import { ExtendedClient } from "../structures/Client";
 import { Logger } from "../utils/Logger";
 import { resolveOwnAssetRel } from "../utils/ownAssets";
+import {
+  ENDFIELD_GAME_ID,
+  getPrimaryBindingRoleForGame,
+} from "../utils/bindingRoles";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
 import { getCardDetail } from "../utils/skportApi";
 import {
   getAccounts,
   ensureAccountBinding,
-  getPrimaryBindingRole,
   withAutoRefresh,
 } from "../utils/accountUtils";
 import { drawDashboard } from "../utils/canvasUtils";
@@ -282,11 +285,14 @@ export class WebManager {
       if (!account) return res.status(404).json({ error: "Account not found" });
 
       await ensureAccountBinding(account, userId, this.client.db, "tw");
-      const primaryBinding = getPrimaryBindingRole(account.roles);
-      const role = primaryBinding?.role;
+      const efRole = getPrimaryBindingRoleForGame(
+        account.roles,
+        ENDFIELD_GAME_ID,
+      );
+      const role = efRole?.raw;
       if (!role) return res.status(404).json({ error: "Role not found" });
 
-      const uid = account.info?.id || primaryBinding?.binding?.uid;
+      const uid = account.info?.id || efRole?.bindingUid;
       const cardRes = await withAutoRefresh(
         this.client,
         userId,

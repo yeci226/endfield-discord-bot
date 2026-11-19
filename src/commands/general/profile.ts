@@ -24,7 +24,10 @@ import { ExtendedClient } from "../../structures/Client";
 import { getCardDetail, CardDetailResponse } from "../../utils/skportApi";
 import { CustomDatabase } from "../../utils/Database";
 import { drawDashboard, drawCharacterDetail } from "../../utils/canvasUtils";
-import { getPrimaryBindingRole, normalizeBindingEntries } from "../../utils/accountUtils";
+import {
+  ENDFIELD_GAME_ID,
+  getPrimaryBindingRoleForGame,
+} from "../../utils/bindingRoles";
 import {
   ProfileTemplate,
   ProfileElement,
@@ -304,9 +307,9 @@ const command: Command = {
       return;
     }
 
-    const primaryBinding = getPrimaryBindingRole(normalizeBindingEntries(account.roles).filter((binding) => Number(binding.gameId) === 3));
-    const role = primaryBinding?.role;
-    const uid = primaryBinding?.binding?.uid || account.info?.id;
+    const efRole = getPrimaryBindingRoleForGame(account.roles, ENDFIELD_GAME_ID);
+    const role = efRole?.raw;
+    const uid = efRole?.bindingUid || account.info?.id;
 
     if (!role) {
       if (!(interaction.deferred && (interaction as any).ephemeral)) {

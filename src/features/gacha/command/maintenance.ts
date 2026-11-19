@@ -7,10 +7,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
 } from "discord.js";
+import { getAccounts } from "../../../utils/accountUtils";
 import {
-  getAccounts,
-  getPrimaryBindingRole,
-} from "../../../utils/accountUtils";
+  ENDFIELD_GAME_ID,
+  getPrimaryBindingRoleForGame,
+} from "../../../utils/bindingRoles";
 import {
   clearGachaLog,
   migrateGachaLog,
@@ -31,10 +32,11 @@ export async function handleLogClear(
   let targetUid = targetUidOption;
   if (!targetUid) {
     const accounts = await getAccounts(db, interaction.user.id);
-    const primaryBinding = getPrimaryBindingRole(accounts?.[0]?.roles);
-    const firstRole = primaryBinding?.role;
-    const firstBinding = primaryBinding?.binding;
-    const gameUid = firstRole?.roleId || firstBinding?.uid;
+    const efRole = getPrimaryBindingRoleForGame(
+      accounts?.[0]?.roles,
+      ENDFIELD_GAME_ID,
+    );
+    const gameUid = efRole?.roleId || efRole?.bindingUid;
     if (gameUid) targetUid = `EF_${gameUid}`;
   }
 

@@ -4,14 +4,10 @@ import fs from "fs";
 import path from "path";
 import { UserInfoResponse } from "./UserInfoInterfaces";
 import { Logger } from "./Logger";
+import { maskSecret } from "./cryptoUtils";
 
 const logger = new Logger("SkportAPI");
 
-// Private copy of cryptoUtils.maskSecret (lane L2 adds the shared one; switch after merge).
-function maskSecret(value: string): string {
-  if (typeof value !== "string" || value.length <= 8) return "****";
-  return `${value.slice(0, 4)}…${value.slice(-4)}`;
-}
 
 const OFFSET_CACHE_PATH = path.join(process.cwd(), ".cache", "server-time-offset.json");
 

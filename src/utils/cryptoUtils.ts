@@ -2,7 +2,7 @@ import crypto from "crypto";
 import dotenv from "dotenv";
 
 // Make sure .env is loaded before the module-load key check below.
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // Standard for GCM
