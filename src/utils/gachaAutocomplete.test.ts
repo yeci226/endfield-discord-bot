@@ -24,9 +24,22 @@ const account = {
 };
 const literalPrefixes: string[] = [];
 const legacyPrefixes: string[] = [];
+const rowTokenLookups: string[] = [];
+// Mirrors the parts of CustomDatabase that getAccounts() and the autocomplete use.
 const db: any = {
   get: async (key: string) =>
     key === `${userId}.accounts` ? [account] : null,
+  transaction: (fn: (store: any) => any) =>
+    fn({
+      get: (key: string) => (key === `${userId}.accounts` ? [account] : null),
+      set: () => {},
+      delete: () => {},
+      keys: () => [],
+    }),
+  getRowToken: (key: string) => {
+    rowTokenLookups.push(key);
+    return null;
+  },
   findFieldByPrefix: (prefix: string) => {
     legacyPrefixes.push(prefix);
     return [];
@@ -81,6 +94,10 @@ async function main() {
       `GACHA_LOG_EF_GUEST_${userId}_`,
     ]);
     assert.deepEqual(byName, [{ name: "羽冰 (7392)", value: "EF_7392" }]);
+    assert.ok(
+      rowTokenLookups.every((k) => k.startsWith("GACHA_LOG_EF_")),
+      "existence checks must use getRowToken, not a full log read",
+    );
     assert.deepEqual(byUid, [{ name: "羽冰 (7392)", value: "EF_7392" }]);
     console.log("gacha autocomplete latency regression tests passed");
   } finally {

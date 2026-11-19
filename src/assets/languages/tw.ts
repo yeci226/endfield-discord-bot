@@ -509,6 +509,8 @@ const langs: Record<string, any> = {
   // --- G2 (gacha leaderboard & storage) ---
 
   // --- G3 (gacha stats) ---
+  gacha_log_view_AccountNotOwned:
+    "該帳號不屬於 {user}，只能查看該使用者自己綁定或建立的帳號。",
 
   // --- G4 (gacha rendering) ---
 };

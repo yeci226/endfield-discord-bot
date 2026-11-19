@@ -61,6 +61,35 @@ export function pickDisplayNickname(
   return stored;
 }
 
+/**
+ * Pure: may `ownerId`'s log be opened under `requestedUid`? The UID has to be
+ * one of the owner's own: a linked game role (global / CN key form or the bare
+ * id the oldest logs used) or one of their guest logs (the guest key embeds
+ * the Discord id of its creator).
+ */
+export function resolveViewableGachaUid(
+  requestedUid: string,
+  ownerId: string,
+  ownerRoles: PossibleUserRole[],
+): { ok: true; uid: string } | { ok: false } {
+  const uid = String(requestedUid || "");
+  if (!uid) return { ok: false };
+  for (const r of ownerRoles) {
+    if (uid === r.uid || (r.rawUid && uid === String(r.rawUid))) {
+      return { ok: true, uid };
+    }
+  }
+  const guestPrefix = `EF_GUEST_${ownerId}_`;
+  if (
+    ownerId &&
+    uid.startsWith(guestPrefix) &&
+    /^[A-Za-z0-9_-]+$/.test(uid.slice(guestPrefix.length))
+  ) {
+    return { ok: true, uid };
+  }
+  return { ok: false };
+}
+
 export async function showGachaStats(
   ctx: GachaContext,
   targetUid: string,
@@ -369,14 +398,41 @@ export async function handleGachaView(
   const targetUidOption = interaction.options.getString("account");
   let targetUid = targetUidOption;
 
+  // The log of someone else stays viewable only through `user:`; `account:`
+  // must name one of that user's own UIDs (never an arbitrary key).
+  if (targetUid) {
+    const ownerRoles = mapPossibleUserRoles(
+      await getAccounts(db, targetUser.id),
+    );
+    const allowed = resolveViewableGachaUid(
+      targetUid,
+      targetUser.id,
+      ownerRoles,
+    );
+    if (!allowed.ok) {
+      await interaction.editReply({
+        content: tr("gacha_log_view_AccountNotOwned", {
+          user: targetUser.toString(),
+        }),
+      });
+      return;
+    }
+    targetUid = allowed.uid;
+  }
+
   if (!targetUid) {
     const userId = targetUser.id;
-    const allRoles = await getAllPossibleUserRoles(userId, db);
+    // Cached binding mapping first (no SKPort call); refresh only when the
+    // user has no known roles at all.
+    let allRoles = mapPossibleUserRoles(await getAccounts(db, userId));
+    if (allRoles.length === 0) {
+      allRoles = await getAllPossibleUserRoles(userId, db);
+    }
 
     if (allRoles.length > 0) {
       // Try to find the first bound role that actually has gacha log data
       for (const role of allRoles) {
-        const hasData = await db.get(`GACHA_LOG_${role.uid}`);
+        const hasData = db.getRowToken(`GACHA_LOG_${role.uid}`) !== null;
         if (hasData) {
           targetUid = role.uid;
           break;
@@ -490,9 +546,9 @@ export async function handleGachaView(
     targetUser.id === interaction.user.id &&
     targetUid !== "EF_undefined"
   ) {
-    const currentData = await db.get(`GACHA_LOG_${targetUid}`);
+    const currentData = db.getRowToken(`GACHA_LOG_${targetUid}`);
     if (!currentData) {
-      const recoveryData = await db.get(`GACHA_LOG_EF_undefined`);
+      const recoveryData = db.getRowToken(`GACHA_LOG_EF_undefined`);
       if (recoveryData) {
         const recoverBtn = new ButtonBuilder()
           .setCustomId(`gacha:log_recover:${targetUid}`)

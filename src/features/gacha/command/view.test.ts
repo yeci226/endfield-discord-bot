@@ -12,7 +12,13 @@ canvasUtils.drawGachaStats = async (...args: any[]) => {
   return Buffer.from("fake-image");
 };
 
-import { showGachaStats, isGenericNickname, pickDisplayNickname } from "./view";
+import {
+  showGachaStats,
+  isGenericNickname,
+  pickDisplayNickname,
+  resolveViewableGachaUid,
+  handleGachaView,
+} from "./view";
 
 const UID = "EF_424242";
 const LOG_KEY = `GACHA_LOG_${UID}`;
@@ -131,6 +137,79 @@ async function main() {
       assert.equal(replies.length, 1);
       assert.equal(replies[0].content, "gacha_log_NoData");
       assert.equal(totalChanges(db), before);
+    }
+
+    // --- view user:X account:Y — Y must be one of X's own UIDs
+    {
+      const OWNER = "222222222222222222";
+      const VIEWER = "111111111111111111";
+      const roles = [
+        { uid: "EF_424242", rawUid: "424242", bindingUid: "b", nickname: "羽冰" },
+        { uid: "EF_CN_424242", rawUid: "424242", bindingUid: "b", nickname: "羽冰" },
+      ];
+      const ok = (uid: string, owner = OWNER, r = roles) =>
+        resolveViewableGachaUid(uid, owner, r).ok;
+      assert.equal(ok("EF_424242"), true);
+      assert.equal(ok("EF_CN_424242"), true);
+      assert.equal(ok("424242"), true, "legacy bare key form of an owned role");
+      assert.equal(ok(`EF_GUEST_${OWNER}_1700000000000`), true, "own guest key");
+      assert.equal(ok(`EF_GUEST_${VIEWER}_1700000000000`), false, "someone else's guest key");
+      assert.equal(ok(`EF_GUEST_${OWNER}X1700000000000`), false);
+      assert.equal(ok(`EF_GUEST_${OWNER}_`), false, "empty guest suffix");
+      assert.equal(ok("EF_999999"), false, "a UID that is nobody's of this user");
+      assert.equal(ok("EF_undefined"), false, "the shared recovery key is not viewable");
+      assert.equal(ok(""), false);
+      assert.equal(ok("EF_424242", OWNER, []), false, "no accounts");
+
+      // through the command handler
+      const db = new CustomDatabase(":memory:");
+      await db.set(`${OWNER}.accounts`, [
+        {
+          info: { id: "acc" },
+          roles: [{ gameId: 3, uid: "b", roles: [{ roleId: "424242", nickname: "羽冰" }] }],
+        },
+      ]);
+      await db.set(`${VIEWER}.accounts`, []);
+      await db.set("GACHA_LOG_EF_555555", buildLog("Stranger")); // someone else's log
+      await db.set(LOG_KEY, buildLog("羽冰"));
+      await db.set("GACHA_POOL_METADATA_c_special_t_1", {
+        data: { up6_name: "Char 0", all: [{ id: "chr_0", name: "Char 0", rarity: 6 }] },
+        lastFetch: 0,
+      });
+      const run = async (accountOpt: string | null, userOpt: any) => {
+        const replies: any[] = [];
+        const interaction: any = {
+          user: { id: VIEWER, displayName: "Viewer" },
+          options: {
+            getUser: () => userOpt,
+            getString: () => accountOpt,
+          },
+          deferReply: async () => {},
+          editReply: async (o: any) => replies.push(o),
+          followUp: async () => {},
+        };
+        const ctx: any = {
+          interaction,
+          tr: Object.assign((k: string) => k, { lang: "tw" }),
+          db,
+        };
+        await handleGachaView(ctx, interaction);
+        return replies;
+      };
+      const ownerUser = { id: OWNER, toString: () => `<@${OWNER}>` };
+      // 1) another user's raw key via `account:` is refused, no card
+      let replies = await run("EF_555555", ownerUser);
+      assert.equal(replies[replies.length - 1].content, "gacha_log_view_AccountNotOwned");
+      assert.equal(replies[replies.length - 1].files, undefined);
+      // 2) viewer asking for a key that is not theirs, with no user option
+      replies = await run("EF_555555", null);
+      assert.equal(replies[replies.length - 1].content, "gacha_log_view_AccountNotOwned");
+      // 3) the owner's own UID through user: works
+      replies = await run("EF_424242", ownerUser);
+      assert.ok(replies[replies.length - 1].files?.length === 1, "own UID of the selected user renders");
+      // 4) no account option: first owned UID that has data
+      replies = await run(null, ownerUser);
+      assert.ok(replies[replies.length - 1].files?.length === 1);
     }
 
     // --- pure helpers
