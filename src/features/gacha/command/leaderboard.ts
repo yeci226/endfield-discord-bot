@@ -10,7 +10,7 @@ import {
 import {
   GachaLeaderboardEntry,
   deduplicateLeaderboardAliases,
-  syncExistingLogsToLeaderboard,
+  readLeaderboardEntries,
 } from "../../../utils/gachaLogUtils";
 import { drawGachaLeaderboard } from "../../../utils/gachaLeaderboardCanvasUtils";
 import { GachaContext } from "./context";
@@ -22,32 +22,12 @@ export async function showGachaLeaderboard(
   sortType: "pulls" | "luck" = "luck",
 ) {
   const { interaction, tr, db } = ctx;
-  let entriesMap =
-    (await db.get<Record<string, GachaLeaderboardEntry>>(
-      "GACHA_LEADERBOARD_ENTRIES",
-    )) || {};
-
-  let entries = Object.values(entriesMap);
-
-  // Only re-sync if: no data exists, or any entry has corrupt null values in TOTAL stats
-  const hasCorruptData =
-    entries.length === 0 ||
-    entries.some(
-      (e) =>
-        e.stats?.TOTAL &&
-        (e.stats.TOTAL.sixStarCount === null ||
-          e.stats.TOTAL.fiveStarCount === null ||
-          e.stats.TOTAL.probability === null),
-    );
-
-  if (hasCorruptData) {
-    await syncExistingLogsToLeaderboard(db);
-    entriesMap =
-      (await db.get<Record<string, GachaLeaderboardEntry>>(
-        "GACHA_LEADERBOARD_ENTRIES",
-      )) || {};
-    entries = Object.values(entriesMap);
-  }
+  // One row per UID (GACHA_LB.<uid>); the old blob is migrated on first read.
+  // An empty board is never "repaired" here: re-syncing every log inside an
+  // interaction would parse hundreds of MB.
+  let entriesMap: Record<string, GachaLeaderboardEntry> = {};
+  for (const row of await readLeaderboardEntries(db)) entriesMap[row.uid] = row;
+  let entries: GachaLeaderboardEntry[];
 
   entriesMap = await deduplicateLeaderboardAliases(db, entriesMap);
   entries = Object.values(entriesMap);

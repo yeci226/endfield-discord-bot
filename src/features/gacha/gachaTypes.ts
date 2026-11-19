@@ -35,6 +35,14 @@ export interface GachaLeaderboardEntry {
   freeTotal: number;
   accountIndex?: number; // 1-indexed account position
   poolNames?: Record<string, string>; // poolId -> poolName mapping
+  /** Guild ids this player has been seen in (max 50). Drives the "this server" scope. */
+  guilds?: string[];
+  /** When this row was last written (the row-per-UID store; absent on rows migrated from the old blob). */
+  updatedAt?: number;
+  /** info.updatedAt of the log these stats were computed from; stops an older computation overwriting a newer one. */
+  logUpdatedAt?: number;
+  /** Version of the metric definitions; rows migrated from the old blob have none and are recomputed in the background. */
+  metricsVersion?: number;
   stats: Record<
     string,
     {
@@ -61,6 +69,8 @@ export interface GachaLogData {
     // Pity counters restart from this seqId to prevent inflated/deflated pity readings.
     charPityResetSeqId?: string;
     weaponPityResetSeqId?: string;
+    /** Set on every write of the log row; strictly increases. Cache tokens and the leaderboard rely on it. */
+    updatedAt?: number;
   };
 }
 

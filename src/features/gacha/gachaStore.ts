@@ -3,8 +3,8 @@ import { CustomDatabase } from "../../utils/Database";
 import axios from "axios";
 import { mapLocaleToLang, refreshAccountToken } from "../../utils/skportApi";
 import { getEndfieldU8Token, fetchRawGachaFromUrl, POOL_TYPES } from "./gachaApi";
-import { updateLeaderboard } from "./gachaLeaderboard";
-import { GachaApiError, GachaLeaderboardEntry, GachaLogData, GachaRecord, isGachaPull } from "./gachaTypes";
+import { removeLeaderboardEntry, updateLeaderboard } from "./gachaLeaderboard";
+import { GachaApiError, GachaLogData, GachaRecord, isGachaPull } from "./gachaTypes";
 
 interface SimPoolRecordChar {
   charId?: string;
@@ -470,14 +470,7 @@ export async function migrateGachaLog(
 
   // Remove source from leaderboard
   try {
-    const lb =
-      (await db.get<Record<string, GachaLeaderboardEntry>>(
-        "GACHA_LEADERBOARD_ENTRIES",
-      )) || {};
-    if (sourceUid !== targetUid && lb[sourceUid]) {
-      delete lb[sourceUid];
-      await db.set("GACHA_LEADERBOARD_ENTRIES", lb);
-    }
+    if (sourceUid !== targetUid) await removeLeaderboardEntry(db, sourceUid);
   } catch (e) {
     console.error(`[Leaderboard] Failed to remove guest log ${sourceUid}:`, e);
   }
@@ -525,12 +518,7 @@ export async function clearGachaLog(
   if (data.characterList.length === 0 && data.weaponList.length === 0) {
     await db.delete(dbKey);
     // Remove from leaderboard too
-    const leaderboard =
-      (await db.get<Record<string, GachaLeaderboardEntry>>(
-        "GACHA_LEADERBOARD_ENTRIES",
-      )) || {};
-    delete leaderboard[uid];
-    await db.set("GACHA_LEADERBOARD_ENTRIES", leaderboard);
+    await removeLeaderboardEntry(db, uid);
   } else {
     await db.set(dbKey, data);
     await updateLeaderboard(db, uid, data);

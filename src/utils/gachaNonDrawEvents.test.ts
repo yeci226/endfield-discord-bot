@@ -87,7 +87,7 @@ async function main() {
     // (the deleted-account guard), so the log must exist first.
     await db.set("GACHA_LOG_test", data);
     await updateLeaderboard(db, "test", data);
-    const entry = (await db.get("GACHA_LEADERBOARD_ENTRIES")).test;
+    const entry = await db.get("GACHA_LB.test");
     assert.equal(entry.total, 140);
     assert.equal(entry.stats.TOTAL.total, 130);
     assert.equal(entry.stats.SpecialShared.total, 130);
