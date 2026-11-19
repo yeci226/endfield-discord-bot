@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CustomDatabase } from "./Database";
-import { patchAccount, deleteAccountData, accountFingerprint } from "./accountData";
+import { patchAccount, deleteAccountData, accountFingerprint, applySuccessfulLogin, writeAccounts } from "./accountData";
 import { decryptAccount } from "./cryptoUtils";
 
 const skportApi = require("./skportApi");
@@ -331,6 +331,24 @@ async function main() {
       }
     });
   }
+
+  // --- a successful re-login removes the expired markers ---------------------------------
+  await withDb(async (db) => {
+    const stale = { info: { id: "a1", nickname: "Old" }, cookie: "c0", cred: "k0", salt: "s0", roles: [], invalid: true, tokenExpiredNotified: true, keep: 1 };
+    await db.set("u7.accounts", [stale]);
+    const exists = (await getAccounts(db, "u7"))[0];
+    assert.equal(exists.invalid, true);
+    const fresh = { cookie: "c1", cred: "k1", salt: "s1", roles: [], lastRefresh: 5, info: { id: "a1", nickname: "New" } };
+    assert.equal(applySuccessfulLogin(exists, fresh), exists);
+    assert.ok(!("invalid" in exists) && !("tokenExpiredNotified" in exists));
+    writeAccounts(db, "u7", [exists], true);
+    const stored = (await readList(db, "u7"))![0];
+    assert.ok(!("invalid" in stored), "stored invalid flag removed");
+    assert.ok(!("tokenExpiredNotified" in stored), "stored notified flag removed");
+    assert.equal(stored.keep, 1, "unrelated fields survive");
+    assert.equal(stored.info.nickname, "New");
+    assert.equal(decryptAccount(stored).cred, "k1");
+  });
 
   // --- deleting the last account removes the auto-daily bookkeeping ----------------
   await withDb(async (db) => {
