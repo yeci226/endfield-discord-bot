@@ -708,3 +708,51 @@ export function buildLeaderboardView(
     avgRate: sixStarRate(totalSix, totalPulls),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Component ids
+// ---------------------------------------------------------------------------
+
+export const LEADERBOARD_ACTIONS = [
+  "lb_type",
+  "lb_pool",
+  "lb_subpool",
+  "lb_sort",
+  "lb_scope",
+  "lb_page",
+  "lb_me",
+  "lb_close",
+] as const;
+export type LeaderboardAction = (typeof LEADERBOARD_ACTIONS)[number];
+
+export interface LeaderboardState {
+  poolId: string;
+  sortType: LeaderboardSort;
+  scope: LeaderboardScope;
+  page: number;
+}
+
+export function leaderboardCustomId(
+  action: LeaderboardAction,
+  state: LeaderboardState,
+): string {
+  return `gacha:${action}:${state.poolId}:${state.sortType}:${state.scope}:${state.page}`;
+}
+
+/** Reads any leaderboard component id, including ones from messages that predate scope and page. */
+export function parseLeaderboardCustomId(
+  customId: string,
+): (LeaderboardState & { action: LeaderboardAction }) | null {
+  const parts = String(customId).split(":");
+  if (parts[0] !== "gacha") return null;
+  const action = parts[1] as LeaderboardAction;
+  if (!LEADERBOARD_ACTIONS.includes(action)) return null;
+  const page = Number(parts[5]);
+  return {
+    action,
+    poolId: parts[2] || "TOTAL",
+    sortType: parts[3] === "pulls" ? "pulls" : "luck",
+    scope: parts[4] === "guild" ? "guild" : "global",
+    page: Number.isInteger(page) && page > 0 ? page : 0,
+  };
+}

@@ -1,27 +1,46 @@
 import {
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
   ChatInputCommandInteraction,
   AttachmentBuilder,
   StringSelectMenuBuilder,
+  StringSelectMenuInteraction,
 } from "discord.js";
 import {
   getAccounts,
 } from "../../../utils/accountUtils";
 import {
   GachaLeaderboardEntry,
+  LeaderboardScope,
+  LeaderboardSort,
+  buildLeaderboardView,
   deduplicateLeaderboardAliases,
+  leaderboardCustomId,
+  noteLeaderboardGuild,
+  parseLeaderboardCustomId,
   readLeaderboardEntries,
 } from "../../../utils/gachaLogUtils";
 import { drawGachaLeaderboard } from "../../../utils/gachaLeaderboardCanvasUtils";
 import { GachaContext } from "./context";
 import { getAllPossibleUserRoles } from "./accounts";
 
+export interface ShowLeaderboardOptions {
+  scope?: LeaderboardScope;
+  page?: number;
+  /** Open the page that holds the invoker's best rank. */
+  jumpToMe?: boolean;
+}
+
 export async function showGachaLeaderboard(
   ctx: GachaContext,
   poolId: string = "TOTAL",
-  sortType: "pulls" | "luck" = "luck",
+  sortType: LeaderboardSort = "luck",
+  opts: ShowLeaderboardOptions = {},
 ) {
   const { interaction, tr, db } = ctx;
+  const guildId = interaction.guildId;
   // One row per UID (GACHA_LB.<uid>); the old blob is migrated on first read.
   // An empty board is never "repaired" here: re-syncing every log inside an
   // interaction would parse hundreds of MB.
@@ -59,6 +78,46 @@ export async function showGachaLeaderboard(
       }
     }
   }
+
+  // Get all game UIDs for the current user to highlight in leaderboard
+  const allPossibleRoles2 = await getAllPossibleUserRoles(
+    interaction.user.id,
+    db,
+  );
+  const currentUserUids = allPossibleRoles2.map((r) => r.uid);
+  if (currentUserUids.length === 0) {
+    currentUserUids.push(interaction.user.id); // Fallback to discord ID if no tracking data
+  }
+  // The server scope only fills with people we have seen here: remember the
+  // invoker's own UIDs for this guild (a no-op write-wise once they are known).
+  if (guildId) {
+    for (const uid of currentUserUids) {
+      const row = entriesMap[uid];
+      if (!row) continue;
+      if (noteLeaderboardGuild(db, uid, guildId))
+        row.guilds = [...(row.guilds || []), guildId];
+    }
+  }
+
+  const viewOptions = {
+    poolId,
+    sortType,
+    scope: opts.scope,
+    guildId,
+    myUids: currentUserUids,
+  };
+  let view = buildLeaderboardView(entries, { ...viewOptions, page: opts.page });
+  let noRankNotice = false;
+  if (opts.jumpToMe) {
+    if (view.myPage === null) noRankNotice = true;
+    else view = buildLeaderboardView(entries, { ...viewOptions, page: view.myPage });
+  }
+  const idState = (page: number = view.page) => ({
+    poolId,
+    sortType,
+    scope: view.scope,
+    page,
+  });
 
   // Determine Category derived from poolId
   let currentCategory = "TOTAL";
@@ -112,7 +171,7 @@ export async function showGachaLeaderboard(
   const categoryRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`gacha:lb_pool:${poolId}:${sortType}`)
+        .setCustomId(leaderboardCustomId("lb_pool", idState()))
         .setPlaceholder(tr("gacha_log_leaderboard_SelectCategory"))
         .addOptions(categoryOptions),
     );
@@ -144,7 +203,7 @@ export async function showGachaLeaderboard(
 
     if (filteredPools.length > 0) {
       const poolMenu = new StringSelectMenuBuilder()
-        .setCustomId(`gacha:lb_subpool:${poolId}:${sortType}`)
+        .setCustomId(leaderboardCustomId("lb_subpool", idState()))
         .setPlaceholder(
           tr("gacha_log_leaderboard_SelectPoolPrecise", {
             category:
@@ -186,7 +245,7 @@ export async function showGachaLeaderboard(
   const sortRow =
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder()
-        .setCustomId(`gacha:lb_sort:${poolId}:${sortType}`)
+        .setCustomId(leaderboardCustomId("lb_sort", idState()))
         .setPlaceholder(tr("gacha_log_leaderboard_SelectSort"))
         .addOptions([
           {
@@ -203,15 +262,62 @@ export async function showGachaLeaderboard(
     );
   components.push(sortRow);
 
-  // Get all game UIDs for the current user to highlight in leaderboard
-  const allPossibleRoles2 = await getAllPossibleUserRoles(
-    interaction.user.id,
-    db,
-  );
-  const currentUserUids = allPossibleRoles2.map((r) => r.uid);
-  if (currentUserUids.length === 0) {
-    currentUserUids.push(interaction.user.id); // Fallback to discord ID if no tracking data
+  // 4. Scope row (a DM has no server to scope to)
+  if (guildId) {
+    components.push(
+      new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(leaderboardCustomId("lb_scope", idState()))
+          .setPlaceholder(tr("gacha_log_leaderboard_scope_placeholder"))
+          .addOptions([
+            {
+              label: tr("gacha_log_leaderboard_scope_global"),
+              emoji: "🌐",
+              value: "global",
+              default: view.scope === "global",
+            },
+            {
+              label: tr("gacha_log_leaderboard_scope_guild"),
+              emoji: "🏠",
+              value: "guild",
+              default: view.scope === "guild",
+            },
+          ]),
+      ),
+    );
   }
+
+  // 5. Paging, "my rank" and close
+  components.push(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(leaderboardCustomId("lb_page", idState(Math.max(0, view.page - 1))))
+        .setEmoji("◀")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(view.page <= 0),
+      new ButtonBuilder()
+        .setCustomId(
+          leaderboardCustomId(
+            "lb_page",
+            idState(Math.min(view.pageCount - 1, view.page + 1)),
+          ),
+        )
+        .setEmoji("▶")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(view.page >= view.pageCount - 1),
+      new ButtonBuilder()
+        .setCustomId(leaderboardCustomId("lb_me", idState()))
+        .setEmoji("📍")
+        .setLabel(tr("gacha_log_leaderboard_my_rank"))
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(leaderboardCustomId("lb_close", idState()))
+        .setEmoji("✖️")
+        .setLabel(tr("gacha_log_leaderboard_close"))
+        .setStyle(ButtonStyle.Secondary),
+    ),
+  );
+
   const poolNamesDict: Record<string, string> =
     (await db.get<Record<string, string>>("GACHA_POOL_NAMES")) || {};
 
@@ -222,6 +328,7 @@ export async function showGachaLeaderboard(
     sortType,
     tr,
     poolNamesDict,
+    { view },
   );
 
   const attachment = new AttachmentBuilder(image, {
@@ -229,10 +336,74 @@ export async function showGachaLeaderboard(
   });
 
   await interaction.editReply({
-    content: null,
+    content: view.scopeEmpty ? tr("gacha_log_leaderboard_scope_empty") : null,
     files: [attachment],
     components,
   });
+
+  if (noRankNotice) {
+    await interaction
+      .followUp({
+        content: tr("gacha_log_leaderboard_no_rank"),
+        ephemeral: true,
+      })
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Every leaderboard component (selects and buttons). Returns false when the id
+ * is not a leaderboard one. The interaction is acknowledged first.
+ */
+export async function handleGachaLeaderboardComponent(
+  ctx: GachaContext,
+  interaction: StringSelectMenuInteraction | ButtonInteraction,
+): Promise<boolean> {
+  const state = parseLeaderboardCustomId(interaction.customId);
+  if (!state) return false;
+  await interaction.deferUpdate();
+
+  const selected = interaction.isStringSelectMenu() ? interaction.values[0] : "";
+  switch (state.action) {
+    case "lb_close":
+      await interaction
+        .deleteReply()
+        .catch(() => interaction.editReply({ components: [] }).catch(() => undefined));
+      return true;
+    case "lb_pool":
+    case "lb_subpool":
+    case "lb_type":
+      await showGachaLeaderboard(ctx, selected || state.poolId, state.sortType, {
+        scope: state.scope,
+      });
+      return true;
+    case "lb_sort":
+      await showGachaLeaderboard(
+        ctx,
+        state.poolId,
+        selected === "pulls" ? "pulls" : "luck",
+        { scope: state.scope },
+      );
+      return true;
+    case "lb_scope":
+      await showGachaLeaderboard(ctx, state.poolId, state.sortType, {
+        scope: selected === "guild" ? "guild" : "global",
+      });
+      return true;
+    case "lb_me":
+      await showGachaLeaderboard(ctx, state.poolId, state.sortType, {
+        scope: state.scope,
+        jumpToMe: true,
+      });
+      return true;
+    case "lb_page":
+    default:
+      await showGachaLeaderboard(ctx, state.poolId, state.sortType, {
+        scope: state.scope,
+        page: state.page,
+      });
+      return true;
+  }
 }
 
 export async function handleGachaLeaderboard(
