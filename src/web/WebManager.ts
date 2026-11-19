@@ -3,6 +3,7 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import { ExtendedClient } from "../structures/Client";
 import { Logger } from "../utils/Logger";
+import { resolveOwnAssetRel } from "../utils/ownAssets";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
 import { getCardDetail } from "../utils/skportApi";
 import {
@@ -192,6 +193,16 @@ export class WebManager {
       const url = req.query.url;
       if (typeof url !== "string" || !url) {
         return res.status(400).send("Bad request");
+      }
+
+      // The editor routes every absolute image link through this proxy,
+      // including links to our own /assets saved under an older domain.
+      const ownRel = resolveOwnAssetRel(url);
+      if (ownRel) {
+        return res.redirect(
+          302,
+          "/assets/" + ownRel.split("/").map(encodeURIComponent).join("/"),
+        );
       }
 
       try {

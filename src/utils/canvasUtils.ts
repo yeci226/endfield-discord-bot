@@ -15,6 +15,7 @@ import { ProfileTemplate } from "../interfaces/ProfileTemplate";
 import { ProfileTemplateService } from "../services/ProfileTemplateService";
 import moment from "moment";
 import crypto from "crypto";
+import { resolveOwnAssetRel } from "./ownAssets";
 
 // Register Fonts
 const fontDir = path.join(__dirname, "../assets/fonts");
@@ -1249,9 +1250,16 @@ async function drawFabricObjects(
               const imgUrl = imgSrc.startsWith("/")
                 ? imgSrc.substring(1)
                 : imgSrc;
-              img = imgSrc.startsWith("http")
-                ? await fetchImage(imgSrc)
-                : await loadLocalImage(imgUrl);
+              // Links to our own /assets (under any past or present editor
+              // domain) are read from disk instead of fetched over the network.
+              const ownRel = imgSrc.startsWith("http")
+                ? resolveOwnAssetRel(imgSrc)
+                : null;
+              img = ownRel
+                ? await loadLocalImage(ownRel)
+                : imgSrc.startsWith("http")
+                  ? await fetchImage(imgSrc)
+                  : await loadLocalImage(imgUrl);
             }
 
             if (img) {
@@ -3210,9 +3218,14 @@ export async function drawProfileBackground(ctx: SKRSContext2D, width: number, h
   try {
     const bgUrl = template.background?.url;
     if (bgUrl) {
-      const bg = bgUrl.startsWith("http")
-        ? await fetchImage(bgUrl).catch(() => null)
-        : await loadImage(path.join(ASSETS_DIR, bgUrl)).catch(() => null);
+      const ownBgRel = bgUrl.startsWith("http")
+        ? resolveOwnAssetRel(bgUrl)
+        : null;
+      const bg = ownBgRel
+        ? await loadLocalImage(ownBgRel).catch(() => null)
+        : bgUrl.startsWith("http")
+          ? await fetchImage(bgUrl).catch(() => null)
+          : await loadImage(path.join(ASSETS_DIR, bgUrl)).catch(() => null);
 
       if (bg) {
         // 1.1 Handle Background Fill Color

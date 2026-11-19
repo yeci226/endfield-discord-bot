@@ -95,9 +95,10 @@ assert.equal(validateEncryptionKey("x".repeat(16)), null);
     };
     if (key === undefined) delete env.ENCRYPTION_KEY;
     else env.ENCRYPTION_KEY = key;
-    return spawnSync(process.execPath, ["-r", "ts-node/register", file], {
+    return spawnSync(process.execPath, ["-r", require.resolve("ts-node/register"), file], {
       env,
-      cwd: path.join(__dirname, "..", ".."),
+      // run outside the project so a developer .env cannot supply the key
+      cwd: require("os").tmpdir(),
       encoding: "utf8",
     });
   };

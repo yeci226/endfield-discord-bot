@@ -1,4 +1,5 @@
 import { validateProxyUrl } from "./imageProxy";
+import { resolveOwnAssetRel } from "../utils/ownAssets";
 
 /** Keys whose string value the renderer may load as an image. */
 const IMAGE_KEYS = new Set([
@@ -57,7 +58,7 @@ function checkImageRef(v: string): string | null {
     return c.ok ? null : `image url refused (${c.reason})`;
   }
   if (/^https?:\/\//i.test(v)) {
-    if (isOwnAssetUrl(v)) return null;
+    if (isOwnAssetUrl(v) || resolveOwnAssetRel(v)) return null;
     const c = validateProxyUrl(v);
     return c.ok ? null : `image url refused (${c.reason})`;
   }
