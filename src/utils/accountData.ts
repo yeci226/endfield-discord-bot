@@ -129,6 +129,9 @@ export function deleteAccountData(
       for (const uid of [gameId, `EF_${gameId}`, `EF_CN_${gameId}`]) {
         store.delete(`GACHA_LOG_${uid}`);
         store.delete(`SIM_POOL_RECORDS.${uid}`);
+        // Leaderboard row and stats cache row of this UID (see gachaLeaderboard.ts / gachaStatsCache.ts).
+        store.delete(`GACHA_LB.${uid}`);
+        store.delete(`GACHA_STATS.GACHA_LOG_${uid}`);
         if (leaderboard) delete leaderboard[uid];
       }
       store.delete(`warEchoes.history.${gameId}`);

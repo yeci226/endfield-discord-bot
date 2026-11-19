@@ -14,6 +14,7 @@ import {
   getGachaStats,
   GachaLogData,
   migrateGachaLog,
+  noteLeaderboardGuild,
 } from "../../../utils/gachaLogUtils";
 import { getCachedGachaStats } from "../gachaStatsCache";
 import {
@@ -601,6 +602,12 @@ export async function handleGachaView(
         return;
       }
     }
+  }
+
+  // Viewing one's own log inside a server records that server for the "server"
+  // leaderboard scope. Never for someone else's log; writes only when the guild is new.
+  if (interaction.guildId && targetUser.id === interaction.user.id) {
+    noteLeaderboardGuild(db, targetUid, interaction.guildId);
   }
 
   await showGachaStats(ctx, targetUid, "limited_char");

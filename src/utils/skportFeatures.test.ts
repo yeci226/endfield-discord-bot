@@ -559,7 +559,7 @@ async function main() {
     assert.equal(
       notificationCount,
       0,
-      "Legacy configs must never activate on startup",
+      "A legacy monitorConfig alone sends nothing: only reminder.v2 rules (created by the startup migration) can notify",
     );
     await db.set(reminderKey(config), config);
     await service.runMonitoring();

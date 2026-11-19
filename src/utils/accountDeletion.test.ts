@@ -51,6 +51,12 @@ async function main() {
     EF_202: {},
     EF_1010: {},
   });
+  // New per-UID rows: leaderboard and stats cache, for every key form.
+  const lbUids = ["101", "EF_101", "EF_CN_101", "EF_binding-1", "EF_202", "EF_1010", "EF_GUEST_owner_123"];
+  for (const uid of lbUids) {
+    await db.set(`GACHA_LB.${uid}`, { uid, guilds: [] });
+    await db.set(`GACHA_STATS.GACHA_LOG_${uid}`, { uid });
+  }
   const removedKeys = [
     "reminder.v2.owner.1.2.101",
     "reminderState.v2.owner.1.2.101",
@@ -112,6 +118,18 @@ async function main() {
     assert.equal(await db.get(key), null, key);
   for (const key of keptKeys)
     assert.deepEqual(await db.get(key), { keep: true }, key);
+  // No row of the removed account is left among the new prefixes ...
+  for (const prefix of ["GACHA_LB.", "GACHA_STATS.", "PENDING_GACHA_"])
+    for (const key of db.findKeysByPrefix(prefix))
+      assert.ok(
+        !/(^|[._])(EF_CN_|EF_)?(101|binding-1)$/.test(key) && !key.endsWith("_owner"),
+        `leftover ${key}`,
+      );
+  // ... and the other account's rows stay.
+  for (const uid of ["EF_202", "EF_1010", "EF_GUEST_owner_123"]) {
+    assert.ok(await db.get(`GACHA_LB.${uid}`), uid);
+    assert.ok(await db.get(`GACHA_STATS.GACHA_LOG_${uid}`), uid);
+  }
   for (const uid of ["EF_202", "EF_1010", "EF_GUEST_owner_123"])
     assert.ok(await db.get(`GACHA_LOG_${uid}`));
   assert.deepEqual(await db.get("GACHA_LEADERBOARD_ENTRIES"), {
