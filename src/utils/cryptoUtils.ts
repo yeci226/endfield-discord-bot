@@ -1,22 +1,43 @@
 import crypto from "crypto";
+import dotenv from "dotenv";
+
+// Make sure .env is loaded before the module-load key check below.
+dotenv.config();
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // Standard for GCM
 const AUTH_TAG_LENGTH = 16;
 
+/** Minimum accepted length of ENCRYPTION_KEY (hex-64 keys and long passphrases pass). */
+export const MIN_ENCRYPTION_KEY_LENGTH = 32;
+
+/**
+ * Pure check of an ENCRYPTION_KEY value. Returns null when usable, otherwise a
+ * human-readable reason.
+ */
+export function validateEncryptionKey(
+  key: string | undefined | null,
+): string | null {
+  if (!key) return "ENCRYPTION_KEY environment variable is missing.";
+  if (key.length < MIN_ENCRYPTION_KEY_LENGTH)
+    return `ENCRYPTION_KEY is too short (need at least ${MIN_ENCRYPTION_KEY_LENGTH} characters).`;
+  return null;
+}
+
+// In production the bot must refuse to start without a usable key, instead of
+// silently storing credentials in plaintext.
+if (process.env.NODE_ENV === "production") {
+  const problem = validateEncryptionKey(process.env.ENCRYPTION_KEY);
+  if (problem) throw new Error(`CRITICAL: ${problem}`);
+}
+
 /**
  * Gets the encryption key from environment variables.
- * Should be a 32-byte (256-bit) key.
  */
 function getEncryptionKey(): Buffer {
   const key = process.env.ENCRYPTION_KEY;
-  if (!key) {
-    // In dev, we might fallback or error. For security, we should error.
-    console.error("CRITICAL: ENCRYPTION_KEY is not set in .env!");
-    // For now, if not set, we return a dummy or handle it.
-    // Ideally, the bot should refuse to start.
-    throw new Error("ENCRYPTION_KEY environment variable is missing.");
-  }
+  const problem = validateEncryptionKey(key);
+  if (problem || !key) throw new Error(problem ?? "ENCRYPTION_KEY missing.");
 
   // If it's hex, convert. If it's a string, hash it to 32 bytes for consistency.
   if (/^[0-9a-f]{64}$/i.test(key)) {
@@ -27,65 +48,79 @@ function getEncryptionKey(): Buffer {
 }
 
 /**
- * Encrypts sensitive text.
+ * Shows only the first and last 4 characters of a secret (for logs / debug
+ * output). Values of 8 characters or fewer are fully hidden.
+ */
+export function maskSecret(value: string): string {
+  if (typeof value !== "string" || value.length <= 8) return "****";
+  return `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+/**
+ * Encrypts sensitive text. Throws when encryption is not possible; callers must
+ * never fall back to storing the plaintext.
  */
 export function encrypt(text: string): string {
   if (!text) return text;
 
-  try {
-    const key = getEncryptionKey();
-    const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
 
-    let encrypted = cipher.update(text, "utf8", "hex");
-    encrypted += cipher.final("hex");
+  let encrypted = cipher.update(text, "utf8", "hex");
+  encrypted += cipher.final("hex");
 
-    const authTag = cipher.getAuthTag().toString("hex");
+  const authTag = cipher.getAuthTag().toString("hex");
 
-    // Format: iv:authTag:encryptedData
-    return `${iv.toString("hex")}:${authTag}:${encrypted}`;
-  } catch (error) {
-    console.error("Encryption failed:", error);
-    return text; // Fallback or handle differently?
-  }
+  // Format: iv:authTag:encryptedData
+  return `${iv.toString("hex")}:${authTag}:${encrypted}`;
+}
+
+const HEX = /^[0-9a-f]*$/i;
+
+/** True when the value has exactly the shape encrypt() produces. */
+function looksEncrypted(parts: string[]): boolean {
+  const [iv, tag, data] = parts;
+  return (
+    parts.length === 3 &&
+    iv.length === IV_LENGTH * 2 &&
+    tag.length === AUTH_TAG_LENGTH * 2 &&
+    data.length > 0 &&
+    data.length % 2 === 0 &&
+    HEX.test(iv) &&
+    HEX.test(tag) &&
+    HEX.test(data)
+  );
 }
 
 /**
  * Decrypts sensitive text.
- * Handles plaintext detection (legacy data).
+ * Legacy plaintext (anything not in the encrypted format) is returned
+ * unchanged. A value that HAS the encrypted format but fails authentication
+ * (wrong key, tampering) throws instead of returning garbage.
  */
 export function decrypt(hash: string): string {
   if (!hash || typeof hash !== "string") return hash;
 
-  // Basic check: Encrypted data should have two colons
   const parts = hash.split(":");
-  if (parts.length !== 3) {
-    // Doesn't look like our encrypted format, might be legacy plaintext
+  if (!looksEncrypted(parts)) {
+    // Not our encrypted format: legacy plaintext
     return hash;
   }
 
-  try {
-    const key = getEncryptionKey();
-    const [ivHex, authTagHex, encryptedHex] = parts;
+  const key = getEncryptionKey();
+  const [ivHex, authTagHex, encryptedHex] = parts;
 
-    const iv = Buffer.from(ivHex, "hex");
-    const authTag = Buffer.from(authTagHex, "hex");
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+  const iv = Buffer.from(ivHex, "hex");
+  const authTag = Buffer.from(authTagHex, "hex");
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
 
-    decipher.setAuthTag(authTag);
+  decipher.setAuthTag(authTag);
 
-    let decrypted = decipher.update(encryptedHex, "hex", "utf8");
-    decrypted += decipher.final("utf8");
+  let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+  decrypted += decipher.final("utf8");
 
-    return decrypted;
-  } catch (error) {
-    // If decryption fails, it might be legacy text that happened to have colons,
-    // or the key changed.
-    console.warn(
-      "Decryption failed, returning original string. (Check ENCRYPTION_KEY)",
-    );
-    return hash;
-  }
+  return decrypted;
 }
 
 /**
