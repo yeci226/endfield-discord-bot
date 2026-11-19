@@ -539,3 +539,172 @@ export async function syncExistingLogsToLeaderboard(db: CustomDatabase) {
     await setImmediateTick();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Ranking and paging (pure)
+// ---------------------------------------------------------------------------
+
+/** Luck-type sorts need at least this many non-free pulls in the ranked category. */
+export const MIN_PULLS_FOR_LUCK_RANK = 100;
+export const LEADERBOARD_PAGE_SIZE = 10;
+
+export type LeaderboardSort = "pulls" | "luck";
+export type LeaderboardScope = "global" | "guild";
+type LeaderboardStat = GachaLeaderboardEntry["stats"][string];
+
+/** Whether a stat may appear on the board for this sort. Total-pull sorts have no minimum. */
+export function isRankableStat(
+  stat: LeaderboardStat | undefined,
+  sortType: LeaderboardSort,
+): boolean {
+  if (!stat) return false;
+  const total = Number(stat.total || 0);
+  if (!(total > 0)) return false;
+  return sortType === "pulls" || total >= MIN_PULLS_FOR_LUCK_RANK;
+}
+
+export interface RankedRow {
+  entry: GachaLeaderboardEntry;
+  stat: LeaderboardStat;
+  /** 1-based position in the whole ranking (not in the page). */
+  rank: number;
+}
+
+/**
+ * Drops rows that are the same person seen twice (identical numbers, name and
+ * avatar - e.g. a global/CN alias pair), keeping the first one seen.
+ */
+function dropIdenticalRows(
+  entries: GachaLeaderboardEntry[],
+  poolId: string,
+): GachaLeaderboardEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((e) => {
+    const stat = e.stats?.[poolId];
+    if (!stat) return true;
+    const hash = `${stat.total}_${stat.sixStarCount}_${stat.fiveStarCount}_${e.nickname}_${e.displayName}_${e.avatarUrl}`;
+    if (seen.has(hash)) return false;
+    seen.add(hash);
+    return true;
+  });
+}
+
+/**
+ * The ranking for one category and sort. Deterministic: ties fall back to more
+ * pulls, then to the UID, so a page never reshuffles between two clicks.
+ */
+export function rankLeaderboard(
+  entries: GachaLeaderboardEntry[],
+  poolId: string,
+  sortType: LeaderboardSort,
+): RankedRow[] {
+  // Stable base order first, so the identical-row filter is input-order independent too.
+  const base = [...entries].sort((a, b) => (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0));
+  const rows = dropIdenticalRows(base, poolId)
+    .filter((e) => isRankableStat(e.stats?.[poolId], sortType))
+    .map((entry) => ({ entry, stat: entry.stats[poolId] }));
+
+  rows.sort((a, b) => {
+    const byValue =
+      sortType === "pulls"
+        ? Number(b.stat.total) - Number(a.stat.total)
+        : Number(b.stat.probability || 0) - Number(a.stat.probability || 0);
+    if (byValue) return byValue;
+    const byTotal = Number(b.stat.total) - Number(a.stat.total);
+    if (byTotal) return byTotal;
+    return a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0;
+  });
+  return rows.map((row, i) => ({ ...row, rank: i + 1 }));
+}
+
+export interface LeaderboardViewOptions {
+  poolId: string;
+  sortType: LeaderboardSort;
+  scope?: LeaderboardScope;
+  /** null/undefined in a DM: only the global scope exists there. */
+  guildId?: string | null;
+  page?: number;
+  pageSize?: number;
+  /** The invoker's game UIDs (every key form). */
+  myUids?: string[];
+}
+
+export interface LeaderboardView {
+  poolId: string;
+  sortType: LeaderboardSort;
+  /** The scope actually shown (a guild scope without a guild falls back to global). */
+  scope: LeaderboardScope;
+  page: number;
+  pageCount: number;
+  pageSize: number;
+  rankedCount: number;
+  rows: RankedRow[];
+  /** The invoker's ranked rows. */
+  myRows: RankedRow[];
+  /** ... of which are not on the shown page. */
+  myOutside: RankedRow[];
+  /** The invoker has pulls here but not enough for the luck ranking. */
+  myUnranked: Array<{ entry: GachaLeaderboardEntry; stat: LeaderboardStat }>;
+  /** Page holding the invoker's best rank, or null. */
+  myPage: number | null;
+  /** Server scope selected but nobody on this server is listed yet. */
+  scopeEmpty: boolean;
+  totalPlayers: number;
+  totalPulls: number;
+  /** Fraction (0..1): non-free 6-stars over non-free pulls across the scoped entries. */
+  avgRate: number;
+}
+
+export function buildLeaderboardView(
+  entries: GachaLeaderboardEntry[],
+  opts: LeaderboardViewOptions,
+): LeaderboardView {
+  const pageSize = Math.max(1, opts.pageSize ?? LEADERBOARD_PAGE_SIZE);
+  const scope: LeaderboardScope =
+    opts.scope === "guild" && opts.guildId ? "guild" : "global";
+  const scoped =
+    scope === "guild"
+      ? entries.filter((e) => (e.guilds || []).includes(String(opts.guildId)))
+      : entries;
+  const mine = new Set(opts.myUids || []);
+
+  const ranked = rankLeaderboard(scoped, opts.poolId, opts.sortType);
+  const pageCount = Math.max(1, Math.ceil(ranked.length / pageSize));
+  const page = Math.min(Math.max(0, Math.floor(opts.page ?? 0) || 0), pageCount - 1);
+  const rows = ranked.slice(page * pageSize, (page + 1) * pageSize);
+  const myRows = ranked.filter((r) => mine.has(r.entry.uid));
+  const shown = new Set(rows.map((r) => r.rank));
+
+  let totalPulls = 0;
+  let totalSix = 0;
+  for (const e of scoped) {
+    totalPulls += Number(e.stats?.[opts.poolId]?.total || 0);
+    totalSix += Number(e.stats?.[opts.poolId]?.sixStarCount || 0);
+  }
+
+  return {
+    poolId: opts.poolId,
+    sortType: opts.sortType,
+    scope,
+    page,
+    pageCount,
+    pageSize,
+    rankedCount: ranked.length,
+    rows,
+    myRows,
+    myOutside: myRows.filter((r) => !shown.has(r.rank)),
+    myUnranked: scoped
+      .filter(
+        (e) =>
+          mine.has(e.uid) &&
+          Number(e.stats?.[opts.poolId]?.total || 0) > 0 &&
+          !isRankableStat(e.stats[opts.poolId], opts.sortType),
+      )
+      .map((entry) => ({ entry, stat: entry.stats[opts.poolId] })),
+    myPage: myRows.length ? Math.floor((myRows[0].rank - 1) / pageSize) : null,
+    scopeEmpty: scope === "guild" && scoped.length === 0,
+    totalPlayers: scoped.length,
+    totalPulls,
+    avgRate: sixStarRate(totalSix, totalPulls),
+  };
+}
